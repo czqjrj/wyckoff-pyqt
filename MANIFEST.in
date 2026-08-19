@@ -1,0 +1,3 @@
+include wyckoff_stock_names.json
+include docs/help.html
+recursive-include docs/tags *.md

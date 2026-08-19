@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+body {
+  font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px; line-height: 1.75; color: #1f2937; margin: 0;
+  padding: 18px 26px 30px; background: #ffffff;
+}
+h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 6px; color: #111827; }
+h2 { font-size: 16px; color: #2563eb; margin-top: 26px; border-left: 4px solid #2563eb; padding-left: 8px; }
+h3 { font-size: 14px; color: #374151; margin-bottom: 4px; }
+p { margin: 6px 0; }
+ul { margin: 4px 0 10px; padding-left: 22px; }
+li { margin: 2px 0; }
+b { color: #111827; }
+code, kbd {
+  background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 3px;
+  padding: 1px 5px; font-size: 12px; font-family: 'Noto Sans Mono CJK SC', Consolas, monospace;
+  color: #3730a3;
+}
+table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+th, td { border: 1px solid #d1d5db; padding: 5px 10px; font-size: 13px; text-align: left; }
+th { background: #f3f4f6; color: #374151; }
+.note { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #92400e; }
+.warn { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #991b1b; }
+.tip { background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 4px; padding: 8px 12px; margin: 8px 0; color: #065f46; }
+.footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>Wyckoff 威科夫分析客户端 · 使用手册</h1>
+<p>本工具基于威科夫 (Wyckoff) 方法体系, 对 A 股个股做量价分析, 输出阶段判断、VSA 信号、
+P&amp;F 点数图、资金透视、批量扫描、回测与 AI 解读。手册窗口顶部提供<b>关键词搜索</b>,
+可随时 <kbd>Ctrl+F</kbd> 定位章节。</p>
+
+<div class="warn">本工具输出仅为技术分析参考, 不构成投资建议。A 股为单边做多市场, 所有
+偏空信号只给出减仓/离场/回避类建议, 严禁做空。</div>
+
+<h2>目录</h2>
+<ol>
+  <li>启动与界面布局</li>
+  <li>如何分析一只股票</li>
+  <li>五种图表页</li>
+  <li>右侧结论面板 (信号汇总 / 分析结论 / AI 解读)</li>
+  <li>自选股与键盘精灵</li>
+  <li>选股体系 (批量扫描 / 综合选股 / 扫描中心 20 类)</li>
+  <li>指数行情</li>
+  <li>工具 (持仓 / 预警 / 备注 / 对比 / 准确度中心)</li>
+  <li>资金监测 (国家队持仓 / ETF 三因子)</li>
+  <li>快捷键一览</li>
+  <li>设置面板详解</li>
+  <li>常见问题与技巧</li>
+</ol>
+
+<h2>1. 启动与界面布局</h2>
+<p>启动后窗口分三块: 顶部主工具栏与状态栏、左侧自选股列表、中间五个标签页
+(K线图 / P&amp;F 点数图 / 技术指标 / 资金透视 / 解读)、右侧结论面板。底部状态栏显示当前股票
+与建议, 分析进度与提示也会在此显示。</p>
+<ul>
+  <li><b>主工具栏</b>: 周期 (日线/120-15分钟) · 区间 (近1月~近5年) · 开始分析 · 刷新 ·
+      加入自选 · 设置 · 左栏/右栏开关;<br/><b>右侧状态区</b>: 当前股票名称、代码、现价、
+      涨跌幅与最新建议。</li>
+  <li><b>左栏 / 右栏</b> 可用工具栏小按钮或 <kbd>Ctrl+Shift+W</kbd> / <kbd>Ctrl+Shift+R</kbd>
+      一键显隐;</li>
+  <li>若在"设置 → 基本"中配置了"默认载入"股票, 启动后自动分析该股票;</li>
+  <li><b>资金透视</b> 页图表较高, 窗口高度不足时该页提供竖向滚动条, 可最大化窗口查看
+      (本手册窗口同样支持最大化)。</li>
+</ul>
+
+<h2>2. 如何分析一只股票</h2>
+<h3>2.1 输入方式 (支持三种)</h3>
+<ul>
+  <li><b>代码</b>: <code>600104</code>、<code>sh600104</code>、<code>000001</code>;</li>
+  <li><b>股票名</b>: <code>上汽集团</code>;</li>
+  <li><b>拼音</b>: <code>shangqi</code>、<code>sqjt</code> (支持缩写)。</li>
+</ul>
+<p>输入后按 <kbd>Enter</kbd> 或点击"开始分析"。也可在图表空白处直接敲字母弹出<b>键盘精灵</b> (见 §5.2)。</p>
+
+<h3>2.2 周期与时间段</h3>
+<ul>
+  <li><b>周期</b>: 日线 (默认) / 120分钟 / 60分钟 / 30分钟 / 15分钟;</li>
+  <li><b>时间段</b>: 近1月 ~ 近5年, 决定分析用的 K 线根数。</li>
+</ul>
+<div class="tip">分析分钟级时工具会自动拉取日线作长周期参照, 识别"日线下跌 / 分钟反弹"类背离。</div>
+
+<h3>2.3 刷新与缓存</h3>
+<ul>
+  <li><b>刷新</b>: 重拉最新行情并重新分析 (K 线 5 分钟内存缓存);</li>
+  <li><b>强制刷新分析</b> (<kbd>Ctrl+F5</kbd>): 绕过本地缓存强制重拉;</li>
+  <li>历史 K 线持久缓存在 <code>wyckoff_cache.db</code>, 跨会话复用节约流量;
+      "工具 → 清除行情缓存"可一键释放磁盘。</li>
+</ul>
+<div class="note">缓存不足所选时间段时会自动失效重拉, 不会"时间段没起作用"。</div>
+
+<h2>3. 五种图表页</h2>
+<h3>3.1 K线图</h3>
+<ul>
+  <li><b>滚轮</b>: 缩放; <b>左键拖拽</b>: 平移; <b>双击</b>: 复位;</li>
+  <li><kbd>+</kbd>/<kbd>-</kbd>: 缩放; <kbd>←</kbd>/<kbd>→</kbd>: 平移; <kbd>Home</kbd>: 复位;
+      <kbd>Backspace</kbd>: 向前翻页; <kbd>F</kbd>/<kbd>End</kbd>: 向后翻页;</li>
+  <li><b>点击图上 VSA 信号标签</b>: 弹出该信号的详细解释 (含义/方向/关注点/建议/失效条件);</li>
+  <li><b>右键</b>: 保存图片 / 复位视图;</li>
+  <li>十字光标跟随鼠标显示实时价格与成交量。</li>
+</ul>
+
+<h3>3.2 P&amp;F 点数图</h3>
+<p>点数图 (Point &amp; Figure) 用 × / ○ 刻画价格运动, 忽略时间, 用于识别箱体、突破与目标位。
+目标位测算遵循威科夫横向/纵向计数口径 (依据 <b>Wyckoff Analytics Count Guide</b>、
+<b>StockCharts ChartSchool</b>、<b>Incredible Charts P&amp;F Guide</b> 与
+<b>Wyckoff SMI 5-Step Method</b>)。</p>
+<ul>
+  <li><b>格值与反转</b>: box 两种来源 (设置可选), 反转固定 3 格:
+    <ul>
+      <li><b>百分比</b> (默认): box = 最新价 × 1.5% (取整到分);</li>
+      <li><b>动态ATR</b>: box = ATR(14) × 0.5 (系数可调), 随波动率自适应过滤噪声。</li>
+    </ul></li>
+  <li><b>横向计数</b> (Law of Cause and Effect): cause = count line 列数 × 格值 × 反转,
+      计数须把有/无 posting 的横向分格全部计入 (含空列); effect 投影为三档目标 —
+      count line (最大) / TR 区间极值 (保守) / 两者中点 (中档)。</li>
+  <li><b>纵向计数</b>: 主升/主跌列高度 × 格值, 从该列底部 (向上) 或顶部 (向下) 投影;</li>
+  <li><b>近端参考目标</b> 为本工具自创的可到达口径 (区间边界外推 0.2×因, 相对现价 ±4% 封顶),
+      供历史命中核对; 非威科夫概念;</li>
+  <li><b>准确率</b>: 图注与"历史测算"行核对每段突破后是否到达目标 (±1 格容差), 检验威科夫
+      计数在历史段上的实际表现。</li>
+</ul>
+<div class="note">威科夫目标仅为 "stop, look and listen" 参考位置, 不承诺价格必到;
+本工具以近端目标做可到达性校准, 满宽目标仅为教科书理想位。</div>
+
+<h3>3.3 技术指标</h3>
+<p>叠加常见指标 (成交量、均线、MACD/RSI 等), 纵向滚动查看单指标卡片。</p>
+
+<h3>3.4 资金透视</h3>
+<p>资金与股价配合度的一站式视图, 自上而下排列 (高度不足时竖向滚动):</p>
+<ul>
+  <li><b>主力资金流向</b> (全宽): 大小单净流入与阶段结合的走势;</li>
+  <li><b>资金分项</b> / <b>当前筹码堆积形态</b>: 大单/超大单拆解与筹码分布;</li>
+  <li><b>股东户数变化</b> / <b>供需强度</b>: 筹码集中度与量价供需平衡。</li>
+</ul>
+
+<h3>3.5 解读 (AI 解读)</h3>
+<p>展示 AI 对本次分析报告的通俗解读 (需在设置中启用 AI 并配置 Key)。</p>
+
+<h2>4. 右侧结论面板</h2>
+<h3>4.1 信号汇总</h3>
+<p>顶部卡片展示阶段、结构、趋势、资金、回测等核心结论。阶段颜色: <b>底/升=红</b>,
+<b>区=琥珀</b>, <b>顶/跌=绿</b>。下方 VSA 标签条显示最近信号 (带 ✓ 高置信 / ! 谨慎标记)。</p>
+
+<h3>4.2 分析结论</h3>
+<p>左侧竖列表切换段落, 右侧显示当前段落 HTML 结论。标题栏提供 <b>▶ 语音朗读</b> 与
+<b>A− / A+</b> 字号调整。导出报告 (<kbd>Ctrl+E</kbd>) 保存 txt + 各图 PNG 到数据目录。</p>
+<p><b>历史胜率</b> 段落: 每种事件除全量回测统计外, 还列出"其中 ✓ 已确认"子集的胜率与均收益 ——
+已获后续 K 线跟进确认的事件命中率更高, 是"等确认再进场"的经验证据。</p>
+
+<h3>4.3 文字缩放</h3>
+<p>所有文字分析窗口 (分析结论、AI 解读) 标题栏都有 <b>A−</b> / <b>A+</b> 按钮,
+字号 7~18pt, 设置自动保存重启保留。</p>
+
+<h2>5. 自选股与键盘精灵</h2>
+<h3>5.1 自选股列表</h3>
+<ul>
+  <li>工具条"加入自选"或 <kbd>Ctrl+D</kbd> 添加当前股票;</li>
+  <li><b>双击</b> 自选股加载分析; <b>右键</b>: 加载分析 / 上移 / 下移 / 删除;</li>
+  <li>卡片显示实时行情与阶段高亮色; "工具 → 刷新自选股行情"批量更新。</li>
+</ul>
+
+<h3>5.2 键盘精灵 (代码搜索)</h3>
+<p>在<b>非输入框</b>区域 (图表、列表、空白处) 直接敲字母或数字弹出搜索精灵, 输入
+代码/名称/拼音, 回车或双击结果即加载分析。再次敲击字母继续在当前搜索框内追加,
+<kbd>Esc</kbd> 关闭。输入框内打字不触发。</p>
+<div class="tip">这是最快的"键盘流"用法: 看图时直接敲 <code>sqjt</code> 回车即切换到上汽集团。</div>
+
+<h2>6. 选股体系</h2>
+<h3>6.1 三类扫描 (选股菜单)</h3>
+<ul>
+  <li><b>扫描自选股</b>: 批量分析自选股; <b>全市场扫描</b>: 扫 A 股全市场;</li>
+  <li><b>板块扫描</b>: 按行业板块扫描成份股;</li>
+  <li>扫描结果窗口支持 全选 / 加入自选股 / 存为待观察 / 导出 CSV, <b>双击行</b> 加载分析。</li>
+</ul>
+
+<h3>6.2 综合选股 (<kbd>Ctrl+Shift+S</kbd>)</h3>
+<p>独立标签页, 多条件组合筛股 (阶段/信号/技术面), 结果同样支持加入自选与双击加载。</p>
+
+<h3>6.3 待观察候选池</h3>
+<p>扫描中"存为待观察"的股票汇总, 集中管理潜在标的, 可批量巡检。
+"候选池巡检"专项扫描会标注每个候选<b>已走强 / 已破位 / 继续观察</b>。</p>
+
+<h3>6.4 扫描中心 (20 类专项扫描, <kbd>Ctrl+Shift+M</kbd>)</h3>
+<p>按功能聚合的专项扫描库, 双击条目即运行, 支持多选并行。本地三态 (量价) 扫描在全市场
+检索; 行情增强类扫描需联网 (部分依赖 akshare, 失败自动跳过不阻塞)。</p>
+<table>
+  <tr><th>类别</th><th>扫描</th><th>用途</th></tr>
+  <tr><td rowspan="6">本地量价</td>
+      <td>回踩买点</td><td>强买点 (Spring/SC/ST) 后回调未破位, 此刻可低吸</td></tr>
+  <tr><td>P&amp;F 突破</td><td>点数图刷新前高/三重顶突破 + 计数目标</td></tr>
+  <tr><td>量能异动</td><td>量比/量Z大幅放大 → 突破 vs 出货</td></tr>
+  <tr><td>量价背离</td><td>放量滞涨 / 缩量过峰 / 缩量回踩 / 布林蓄势</td></tr>
+  <tr><td>波浪亲密度</td><td>现价贴近斐波那契关键支撑/目标位</td></tr>
+  <tr><td>强势板块联动</td><td>资金流入强势板块 → 板块内信号股</td></tr>
+  <tr><td rowspan="6">本地信号</td>
+      <td>持仓风险</td><td>我的持仓中的派发/减仓/破位信号</td></tr>
+  <tr><td>候选池巡检</td><td>待观察池股票: 已走强/已破位/继续观察</td></tr>
+  <tr><td>派发风险</td><td>全市场顶部构筑/派发信号 (UTAD/BC) → 减仓预警</td></tr>
+  <tr><td>平台突破</td><td>低波动平台 + 放量上破前高, 突破启动</td></tr>
+  <tr><td>吸筹完成度</td><td>SC→PSY→Spring/AR/SOS 完整吸筹链, 待主升</td></tr>
+  <tr><td>两融异动</td><td>融资余额显著放大 (需 akshare)</td></tr>
+  <tr><td rowspan="8">行情增强</td>
+      <td>龙虎榜</td><td>近一月游资/机构净买入 (需 akshare)</td></tr>
+  <tr><td>解禁预警</td><td>未来60日限售解禁压力 (需 akshare)</td></tr>
+  <tr><td>业绩预告</td><td>业绩预增/预亏快扫 (需 akshare)</td></tr>
+  <tr><td>北向资金</td><td>北向净流入/个股持仓 (数据源受限)</td></tr>
+  <tr><td>大宗交易</td><td>大宗折价接盘 / 溢价买入 (需 akshare)</td></tr>
+  <tr><td>机构调研</td><td>近期被机构密集调研 (需 akshare)</td></tr>
+  <tr><td>涨停池</td><td>连板高度与炸板承接 (需 akshare)</td></tr>
+  <tr><td>股权质押</td><td>高质押比例风险提示 (需 akshare)</td></tr>
+</table>
+
+<h2>7. 指数行情</h2>
+<p>"指数"菜单内置常用指数一键加载: 上证指数 / 深证成指 / 创业板指 / 科创50 /
+沪深300 / 上证50 / 中证500 / 中证1000 / 中证A500, 或"全部指数..."弹出对话框搜索选择。
+指数与个股共用同一套分析流程。</p>
+
+<h2>8. 工具 (工具菜单)</h2>
+<ul>
+  <li><b>我的持仓 (盈亏跟踪)</b>: 记录买入价/数量/成本, 实时算盈亏与止损距离, 接近止损高亮,
+      可导出 CSV; 也是"持仓风险"扫描的数据源;</li>
+  <li><b>自选股预警</b>: 为自选股设置价格阈值 (突破/跌破) 或信号类型预警, 触发弹窗 + 语音;</li>
+  <li><b>多股票对比</b>: 并排显示自选股的阶段/信号/方向评分, 双击加载分析;</li>
+<li><b>校准中心</b> (<kbd>Ctrl+Shift+A</kbd>): 分层校准 — 模型校准 (L4 在线 LR)、
+       阶段带反馈标注 (人工纠正反哺准确率)、分析校准、信号校准 (L1 贝叶斯收缩 +
+       Rank IC + 显著性验证)、信号时间线 (按股票→日期看每个信号的命中日历), 支持导出
+       JSON / CSV / 复盘周报, 可清空记录;</li>
+  <li><b>个股备注</b> (分析菜单): 为当前股票记录买卖理由/观察要点; <b>清除行情缓存</b>
+      管理本地数据。</li>
+</ul>
+
+<h2>9. 资金监测 (资金菜单)</h2>
+<ul>
+  <li><b>国家队持仓透视</b>: 识别当前股票十大股东中的汇金/证金/社保, 附 AI 解读;</li>
+  <li><b>ETF 三因子份额监测</b>: 用交易所份额变化推断汇金宽基 ETF 信号 (概率性, 非官方数据);</li>
+  <li><b>国家队ETF跟踪</b>: 跟踪国家队相关宽基 ETF。</li>
+</ul>
+
+<h2>10. 快捷键一览</h2>
+<table>
+  <tr><th>快捷键</th><th>功能</th></tr>
+  <tr><td><kbd>F5</kbd></td><td>开始分析</td></tr>
+  <tr><td><kbd>Ctrl+F5</kbd></td><td>强制刷新分析 (绕过缓存)</td></tr>
+  <tr><td><kbd>Ctrl+D</kbd></td><td>添加当前股票到自选股</td></tr>
+  <tr><td><kbd>Ctrl+E</kbd></td><td>导出分析报告</td></tr>
+  <tr><td><kbd>Ctrl+Q</kbd></td><td>退出</td></tr>
+  <tr><td><kbd>Ctrl+,</kbd></td><td>打开设置</td></tr>
+  <tr><td><kbd>Ctrl+Shift+S</kbd></td><td>切换到综合选股</td></tr>
+  <tr><td><kbd>Ctrl+Shift+M</kbd></td><td>打开扫描中心</td></tr>
+  <tr><td><kbd>Ctrl+Shift+A</kbd></td><td>打开校准中心</td></tr>
+  <tr><td><kbd>Ctrl+Shift+W</kbd> / <kbd>Ctrl+Shift+R</kbd></td><td>显隐左栏 / 右栏</td></tr>
+  <tr><td><kbd>Ctrl+F</kbd></td><td>手册内搜索</td></tr>
+  <tr><td><kbd>+</kbd>/<kbd>-</kbd></td><td>K线图缩放</td></tr>
+  <tr><td><kbd>←</kbd>/<kbd>→</kbd></td><td>K线图平移</td></tr>
+  <tr><td><kbd>Home</kbd>/<kbd>R</kbd></td><td>K线图复位</td></tr>
+  <tr><td><kbd>Backspace</kbd></td><td>K线图向前翻页</td></tr>
+  <tr><td><kbd>F</kbd>/<kbd>End</kbd></td><td>K线图向后翻页</td></tr>
+  <tr><td>字母/数字 (非输入框)</td><td>弹出键盘精灵</td></tr>
+</table>
+
+<h2>11. 设置面板详解 (设置 → 设置... / Ctrl+,)</h2>
+<h3>11.1 界面主题</h3>
+<ul>
+  <li><b>浅色 / 深色 (护眼)</b>: "设置 → 基本 → 界面主题"选择, 保存立即生效; 也可
+      <b>视图 → 切换深色护眼主题</b> 一键切换;</li>
+  <li>深色主题为低亮度蓝紫基调, 适合夜间长时间盯盘; 四个图表页的背景、坐标轴、网格与
+      十字光标读数框随主题同步切换, 无需重新分析。</li>
+</ul>
+<h3>11.2 基本</h3>
+<ul>
+  <li><b>默认载入</b>: 启动时自动分析的股票, 留空不自动;</li>
+  <li><b>默认周期 / 时间段</b>: 启动默认组合; <b>定时刷新行情</b>: 每隔 N 秒自动刷新;</li>
+  <li><b>基本面/资金流确认机制</b>: 关闭即离线快速模式 (跳过外部抓取, 更快);</li>
+  <li><b>界面尺寸</b>: 自选股栏宽 / 右侧结论栏宽。</li>
+</ul>
+<h3>11.3 图表</h3>
+<ul>
+  <li>界面/图表字号; <b>绘制维斯波波段</b> (横盘/推进); <b>绘制买卖点锁</b> (触发/失效标记)。</li>
+</ul>
+<h3>11.4 回测与风控</h3>
+<ul>
+  <li><b>回测参数</b>: 持有根数 / 最少样本 / 单边成本;</li>
+  <li><b>分析灵敏度</b>: 枢轴灵敏度 fast (细枢轴信号多) / normal (默认) / safe (粗枢轴
+      假信号少); 点数图格值 百分比或动态ATR (见 §3.2);</li>
+  <li><b>仓位风险管理</b>: 总资金 / 单笔风险 / 最小盈亏比 → 生成仓位建议。</li>
+</ul>
+<h3>11.5 AI</h3>
+<ul>
+  <li><b>启用 AI 反向证伪</b>: 对看多/看空结论做反向审查;</li>
+  <li><b>启用 AI 报告解读</b>: 生成通俗解读; <b>API Key / Base / 模型</b>: 支持 DeepSeek
+      等 OpenAI 兼容接口, 默认 <code>https://api.deepseek.com</code> / <code>deepseek-chat</code>。</li>
+</ul>
+<div class="note">AI 为可选层: 未配置 Key 时自动跳过, 不影响离线分析功能。</div>
+<h3>11.6 语音播报</h3>
+<ul>
+  <li>启用解读语音播报 / 分析完成后自动播报; 引擎 auto / edge-tts / pyttsx3, 可调音色
+      与语速; 最大播报字数控制长度。</li>
+</ul>
+
+<h2>12. 常见问题与技巧</h2>
+<h3>12.1 分析慢 / 卡</h3>
+<ul>
+  <li>关闭"基本面/资金流确认机制"进入离线快速模式;</li>
+  <li>不配置 AI Key 即跳过 AI 解读与证伪; 历史 K 线走缓存, 首次拉取后明显更快。</li>
+</ul>
+<h3>12.2 退出时等很久 / 崩溃</h3>
+<ul>
+  <li>分析中 (尤其 AI 解读) 直接关窗会等后台线程结束再退出; 建议等状态栏回到"就绪"
+      再关闭。</li>
+</ul>
+<h3>12.3 语音没有声音</h3>
+<ul>
+  <li>确认"设置 → 语音播报"已启用; auto 不可用时换 edge-tts 或 pyttsx3; 检查系统声卡。</li>
+</ul>
+<h3>12.4 拼音搜索不到</h3>
+<ul>
+  <li>用完整拼音或代码; 缩写需在索引中; 名称搜不到可试代码。</li>
+</ul>
+<h3>12.5 数据来源</h3>
+<ul>
+  <li>行情自动在 新浪 → 东方财富 → 腾讯 间切换; 个别数据源短暂不可用时自动换源重试。
+      行情增强类扫描 (大宗/调研/涨停池/两融等) 依赖 akshare, 需联网且数据源偶发限流,
+      失败会自动跳过不阻塞整批。</li>
+</ul>
+<h3>12.6 如何看准一个信号</h3>
+<ul>
+  <li>点击 K 线图上的信号标签, 查看含义、关注点、失效条件;</li>
+  <li><b>看跟进确认标记</b>: 结论"近期事件"每个事件带 ✓ (已确认) / ✗ (未确认) / … (待确认)
+      —— 只在事件被后续 K 线朝信号方向跟进确认后进场 (✓ 事件回测命中率显著更高);</li>
+  <li><b>看高周期方向</b>: "多维度共振"标注每个维度顺/逆高周期 —— 与周/月线方向一致的
+      信号权重 ×1.2, 冲突 ×0.6 (冲突降仓);</li>
+  <li><b>看波动率状态</b>: 低波动蓄势后的放量突破更可信, 高波动追高风险大;</li>
+  <li>结合 资金透视 (资金是否配合) 与 阶段判断 综合决策;</li>
+  <li>在校准中心查看历史判断的回评记录, 校准自己的阈值;</li>
+  <li>可让 <b>AI 反向证伪</b> 给出相反观点再决策。</li>
+</ul>
+<div class="footer">Wyckoff 威科夫分析方法客户端 · 技术分析工具 · 不构成投资建议<br/>
+作者: 阮俊 · 版权 © 2026 阮俊 · 保留所有权利</div>
+</body>
+</html>

@@ -1,0 +1,683 @@
+# -*- coding: utf-8 -*-
+"""信号准确度追踪: 对每个独立信号 (威科夫事件 / VSA) 做逐信号命中追踪。
+
+与 accuracy.py (整份分析的阶段/目标追踪) 互补: 这里记录每一次分析中检测出的
+每个事件信号 (Spring/ST/UTAD/SOS/JOC/SC/AR/BC/PSY) 与 VSA 信号,
+用之后真实行情评估未来 5/10/20/40 根收益, 汇总出每类信号的
+胜率 / 均值 / 置信度分档表现, 用于持续校准事件检测规则与置信度打分。
+
+写入/评估时机:
+  - record_signals: 每次分析 (record_analysis) 时记录, 并从当次 df 立即评估
+    已出满未来行情的历史信号 (无需等待);
+  - evaluate_pending / run_auto_signal_eval: 到期但缺未来行情的信号, 由每日
+    定时任务补抓行情评估 (与 accuracy.py 的 cron 同钩子)。
+
+存储: ~/.wyckoff/wx_signal_accuracy.json
+评估口径: 信号出现后 N 根收盘收益 (ret>0 记为上涨)。
+"""
+import json
+import math
+import statistics
+import threading
+import time
+
+import numpy as np
+import pandas as pd
+
+from ._shared import atomic_write_json
+from .paths import SIGNAL_ACCURACY_FILE
+from .datasource import fetch_kline
+from .indicators import add_indicators, find_pivots
+from .events import detect_all
+from .vsa import vsa_classify
+
+# 评估周期 (根)
+HORIZONS = (5, 10, 20, 40)
+
+_LOCK = threading.Lock()
+
+
+# ── 存取 ──
+def _key(rec):
+    return f"{rec.get('symbol')}|{rec.get('scale')}|{rec.get('kind')}|{rec.get('type')}|{rec.get('date')}"
+
+
+def _sig_date(rec):
+    """解析记录日期 → datetime; 失败返回 None。"""
+    try:
+        return pd.to_datetime(str(rec.get("date", "")))
+    except Exception:
+        return None
+
+
+def _cooldown_dup(existing, rec, df, cooldown_bars):
+    """在冷却窗内找同标的同类型未评估记录。
+
+    返回命中记录的 key (该记录将被合并更新), 无则 None。
+    冷却窗按 bar 数衡量: 定位 df 中 rec 的 idx, 与同 symbol+scale+kind+type 记录的
+    idx 差 <= cooldown_bars 视为重复 (用 bar 差, 不受停牌/假日影响)。
+    """
+    if df is None or df.empty:
+        return None
+    rec_idx = _locate(df, rec["date"])
+    if rec_idx is None:
+        return None
+    for key, old in existing.items():
+        if old.get("kind") != rec.get("kind"):
+            continue
+        if old.get("symbol") != rec.get("symbol") or old.get("scale") != rec.get("scale"):
+            continue
+        if old.get("type") != rec.get("type"):
+            continue
+        old_idx = old.get("idx")
+        if old_idx is None:
+            continue
+        try:
+            if abs(int(old_idx) - int(rec_idx)) <= cooldown_bars:
+                return key
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _merge_cooldown(old, new):
+    """合并冷却窗内的重复信号: 保留较早记录, 补充名称等元信息, 不覆盖评估结果。"""
+    if not old.get("name") and new.get("name"):
+        old["name"] = new.get("name")
+    if not old.get("code") and new.get("code"):
+        old["code"] = new.get("code")
+    old["datalen"] = max(int(old.get("datalen", 0) or 0),
+                         int(new.get("datalen", 0) or 0))
+    old["conf"] = max(int(old.get("conf", 0) or 0), int(new.get("conf", 0) or 0))
+    return old
+
+
+def expire_stale_signals(max_age_days: int = 365, keep_done_days: int = 730):
+    """清理/标记过期信号记录。
+
+    - 未评估 (pending/waiting) 且创建超过 max_age_days → 直接删除 (无法评估)
+    - 已评估 (done) 且超过 keep_done_days → 保留, 不删 (历史样本仍用于胜率统计)
+    - 返回删除条数。窗口小概率误删已评估记录, 故 done 只按超长年限清理。
+    """
+    now = time.time()
+    secs_max = max_age_days * 86400
+    secs_done = keep_done_days * 86400
+    with _LOCK:
+        records = load_signals()
+        keep = []
+        n_del = 0
+        for r in records:
+            created = r.get("created_ts") or 0
+            if r.get("results"):
+                # 已评估: 仅清理超久远历史 (防止文件无限膨胀)
+                if now - created > secs_done:
+                    n_del += 1
+                    continue
+                keep.append(r)
+                continue
+            if now - created > secs_max:
+                n_del += 1
+                continue
+            keep.append(r)
+        if n_del:
+            save_signals(keep)
+            invalidate_win_rate_cache()
+        return n_del
+
+
+def load_signals():
+    try:
+        with open(SIGNAL_ACCURACY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_signals(records):
+    try:
+        atomic_write_json(SIGNAL_ACCURACY_FILE, records)
+        invalidate_win_rate_cache()
+    except Exception as e:
+        from ._log import log_exc
+        log_exc("save_signals 落盘失败", e)
+
+
+# ── 记录 ──
+def _locate(df, date_str):
+    """在 df 中定位 date_str 对应的 bar 索引; 找不到返回 None。"""
+    try:
+        s = df["day"].astype(str)
+        idx = np.where(s.values == date_str)[0]
+        if len(idx):
+            return int(idx[-1])
+        idx = np.where(s.str.startswith(str(date_str)[:10]).values)[0]
+        if len(idx):
+            return int(idx[-1])
+    except Exception:
+        return None
+    return None
+
+
+def _eval_against(df, idx, rec):
+    """用 df 中 idx 之后的真实行情评估缺失周期。返回是否有新增评估。"""
+    c = df["close"].values
+    n = len(df)
+    results = dict(rec.get("results") or {})
+    changed = False
+    for h in HORIZONS:
+        k = str(h)
+        if k in results:
+            continue
+        if idx is not None and idx + h < n:
+            base = float(c[idx])
+            if base > 0:
+                results[k] = {"ret": round(c[idx + h] / base - 1, 6)}
+                changed = True
+    rec["results"] = results
+    done = len(results) >= len(HORIZONS)
+    rec["status"] = "done" if done else "pending"
+    if not done and idx is not None and idx + min(HORIZONS) >= n:
+        # 信号落在行情末端: 未来行情未走满, 标记 waiting (等数据, 非异常)
+        rec["waiting"] = True
+    else:
+        rec["waiting"] = False
+    return changed
+
+
+def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=None,
+                   name="", cooldown_bars=15):
+    """记录一次分析中检测到的全部信号 (事件 + VSA), 并立即评估已出未来行情的部分。
+
+    events / vsa_signals 省略时内部重新检测 (find_pivots + detect_all + vsa_classify)。
+    同 symbol+scale+kind+type+date 视为同一信号, 去重 (已评估的保留原结果)。
+    cooldown_bars: 同一标的同一类型信号在 N 根内不重复新建记录 (如连续多日 NS/ND
+    洪水式信号只留一条代表), 防止同类型信号在回测统计里刷屏。
+    """
+    if events is None or vsa_signals is None:
+        pivots = find_pivots(df, order=6)
+        if events is None:
+            events = detect_all(df, pivots)
+        if vsa_signals is None:
+            vsa_signals = vsa_classify(df, scale=scale)
+    recs = []
+    for e in events:
+        recs.append(dict(symbol=symbol, code=str(code)[-6:], name=name, scale=scale,
+                         datalen=datalen, kind="event", type=e.get("type", "?"),
+                         idx=e.get("idx"), date=str(e.get("date")),
+                         conf=int(e.get("conf", 50)), price=float(e.get("price", 0)),
+                         features=e.get("feat"),
+                         created_ts=time.time(), last_eval_ts=0, status="pending",
+                         eval_fails=0, results={}))
+    for s in vsa_signals:
+        recs.append(dict(symbol=symbol, code=str(code)[-6:], name=name, scale=scale,
+                         datalen=datalen, kind="vsa", type=s.get("label", "?"),
+                         idx=s.get("idx"), date=str(s.get("date")),
+                         conf=0, price=0.0, created_ts=time.time(),
+                         last_eval_ts=0, status="pending", eval_fails=0, results={}))
+    if not recs:
+        return 0
+    with _LOCK:
+        records = load_signals()
+        existing = {_key(r): r for r in records}
+        n_new = 0
+        for rec in recs:
+            key = _key(rec)
+            old = existing.get(key)
+            if old is not None:
+                # 已评估的保留原结果, 仅更新未评估快照
+                if old.get("results"):
+                    continue
+                existing[key] = rec
+                continue
+            # 冷却窗去重: 同标的+同类型 在 cooldown_bars 根内有未评估记录 → 合并更新
+            if cooldown_bars > 0 and not old:
+                dup = _cooldown_dup(existing, rec, df, cooldown_bars)
+                if dup is not None:
+                    existing[dup] = _merge_cooldown(existing[dup], rec)
+                    continue
+            existing[key] = rec
+            n_new += 1
+        out = list(existing.values())
+        save_signals(out)
+    # 立即评估 (无需等 cron): 历史信号在当次 df 内已有未来行情
+    for rec in recs:
+        idx = _locate(df, rec["date"])
+        if idx is not None:
+            _eval_against(df, idx, rec)
+    with _LOCK:
+        cur = load_signals()
+        for rec in recs:
+            key = _key(rec)
+            for c in cur:
+                if _key(c) == key:
+                    c["results"] = rec["results"]
+                    c["status"] = rec["status"]
+                    break
+        save_signals(cur)
+    invalidate_win_rate_cache()
+    return n_new
+
+
+# ── 评估 ──
+def _evaluate_one(rec):
+    """拉取最新行情评估单条记录缺失周期。"""
+    scale = int(rec.get("scale", 240))
+    datalen = max(300, int(rec.get("datalen", 700)) + 80)
+    try:
+        df = add_indicators(fetch_kline(rec["symbol"], datalen=datalen, scale=scale))
+    except Exception:
+        fails = int(rec.get("eval_fails", 0)) + 1
+        rec["eval_fails"] = fails
+        if fails >= 3:
+            rec["status"] = "stale"
+        return False
+    idx = _locate(df, rec.get("date", ""))
+    if idx is None:
+        fails = int(rec.get("eval_fails", 0)) + 1
+        rec["eval_fails"] = fails
+        if fails >= 3:
+            rec["status"] = "stale"
+        return False
+    return _eval_against(df, idx, rec)
+
+
+def evaluate_pending(records, force=False, min_interval=3600, max_records=20):
+    """对缺评估周期的记录补评估, 返回新增评估条数。"""
+    from ._shared import run_pending_eval
+    return run_pending_eval(records, _evaluate_one, HORIZONS,
+                            load_signals, save_signals, _key, _LOCK,
+                            force=force, min_interval=min_interval,
+                            max_records=max_records)
+
+
+def run_auto_signal_eval(force=False):
+    with _LOCK:
+        records = load_signals()
+    if not records:
+        return 0
+    return evaluate_pending(records, force=force)
+
+
+# ── 汇总 ──
+_WINRATE_CACHE = None
+
+# L1 贝叶斯收缩: 把样本胜率向市场整体基线回归, 替代"n<10 一刀切"的硬门槛。
+#   小样本的类型胜率不可靠 (SOS n=77 是 50.6%, n=9 的 PSY 却可能 100%),
+#   直接用原值会导致随机噪声被当作信号。收缩公式:
+#     p_shrunk = (wins + alpha0 * p0) / (n + alpha0)
+#   alpha0 为伪样本量 (先验权重): 20 意味着"n=20 时原值与先验各占一半"。
+#   p0 取全池实测上涨占比 (市场基线), 并钳制在 40%~60% 防极端行情污染。
+PRIOR_ALPHA0 = 20
+PRIOR_P0_MIN = 0.40
+PRIOR_P0_MAX = 0.60
+MIN_SHRUNK_N = 3  # 少于该样本量连收缩也无意义 → 直接回退 baseline
+
+
+def _wilson_ci(n, wins, z=1.96):
+    """Wilson 分数区间 (胜率 95% CI), 避免正态近似在小样本下的越界。"""
+    if n <= 0:
+        return (None, None)
+    p = wins / n
+    denom = 1.0 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return (max(0.0, center - half), min(1.0, center + half))
+
+
+def _bayes_shrink(wins, n, p0, alpha0=PRIOR_ALPHA0):
+    """贝叶斯收缩胜率: (wins + alpha0*p0) / (n + alpha0)。"""
+    return (wins + alpha0 * p0) / (n + alpha0)
+
+
+def _winrate_key(kind, type_):
+    return (kind, str(type_))
+
+
+def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
+    """加载历史信号胜率表 (用于 fusion/结论校准)。
+
+    返回 { (kind, type): {"n": 已评估数, "win": 原始上涨占比(0~1),
+    "shrunk": 贝叶斯收缩占比, "ci_lo"/"ci_hi": Wilson 95% CI,
+    "mean": 均收益, "p0": 全池基线} }。n<MIN_SHRUNK_N 的类型不入表。
+    shrunk 是校准用的主力值 (消除小样本噪声); win 保留原始口径供展示。
+    """
+    global _WINRATE_CACHE
+    if not isinstance(_WINRATE_CACHE, dict):
+        _WINRATE_CACHE = {}
+    cached = _WINRATE_CACHE.get(horizon)
+    if cached is not None and not force:
+        return cached
+    records = load_signals()
+    out = {}
+    for r in records:
+        kind = r.get("kind", "event")
+        type_ = r.get("type", "?")
+        res = (r.get("results") or {}).get(str(horizon))
+        if not res or res.get("ret") is None:
+            continue
+        key = _winrate_key(kind, type_)
+        s = out.setdefault(key, {"n": 0, "rets": []})
+        s["n"] += 1
+        s["rets"].append(res["ret"])
+    # 全池基线 (市场整体上涨占比), 钳制防极端
+    pool_wins = sum(1 for s in out.values() for v in s["rets"] if v > 0)
+    pool_n = sum(s["n"] for s in out.values())
+    p0 = (pool_wins / pool_n) if pool_n else 0.5
+    p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
+    result = {}
+    for key, s in out.items():
+        if not s["rets"] or s["n"] < MIN_SHRUNK_N:
+            continue
+        wins = sum(1 for v in s["rets"] if v > 0)
+        win = wins / s["n"]
+        ci_lo, ci_hi = _wilson_ci(s["n"], wins)
+        result[key] = {"n": s["n"], "win": round(win, 4),
+                       "shrunk": round(_bayes_shrink(wins, s["n"], p0), 4),
+                       "ci_lo": round(ci_lo, 4), "ci_hi": round(ci_hi, 4),
+                       "mean": round(statistics.mean(s["rets"]), 6),
+                       "p0": round(p0, 4), "alpha0": PRIOR_ALPHA0}
+    _WINRATE_CACHE[horizon] = result
+    return result
+
+
+def win_rate_of(kind: str, type_: str, horizon: int = 20,
+                baseline: float = 0.5) -> float:
+    """取某类型信号的历史上涨占比 (L1 贝叶斯收缩值)。
+
+    缺失或样本 < MIN_SHRUNK_N → 回退 baseline。与旧版"n<10 一刀切"不同,
+    收缩值在 n 较小时仍可安全使用 (向 p0 回归), 消除阈值悬崖效应。
+    """
+    rates = load_win_rates(horizon)
+    key = _winrate_key(kind, str(type_))
+    rec = rates.get(key)
+    if not rec or rec["n"] < MIN_SHRUNK_N:
+        return baseline
+    return rec["shrunk"]
+
+
+def invalidate_win_rate_cache():
+    """记录变更后使胜率缓存失效 (下次 load 时重新计算)。"""
+    global _WINRATE_CACHE
+    _WINRATE_CACHE = {}
+
+
+def win_rate_profile(kind: str, type_: str, min_n: int = 3):
+    """L5 多周期一致性档案: 5/10/20/40 根收缩胜率 + 判定.
+
+    返回 {"horizons": {h: {"n","win","shrunk"}|None}, "consistent": bool,
+          "verdict": 结论文本}。用于观测信号边缘是否随时间衰减/反转:
+      方向反转   → 20根 与 40根 收缩偏离基线的方向相反 (危险);
+      短期有效长期衰减 → 20根有正边缘但 40根大幅回落;
+      边缘稳定   → 20根偏离基线且 40根未明显回撤;
+      贴近随机   → 20根收缩贴近 50%。
+    """
+    prof = {}
+    for h in HORIZONS:
+        rates = load_win_rates(h)
+        rec = rates.get(_winrate_key(kind, str(type_)))
+        prof[str(h)] = ({n: rec[n] for n in ("n", "win", "shrunk")} if rec else None)
+    h20, h40 = prof.get("20"), prof.get("40")
+    consistent, verdict = True, "样本不足"
+    if h20 and h40 and h20["n"] >= min_n and h40["n"] >= min_n:
+        d20 = h20["shrunk"] - 0.5
+        d40 = h40["shrunk"] - 0.5
+        if d20 * d40 < 0 and abs(d20) >= 0.05 and abs(d40) >= 0.05:
+            consistent, verdict = False, "方向反转"
+        elif d20 >= 0.05 and d20 - d40 >= 0.10:
+            consistent, verdict = True, "短期有效长期衰减"
+        elif abs(d20) >= 0.05:
+            consistent, verdict = True, "边缘稳定"
+        else:
+            consistent, verdict = True, "贴近随机"
+    return {"horizons": prof, "consistent": bool(consistent), "verdict": verdict}
+
+
+def signal_stats(records):
+    """按 事件/VSA × 类型 汇总命中情况。返回 {kind: {type: {...}}, summary}。"""
+    out = {}
+    total = len(records)
+    evaled = sum(1 for r in records if r.get("results"))
+    for kind in ("event", "vsa"):
+        by_type = {}
+        for r in records:
+            if r.get("kind") != kind:
+                continue
+            t = r.get("type", "?")
+            s = by_type.setdefault(t, {"n": 0, "evaluated": 0, "horizons": {},
+                                       "conf": {}})
+            s["n"] += 1
+            results = r.get("results") or {}
+            if not results:
+                continue
+            s["evaluated"] += 1
+            for h in HORIZONS:
+                res = results.get(str(h))
+                if not res or res.get("ret") is None:
+                    continue
+                rec = s["horizons"].setdefault(str(h), [])
+                rec.append(res["ret"])
+            conf = int(r.get("conf", 0))
+            band = "≥80" if conf >= 80 else ("60-79" if conf >= 60 else
+                                             ("40-59" if conf >= 40 else "<40"))
+            s["conf"].setdefault(band, []).append(
+                (results.get("20", {}).get("ret"), r.get("conf", 0)))
+        out[kind] = by_type
+    evaluated = evaled
+    out["summary"] = {
+        "total": total, "evaluated": evaluated, "pending": total - evaluated,
+        "stale": sum(1 for r in records if r.get("status") == "stale"),
+    }
+    return out
+
+
+def _fmt_stats(stats):
+    """把 signal_stats 输出格式化为文本 (供 CLI / 桌面显示)。"""
+    lines = []
+    s = stats["summary"]
+    lines.append(f"信号追踪: 累计 {s['total']} 条, 已评估 {s['evaluated']}, "
+                 f"待评估 {s['pending']}, stale {s['stale']}")
+    for kind, label in (("event", "威科夫事件"), ("vsa", "VSA")):
+        lines.append(f"\n── {label} ──")
+        by_type = stats[kind]
+        if not by_type:
+            lines.append("  (暂无)")
+            continue
+        rows = []
+        for t, s in by_type.items():
+            h20 = s["horizons"].get("20", [])
+            if not h20:
+                rows.append((t, s["n"], 0, 0.0, "无"))
+                continue
+            up = sum(1 for v in h20 if v > 0) / len(h20)
+            rows.append((t, s["n"], len(h20), up, statistics.mean(h20)))
+        for t, n, ev, up, mean in sorted(rows, key=lambda x: -x[3]):
+            lines.append(f"  {t:<8s} n={n:<5d} 评估{ev:<4d} 20根上涨占比="
+                         f"{up*100:5.1f}% 均值={mean*100:+6.2f}%")
+    return "\n".join(lines)
+
+
+def export_signals(records, path=None):
+    path = path or SIGNAL_ACCURACY_FILE.replace(".json", "_export.json")
+    payload = {
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "horizons": list(HORIZONS),
+        "note": "逐信号准确度追踪: 每个事件/VSA信号之后真实行情收益; "
+                "status=pending 为尚未走满评估周期。",
+        "stats": signal_stats(records),
+        "records": records,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+    return path
+
+
+def export_signals_csv(records, path=None):
+    """导出信号准确度记录到 CSV (便于 Excel/其他工具分析)。"""
+    import csv
+    path = path or SIGNAL_ACCURACY_FILE.replace(".json", ".csv")
+    cols = ["symbol", "code", "name", "scale", "kind", "type", "date", "conf",
+            "price", "status", "created_ts"]
+    for h in HORIZONS:
+        cols += [f"ret_{h}", f"hi_{h}", f"lo_{h}", f"up_hit_{h}", f"down_hit_{h}"]
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        wr = csv.writer(f)
+        wr.writerow(cols)
+        for r in records:
+            res = r.get("results") or {}
+            row = [r.get("symbol"), r.get("code"), r.get("name"), r.get("scale"),
+                   r.get("kind"), r.get("type"), r.get("date"), r.get("conf"),
+                   r.get("price"), r.get("status"), r.get("created_ts")]
+            for h in HORIZONS:
+                hh = res.get(str(h)) or {}
+                row += [hh.get("ret"), hh.get("hi"), hh.get("lo"),
+                        hh.get("up_hit"), hh.get("down_hit")]
+            wr.writerow(row)
+    return path
+
+
+def export_review_report(records=None, path=None, days=7, markdown=True):
+    """导出信号复盘周报 (Markdown/HTML): 近 days 天内新增信号的命中/止损明细。
+
+    内容:
+      - 周期内新增信号总数、已评估数、类型分布
+      - 按信号类型汇总的 5/20 根胜率 (vs 历史累计)
+      - 逐信号明细: 日期/标的/类型/入场价/各周期收益/命中标记
+    返回写入路径。
+    """
+    import datetime
+    records = records if records is not None else load_signals()
+    stats = signal_stats(records)
+    s = stats["summary"]
+    cutoff_dt = pd.Timestamp(datetime.date.today() - datetime.timedelta(days=days))
+    recent = []
+    for r in records:
+        d = _sig_date(r)
+        if d is None or d.date() < cutoff_dt.date():
+            continue
+        recent.append(r)
+    recent.sort(key=lambda r: str(r.get("date", "")), reverse=True)
+
+    if markdown:
+        return _render_markdown_report(recent, stats, s, days, path=path, records=records)
+    return _render_html_report(recent, stats, s, days, path=path, records=records)
+
+
+def _render_markdown_report(recent, stats, summary, days, path=None, records=None):
+    import os
+    lines = [f"# 威科夫信号复盘周报 ({days}天)", "",
+             f"- 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+             f"- 周期内新增信号: {len(recent)} 条",
+             f"- 累计: {summary['total']} 条 · 已评估 {summary['evaluated']} · "
+             f"待评估 {summary['pending']}", ""]
+
+    # 类型汇总
+    lines += ["## 类型胜率 (近周期已评估信号)", "",
+              "| 类别 | 类型 | 样本 | 5根胜率 | 20根胜率 | 20根均值 |",
+              "|---|---|---|---|---|---|"]
+    kinds = (("event", "威科夫事件"), ("vsa", "VSA"))
+    for kind, label in kinds:
+        by_type = stats.get(kind) or {}
+        if not by_type:
+            continue
+        lines += [f"**{label}**", ""]
+        rows = []
+        for t, st in by_type.items():
+            h5 = st["horizons"].get("5", [])
+            h20 = st["horizons"].get("20", [])
+            if not h20:
+                continue
+            w5 = sum(1 for v in h5 if v > 0) / len(h5) if h5 else None
+            w20 = sum(1 for v in h20 if v > 0) / len(h20)
+            rows.append((t, st["evaluated"], w5, w20, statistics.mean(h20)))
+        for t, n, w5, w20, m in sorted(rows, key=lambda x: -x[3]):
+            w5s = f"{w5 * 100:.0f}%" if w5 is not None else "-"
+            lines.append(f"| {label} | {t} | {n} | {w5s} | {w20 * 100:.0f}% | "
+                         f"{m * 100:+.1f}% |")
+        lines.append("")
+
+    # 明细
+    # 准确性验证 (Rank IC / Bootstrap CI / 置换显著性 / 样本外胜率)
+    try:
+        from .validation import validation_lines
+        vlines = validation_lines(records or recent)
+        if vlines:
+            lines += ["## 信号准确性验证", ""] + [f"- {l}" for l in vlines] + [""]
+    except Exception:
+        pass
+
+    # 明细
+    lines += ["## 近周期信号明细", ""]
+    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 入场价 | 5根 | 10根 | 20根 | 40根 |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+    if not recent:
+        lines += ["| (无) | | | | | | | | | |"]
+    for r in recent:
+        kind_cn = "事件" if r.get("kind") == "event" else "VSA"
+        res = r.get("results") or {}
+        cells = []
+        for h in HORIZONS:
+            rr = res.get(str(h))
+            cells.append(f"{rr['ret'] * 100:+.1f}%" if rr and rr.get("ret") is not None
+                         else "-")
+        lines.append(f"| {r.get('date', '')[:10]} | {r.get('code')} | "
+                     f"{r.get('name') or ''} | {kind_cn} | {r.get('type')} | "
+                     f"{r.get('price') or '-'} | " + " | ".join(cells) + " |")
+    lines.append("")
+    lines.append("> 说明: 5/10/20/40 根收益为该信号出现后的真实行情累计收益; "
+                 "ret>0 记为上涨。未走满周期显示为 `-`。")
+
+    path = path or os.path.join(os.path.dirname(SIGNAL_ACCURACY_FILE),
+                                "wx_signal_review.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return path
+
+
+def _render_html_report(recent, stats, summary, days, path=None, records=None):
+    import os
+    md = _render_markdown_report(recent, stats, summary, days, path=None,
+                                 records=records)
+    body = "\n".join(_html_escape(l) for l in md.splitlines())
+    html = f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>威科夫信号复盘周报</title><style>
+body{{font-family:'Noto Sans CJK SC',sans-serif;margin:24px;color:#1f2937}}
+h1{{color:#2563eb}} h2{{color:#1d4fd7;border-left:4px solid #2563eb;padding-left:8px}}
+table{{border-collapse:collapse;margin:8px 0}}
+th,td{{border:1px solid #dce3f0;padding:4px 10px;font-size:13px}}
+th{{background:#eef2f9}} code{{background:#eef2ff;padding:1px 5px}}
+blockquote{{color:#8a94a6;border-left:3px solid #dce3f0;margin-left:0;padding-left:12px}}
+</style></head><body>{body}</body></html>"""
+    path = path or os.path.join(os.path.dirname(SIGNAL_ACCURACY_FILE),
+                                "wx_signal_review.html")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return path
+
+
+def _html_escape(s):
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+if __name__ == "__main__":
+    import sys
+    if "--eval" in sys.argv:
+        n = run_auto_signal_eval(force=True)
+        nd = expire_stale_signals()
+        recs = load_signals()
+        print(_fmt_stats(signal_stats(recs)))
+        print(f"\n本次新增评估 {n} 条, 清理过期 {nd} 条")
+    elif "--export" in sys.argv:
+        p = export_signals(load_signals())
+        print(f"已导出: {p}")
+    elif "--export-csv" in sys.argv:
+        p = export_signals_csv(load_signals())
+        print(f"已导出 CSV: {p}")
+    elif "--report" in sys.argv:
+        i = sys.argv.index("--report")
+        days = int(sys.argv[i + 1]) if len(sys.argv) > i + 1 and sys.argv[i + 1].isdigit() else 7
+        p = export_review_report(days=days, markdown=True)
+        print(f"已导出复盘周报: {p}")
+    else:
+        print(_fmt_stats(signal_stats(load_signals())))
+        print("命令: --eval 评估到期信号 / --export 导出 / --report [天] 复盘周报")
