@@ -892,7 +892,7 @@ def plot_chart(df, pivots, events, title, fig=None, waves=None, draw_locks=True,
     # 买点/卖点锁: 红带编号=买点, 绿=卖点; 放在事件之后, 用渲染器量出全部
     # 已有标签(事件/波浪方向/浪号)的包围盒, 逐个右移避让, 不与任何文字重叠
     if draw_locks:
-        sell_types = {"UTAD", "BC"}
+        sell_types = {"UTAD", "BC", "UT", "SOW", "LPSY"}
         lock_defs = [(lx, ly, str(lno), _UP, _UP_DK) for lx, ly, lno in locks]
         lock_defs += [(e["idx"], e["price"], "", _DN, _DN_DK)
                       for e in events if e["type"] in sell_types and e["idx"] >= len(df) - W_RECENT]

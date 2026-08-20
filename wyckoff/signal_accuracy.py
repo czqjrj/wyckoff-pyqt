@@ -13,7 +13,9 @@
     定时任务补抓行情评估 (与 accuracy.py 的 cron 同钩子)。
 
 存储: ~/.wyckoff/wx_signal_accuracy.json
-评估口径: 信号出现后 N 根收盘收益 (ret>0 记为上涨)。
+评估口径: 信号出现后 N 根收盘收益 (ret 原始存库); 汇总胜率时方向化:
+标称多头/中性信号 ret>0 记命中, 标称空头信号 (config.event_dir/vsa_dir<0)
+ret<0 记命中 —— 否则 UTAD/LPSY/SUP 这类看空信号会被"涨了"误记为正确。
 """
 import json
 import math
@@ -30,6 +32,7 @@ from .datasource import fetch_kline
 from .indicators import add_indicators, find_pivots
 from .events import detect_all
 from .vsa import vsa_classify
+from .config import event_dir, vsa_dir
 
 # 评估周期 (根)
 HORIZONS = (5, 10, 20, 40)
@@ -337,10 +340,12 @@ def _winrate_key(kind, type_):
 def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
     """加载历史信号胜率表 (用于 fusion/结论校准)。
 
-    返回 { (kind, type): {"n": 已评估数, "win": 原始上涨占比(0~1),
+    返回 { (kind, type): {"n": 已评估数, "win": 原始方向命中占比(0~1),
     "shrunk": 贝叶斯收缩占比, "ci_lo"/"ci_hi": Wilson 95% CI,
     "mean": 均收益, "p0": 全池基线} }。n<MIN_SHRUNK_N 的类型不入表。
     shrunk 是校准用的主力值 (消除小样本噪声); win 保留原始口径供展示。
+    方向化命中: 标称多头/中性 → ret>0 记命中; 标称空头 (event_dir/vsa_dir<0)
+    → ret<0 记命中 (下跌才对)。
     """
     global _WINRATE_CACHE
     if not isinstance(_WINRATE_CACHE, dict):
@@ -360,8 +365,17 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
         s = out.setdefault(key, {"n": 0, "rets": []})
         s["n"] += 1
         s["rets"].append(res["ret"])
-    # 全池基线 (市场整体上涨占比), 钳制防极端
-    pool_wins = sum(1 for s in out.values() for v in s["rets"] if v > 0)
+    # 方向化命中: 标称多头/中性信号 → 上涨记命中; 标称空头信号 → 下跌记命中。
+    # (空头信号如 UTAD/LPSY/SUP 用"上涨占比"口径会把人家的"对"记成"错"。)
+    def _hit(kind, type_, v):
+        if kind == "event":
+            d = event_dir(type_)
+        else:
+            d = vsa_dir(type_)
+        return v < 0 if d < 0 else v >= 0
+    # 全池基线 (方向化命中占比), 钳制防极端
+    pool_wins = sum(1 for key in out for v in out[key]["rets"]
+                    if _hit(key[0], key[1], v))
     pool_n = sum(s["n"] for s in out.values())
     p0 = (pool_wins / pool_n) if pool_n else 0.5
     p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
@@ -369,7 +383,7 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
     for key, s in out.items():
         if not s["rets"] or s["n"] < MIN_SHRUNK_N:
             continue
-        wins = sum(1 for v in s["rets"] if v > 0)
+        wins = sum(1 for v in s["rets"] if _hit(key[0], key[1], v))
         win = wins / s["n"]
         ci_lo, ci_hi = _wilson_ci(s["n"], wins)
         result[key] = {"n": s["n"], "win": round(win, 4),
@@ -383,7 +397,7 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
 
 def win_rate_of(kind: str, type_: str, horizon: int = 20,
                 baseline: float = 0.5) -> float:
-    """取某类型信号的历史上涨占比 (L1 贝叶斯收缩值)。
+    """取某类型信号的历史方向命中占比 (L1 贝叶斯收缩值; 空头信号以跌为命中)。
 
     缺失或样本 < MIN_SHRUNK_N → 回退 baseline。与旧版"n<10 一刀切"不同,
     收缩值在 n 较小时仍可安全使用 (向 p0 回归), 消除阈值悬崖效应。
@@ -489,10 +503,12 @@ def _fmt_stats(stats):
             if not h20:
                 rows.append((t, s["n"], 0, 0.0, "无"))
                 continue
-            up = sum(1 for v in h20 if v > 0) / len(h20)
-            rows.append((t, s["n"], len(h20), up, statistics.mean(h20)))
+            d = event_dir(t) if kind == "event" else vsa_dir(t)
+            hits = sum(1 for v in h20 if (v < 0 if d < 0 else v > 0))
+            hit = hits / len(h20)
+            rows.append((t, s["n"], len(h20), hit, statistics.mean(h20)))
         for t, n, ev, up, mean in sorted(rows, key=lambda x: -x[3]):
-            lines.append(f"  {t:<8s} n={n:<5d} 评估{ev:<4d} 20根上涨占比="
+            lines.append(f"  {t:<8s} n={n:<5d} 评估{ev:<4d} 20根方向命中占比="
                          f"{up*100:5.1f}% 均值={mean*100:+6.2f}%")
     return "\n".join(lines)
 
@@ -587,8 +603,10 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
             h20 = st["horizons"].get("20", [])
             if not h20:
                 continue
-            w5 = sum(1 for v in h5 if v > 0) / len(h5) if h5 else None
-            w20 = sum(1 for v in h20 if v > 0) / len(h20)
+            d = event_dir(t) if kind == "event" else vsa_dir(t)
+            w5 = (sum(1 for v in h5 if (v < 0 if d < 0 else v > 0)) / len(h5)
+                  if h5 else None)
+            w20 = sum(1 for v in h20 if (v < 0 if d < 0 else v > 0)) / len(h20)
             rows.append((t, st["evaluated"], w5, w20, statistics.mean(h20)))
         for t, n, w5, w20, m in sorted(rows, key=lambda x: -x[3]):
             w5s = f"{w5 * 100:.0f}%" if w5 is not None else "-"
@@ -625,7 +643,8 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
                      f"{r.get('price') or '-'} | " + " | ".join(cells) + " |")
     lines.append("")
     lines.append("> 说明: 5/10/20/40 根收益为该信号出现后的真实行情累计收益; "
-                 "ret>0 记为上涨。未走满周期显示为 `-`。")
+                 "胜率为方向化命中 (多头/中性涨记中, 标称空头跌记中)。"
+                 "未走满周期显示为 `-`。")
 
     path = path or os.path.join(os.path.dirname(SIGNAL_ACCURACY_FILE),
                                 "wx_signal_review.md")

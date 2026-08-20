@@ -3,7 +3,13 @@
 import numpy as np
 import pandas as pd
 
-from .config import _PHASE_STYLE, W_RECENT
+from .config import (
+    _PHASE_STYLE, W_RECENT,
+    RANGE_BAND, RANGE_TOL, RANGE_MIN_BARS, RANGE_MIN_TOUCHES, RANGE_MERGE_GAP,
+    RANGE_PROBE_WIN, RANGE_EVENT_WEIGHT, ACC_RANGE_EV, DIST_RANGE_EV,
+    BOTTOM_MIN_BARS, BOTTOM_JMIN_BARS, BOTTOM_REC_LO, BOTTOM_REC_HI,
+    BOTTOM_LOOK, BOTTOM_HEAD,
+)
 
 
 def judge_phase(df: pd.DataFrame, pivots, events):
@@ -151,37 +157,69 @@ def _is_range(df, a, e, band, min_bars, min_crosses=4):
     return crosses >= min_crosses
 
 
-def _detect_ranges(df, pivots, band=0.45, tol=0.03, min_bars=25, min_touches=2,
-                   merge_gap=8):
+def _detect_ranges(df, pivots, band=None, tol=None, min_bars=None, min_touches=None,
+                   merge_gap=None, probe_win=None):
     """枢轴触点法区间检测。沿枢轴行走: 区间内不允许创新低/新高(容差 tol)或带宽超限
     (含原始bar高低价核对, 防下跌途中无枢轴漏检); 验收要求双侧枢轴各≥min_touches次、
-    长度≥min_bars、合并时并集带宽不超限。"""
+    长度≥min_bars、合并时并集带宽不超限。
+
+    刺破收回 (Spring/UTAD 假突破): 枢轴刺破前低/前高超出 tol 后, 若后续 probe_win
+    根内有收盘收回参考水平, 则判定为弹簧/陷阱而不切断区间; 该刺破点仍计入触次数,
+    但被排除出参照与带宽核算 (避免弹簧拉宽区间)。否则视为有效突破切断区间。"""
+    band = RANGE_BAND if band is None else band
+    tol = RANGE_TOL if tol is None else tol
+    min_bars = RANGE_MIN_BARS if min_bars is None else min_bars
+    min_touches = RANGE_MIN_TOUCHES if min_touches is None else min_touches
+    merge_gap = RANGE_MERGE_GAP if merge_gap is None else merge_gap
+    probe_win = RANGE_PROBE_WIN if probe_win is None else probe_win
     seq = sorted(pivots, key=lambda p: p["idx"])
     hi_arr = df["high"].values
     lo_arr = df["low"].values
+    cl_arr = df["close"].values
+    n0 = len(df)
+    idxs = np.arange(n0)
     ranges = []
     start = None
     lows, highs = [], []
+    skipped = set()
     for p in seq:
         if start is None:
             start = p["idx"]
             lows = [p] if p["type"] == "low" else []
             highs = [p] if p["type"] == "high" else []
             continue
-        lo_ref = min((l["price"] for l in lows), default=None)
-        hi_ref = max((h["price"] for h in highs), default=None)
+        lo_ref = min((l["price"] for l in lows if l["idx"] not in skipped),
+                     default=None)
+        hi_ref = max((h["price"] for h in highs if h["idx"] not in skipped),
+                     default=None)
         broke = False
+        # 刺破参考 → 先判断是否为假突破(后续收盘收回参考即吞并, 不切断区间;
+        # 刺破点仍计入触次数但被排除出参照与带宽核算)
         if p["type"] == "low" and lo_ref is not None and p["price"] < lo_ref * (1 - tol):
+            w1 = min(n0, p["idx"] + probe_win + 1)
+            if w1 > p["idx"] + 1 and bool((cl_arr[p["idx"] + 1:w1] > lo_ref).any()):
+                skipped.add(p["idx"])
+                lows.append(p)
+                continue
             broke = True
         if p["type"] == "high" and hi_ref is not None and p["price"] > hi_ref * (1 + tol):
+            w1 = min(n0, p["idx"] + probe_win + 1)
+            if w1 > p["idx"] + 1 and bool((cl_arr[p["idx"] + 1:w1] < hi_ref).any()):
+                skipped.add(p["idx"])
+                highs.append(p)
+                continue
             broke = True
-        if lo_ref is not None and hi_ref is not None and lo_ref > 0 \
-                and hi_ref / lo_ref - 1 > band:
-            broke = True
-        lo_min = float(lo_arr[start:p["idx"] + 1].min())
-        hi_max = float(hi_arr[start:p["idx"] + 1].max())
-        if lo_min > 0 and hi_max / lo_min - 1 > band:
-            broke = True
+        if not broke:
+            if lo_ref is not None and hi_ref is not None and lo_ref > 0 \
+                    and hi_ref / lo_ref - 1 > band:
+                broke = True
+            sel = ~np.isin(idxs[start:p["idx"] + 1], list(skipped))
+            sub = idxs[start:p["idx"] + 1][sel]
+            if sub.size:
+                lo_min = float(lo_arr[sub].min())
+                hi_max = float(hi_arr[sub].max())
+                if lo_min > 0 and hi_max / lo_min - 1 > band:
+                    broke = True
         if broke:
             if len(lows) >= min_touches and len(highs) >= min_touches \
                     and p["idx"] - start >= min_bars:
@@ -189,6 +227,7 @@ def _detect_ranges(df, pivots, band=0.45, tol=0.03, min_bars=25, min_touches=2,
             start = p["idx"]
             lows = [p] if p["type"] == "low" else []
             highs = [p] if p["type"] == "high" else []
+            skipped = set()
         else:
             (lows if p["type"] == "low" else highs).append(p)
     if start is not None and len(lows) >= min_touches and len(highs) >= min_touches \
@@ -265,10 +304,34 @@ def _validate_phase(df, s, e, k, look=120, break_pct=0.05):
     return k
 
 
-def _build_phases(df, ranges, median):
-    """由区间列表构建完整阶段带。区间类型由进入趋势方向决定(下跌进入→吸筹,
-    上涨进入→派发; 首区间不足40根时按中线位置), 区间间/首尾趋势段按净方向或
-    突破区间轨判定, 最后强制区间类型段平缓(|净变动|≤0.12)以消除标签矛盾。"""
+def _range_type_by_events(events, rs, re, prior):
+    """区间类型: 区间内吸筹/派发事件加权证据 + 进入方向先验按权重混合。
+
+    事件证据强时覆盖进入方向先验 (RANGE_EVENT_WEIGHT); 无任何事件时退回先验。
+    权重表见 config.ACC_RANGE_EV / DIST_RANGE_EV。"""
+    if not events:
+        return prior
+    acc_w = sum(ACC_RANGE_EV.get(e["type"], 0)
+                for e in events if rs <= e["idx"] <= re)
+    dist_w = sum(DIST_RANGE_EV.get(e["type"], 0)
+                 for e in events if rs <= e["idx"] <= re)
+    if acc_w == 0 and dist_w == 0:
+        return prior
+    evidence = 0.0
+    if dist_w > acc_w:
+        evidence = 1.0
+    elif acc_w > dist_w:
+        evidence = -1.0
+    prior_v = -1.0 if prior == "accumulation" else 1.0
+    mix = RANGE_EVENT_WEIGHT * evidence + (1 - RANGE_EVENT_WEIGHT) * prior_v
+    return "accumulation" if mix < 0 else "distribution"
+
+
+def _build_phases(df, ranges, median, events=None):
+    """由区间列表构建完整阶段带。区间类型由进入趋势方向先验(下跌进入→吸筹,
+    上涨进入→派发; 首区间不足40根时按中线位置)与区间内事件证据按权重混合
+    (事件证据缺失或为空退回纯先验), 区间间/首尾趋势段按净方向或突破区间轨判定,
+    最后强制区间类型段平缓(|净变动|≤0.12)以消除标签矛盾。"""
     n = len(df)
     close = df["close"].values
     typed = []
@@ -278,7 +341,8 @@ def _build_phases(df, ranges, median):
             mid = (top + bottom) / 2
             typ = "accumulation" if mid < median else "distribution"
         else:
-            typ = "accumulation" if net_in < 0 else "distribution"
+            prior = "accumulation" if net_in < 0 else "distribution"
+            typ = _range_type_by_events(events, rs, re, prior)
         typed.append((rs, re, top, bottom, typ))
     phases = []
     if not typed:
@@ -366,17 +430,33 @@ def _fix_breakout_type(df, segs, break_pct=0.05):
     return segs
 
 
-def _mark_bottoms(df, phases, min_bars=20, jmin_bars=12, rec_lo=0.08, rec_hi=0.30,
-                  look=50, head=30):
+def _has_accum_evidence(events, a, b):
+    """拐点窗口内是否存在吸筹事件证据 (SC/ST/Spring/SOS/PSY/LPS/BU)。
+    无事件表(调用方未传)视为无证据。"""
+    if not events:
+        return False
+    return any(a <= e["idx"] <= b and e["type"] in ACC_RANGE_EV for e in events)
+
+
+def _mark_bottoms(df, phases, events=None, min_bars=None, jmin_bars=None,
+                  rec_lo=None, rec_hi=None, look=None, head=None):
     """把"低点防守 + 回升"的威科夫 Phase A 底部标为吸筹带。
 
     两种情形:
     - 情形A (末段): 最后一段下跌在段内自底回升 → 整段后半 [m,e] 标吸筹;
     - 情形B (拐点): 下跌段在段末触底, 回升发生在紧随的拉升段
       (markdown→markup) → 从底部 m 到回升 8% 处标吸筹, 其余部分保留。
-    这些底已由"无新低 + 回升8~30%"确认, 作为受信任标签直接切出, 不再被
-    结构校验翻转, 让图表上每个下行-上行拐点都体现吸筹区间。
+    这些底已由"无新低 + 回升8~30%"确认。当调用方提供事件表 (events 非空) 时,
+    还要求拐点窗口内存在吸筹事件证据 (SC/ST/Spring/SOS/PSY/LPS/BU) 才标吸筹,
+    否则不加事件证据的仅靠价格形态的拐点不予标记 (由结构校验决定标签)。
     """
+    min_bars = BOTTOM_MIN_BARS if min_bars is None else min_bars
+    jmin_bars = BOTTOM_JMIN_BARS if jmin_bars is None else jmin_bars
+    rec_lo = BOTTOM_REC_LO if rec_lo is None else rec_lo
+    rec_hi = BOTTOM_REC_HI if rec_hi is None else rec_hi
+    look = BOTTOM_LOOK if look is None else look
+    head = BOTTOM_HEAD if head is None else head
+    need_events = events is not None
     lo = df["low"].values
     cl = df["close"].values
     out = []
@@ -394,7 +474,8 @@ def _mark_bottoms(df, phases, min_bars=20, jmin_bars=12, rec_lo=0.08, rec_hi=0.3
                 and e - m + 1 <= (m - a) * 2 \
                 and lo[m + 1:e + 1].min() >= lo[m] * 0.995:
             rec = cl[e] / cl[m] - 1
-            if rec_lo <= rec <= rec_hi:
+            if rec_lo <= rec <= rec_hi \
+                    and (not need_events or _has_accum_evidence(events, m, e)):
                 z = None
                 for j in range(m + 1, e + 1):
                     if cl[j] >= cl[m] * (1 + rec_lo):
@@ -420,7 +501,9 @@ def _mark_bottoms(df, phases, min_bars=20, jmin_bars=12, rec_lo=0.08, rec_hi=0.3
                     mb = w0 + int(np.argmin(lo[w0:w1 + 1]))
                     if mb < w1 and lo[mb + 1:w1 + 1].min() >= lo[mb] * 0.995:
                         rec = cl[w1] / cl[mb] - 1
-                        if rec_lo <= rec <= rec_hi:
+                        if rec_lo <= rec <= rec_hi \
+                                and (not need_events
+                                     or _has_accum_evidence(events, mb, w1)):
                             z = None
                             for j in range(mb + 1, w1 + 1):
                                 if cl[j] >= cl[mb] * (1 + rec_lo):
@@ -448,7 +531,7 @@ def phase_segments(df: pd.DataFrame, pivots, events=None, order=6, smooth=9, min
     if df is None or len(df) < 80 or not pivots:
         return []
     ranges = _detect_ranges(df, pivots)
-    segs = _build_phases(df, ranges, float(np.median(df["close"].values)))
+    segs = _build_phases(df, ranges, float(np.median(df["close"].values)), events)
     # 合并相邻同类型段后, 需对"合并后"的波段再做一致性校验 (子段各自合规不代表
     # 合并段合规), 翻转可能引发新的相邻合并, 故迭代至稳定。
     for _ in range(6):
@@ -469,8 +552,9 @@ def phase_segments(df: pd.DataFrame, pivots, events=None, order=6, smooth=9, min
     # 区间类型与后续突破方向矛盾时改写 (进入方向只看"怎么来", 不看"往哪去"):
     # 派发带随后向上突破 → 再吸筹/中继; 吸筹带随后向下破位 → 失败基底(派发)
     segs = _fix_breakout_type(df, segs)
-    # 底部标吸筹: 所有下跌→拉升拐点 (受信任, 不再校验翻转)
-    segs = _mark_bottoms(df, segs)
+    # 底部标吸筹: 所有下跌→拉升拐点 (受信任, 不再校验翻转; 提供事件表时需
+    # 吸筹事件证据 (SC/ST/Spring/SOS 等) 才标记)
+    segs = _mark_bottoms(df, segs, events)
     # 末段近期急跌: 把"拉升/吸筹"带里最近的下跌尾巴切出来 (如冲高后崩落)
     segs = _mark_recent_decline(df, segs)
     merged = []

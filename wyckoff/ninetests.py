@@ -112,6 +112,11 @@ def nine_tests(df, events, pivots=None, phase=None, structure=None,
     last_close = float(df["close"].iloc[-1])
     recent = _recent(events, df, span=160)
     types = [e["type"] for e in recent]
+    type_set = set(types)
+    # SOW 弱势信号确认: 事件后收盘已跌破其低点 (破位成立, 供卖出侧 T8 使用)
+    sows = [e for e in recent if e["type"] == "SOW"]
+    SOW_ok = bool(any(
+        float(df["close"].iloc[-1]) < s["price"] for s in sows)) if sows else False
     up_vol, dn_vol = _vol_wave(df)
     lo_ma = df["vol_ma20"].iloc[-1] if "vol_ma20" in df.columns else 0.0
 
@@ -187,13 +192,15 @@ def nine_tests(df, events, pivots=None, phase=None, structure=None,
          bool(rs) and any(v < 1.0 for v in rs.values()),
          _rs_txt(rs),
          "任一窗口 RS < +1.0%"),
-        ("T7 UTAD/UT已确认", "UTAD" in types,
-         "已现 UTAD" if "UTAD" in types else "无 UTAD",
-         "出现 UTAD 事件"),
+        ("T7 UTAD/UT已确认", bool(type_set & {"UTAD", "UT"}),
+         "已现 UTAD/UT" if type_set & {"UTAD", "UT"} else "无 UTAD/UT",
+         "出现 UTAD 或 UT 事件"),
         ("T8 趋势线跌破或弱势确认",
-         bool("UTAD" in types and sup and last_close <= sup),
-         "UTAD 后跌破支撑" if ("UTAD" in types and sup and last_close <= sup) else "未见破位",
-         "UTAD 后现价跌破支撑位"),
+         bool(SOW_ok or ("UTAD" in types and sup and last_close <= sup)),
+         "已现弱势信号/SOW" if SOW_ok
+         else ("UTAD 后跌破支撑" if ("UTAD" in types and sup and last_close <= sup)
+               else "未见破位/无 SOW"),
+         "SOW 弱势信号确认 或 UTAD 后现价跌破支撑位"),
         ("T9 派发原因充分 (TR≥30日)",
          bool(tr) or len(df) >= 80,
          "结构已具备时间积累",

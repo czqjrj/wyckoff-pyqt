@@ -10,7 +10,7 @@
 from .config import ACC_PHASES, DIST_PHASES, W_PIVOT_LONG
 
 _ACC_TYPES = ("PSY", "SC", "ST", "Spring", "SOS", "LPS", "BU", "JOC")
-_DIST_TYPES = ("BC", "AR", "UT", "UTAD")
+_DIST_TYPES = ("BC", "AR", "UT", "UTAD", "LPSY", "SOW")
 
 # ── 事件推进前置约束: type -> (前置事件类型, 回溯窗口根数) ──
 # 空元组表示无前置 (阶段起点事件)。事件不满足前置时不推进结构进度。
@@ -35,17 +35,20 @@ _DIST_PREREQ = {
     "AR": (("BC",), 40),
     "UT": (("BC",), 60),
     "UTAD": (("BC", "UT"), 60),
+    "LPSY": (("UTAD", "BC"), 60),
     "SOS": (("BC",), 60),
     "LPS": (("BC",), 60),
     # 派发对应的 JOC 是破位下穿, 因果上须先有出货确认 (UTAD)
     "JOC": (("UTAD",), 60),
+    # SOW 弱势信号是派发 Phase D→E 的破位确认, 前置须有 UTAD 出货铺垫
+    "SOW": (("UTAD", "LPSY"), 60),
 }
 
 # 阶段 marker (推进后所在阶段), 与 config 的 ACC/DIST_PHASES 对齐
 _ACC_MARKER = {"PSY": 0, "SC": 0, "AR": 0, "ST": 1, "Spring": 2,
                "SOS": 3, "LPS": 3, "BU": 3, "JOC": 4}
-_DIST_MARKER = {"BC": 0, "AR": 0, "UT": 1, "UTAD": 2, "SOS": 3,
-                "LPS": 3, "JOC": 4}
+_DIST_MARKER = {"BC": 0, "AR": 0, "UT": 1, "UTAD": 2, "LPSY": 3, "SOS": 3,
+                "LPS": 3, "JOC": 4, "SOW": 3}
 
 
 def _prereqs_for(kind: str):

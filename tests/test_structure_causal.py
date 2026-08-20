@@ -119,3 +119,24 @@ def test_prereq_low_conf_not_counted():
     """置信度低于阈值的前置事件不算有效铺垫。"""
     events = [_ev("SC", 10, conf=30)]
     assert not _has_prereq(events, _ev("Spring", 40), ("SC", "ST"), 40)
+
+
+def test_lpsy_requires_utad_bc():
+    """无 UTAD/BC 的孤立 LPSY 在派发结构中被前置拦截 (LPSY 是派发 Phase D 末端)。"""
+    df = _df(300)
+    events = [_ev("LPSY", 120, conf=85)]
+    letter, _, detail = structure_progress(events, df, phase="顶部构筑 (Distribution)")
+    assert letter != "D"
+    assert "未推进" in detail
+
+
+def test_lpsy_after_utad_advances_to_phase_d():
+    """完整派发因果链 BC→AR→UT→UTAD→LPSY 推进到 Phase D (最后供应点)。"""
+    df = _df(300)
+    events = [_ev("BC", 110, conf=95), _ev("AR", 125, conf=70),
+              _ev("UT", 140, conf=75), _ev("UTAD", 160),
+              _ev("LPSY", 180, conf=80)]
+    letter, name, detail = structure_progress(events, df, phase="顶部构筑 (Distribution)")
+    assert letter == "D"
+    assert "未推进" not in detail
+    assert "Phase D" in detail

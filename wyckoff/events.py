@@ -15,7 +15,8 @@ EMPIRICAL_CONF_BLEND = 0.55  # 实证可靠性权重 (结构分占 0.45)
 
 def _empirical_reliability(type_, d=0):
     """某类型信号的方向可靠性(0~1):
-    多头 → 历史上涨占比; 空头 → 1-上涨占比 (下跌才可信);
+    直接取 win_rate_of 的方向化命中占比 (多头涨记中、空头跌记中 —— 信号本身
+    已含方向, 不再对空头做 1-win 反转, 否则会把"下跌命中"再倒过来);
     中性/样本不足 → 0.5 (回退纯结构分)。
     样本不足由 win_rate_of 的 min_n=10 基线回退保证。
     惰性导入避免 events↔signal_accuracy 循环引用 (与 fusion 同模式)。"""
@@ -23,10 +24,9 @@ def _empirical_reliability(type_, d=0):
         return 0.5
     try:
         from .signal_accuracy import win_rate_of
-        win = win_rate_of("event", type_, horizon=20, baseline=0.5)
+        return win_rate_of("event", type_, horizon=20, baseline=0.5)
     except Exception:
         return 0.5
-    return win if d > 0 else (1.0 - win)
 
 
 def _apply_empirical_calibration(events):
@@ -140,27 +140,36 @@ def detect_pivot_events(df: pd.DataFrame, pivots, climax_events=None):
 
 
 def detect_ar_st(df: pd.DataFrame, pivots, climax):
-    """AR 自动反弹 / ST 二次测试: SC 后的第一波反弹与缩量回踩"""
+    """AR 自动反弹/自动回落 / ST 二次测试: SC 后的第一波反弹与缩量回踩。
+
+    派发侧对称 (与 SC→AR 的吸筹侧对偶): BC 之后的第一个低点枢轴标为 AR
+    (自动回落)。实测此前 BC 后 AT 从未产出, 导致派发 Phase A (BC→AR)
+    在事件链中断。"""
     events = []
     lows = [p for p in pivots if p["type"] == "low"]
     highs = [p for p in pivots if p["type"] == "high"]
     volume = df["volume"].values
-    for sc in climax:
-        if sc["type"] != "SC":
-            continue
-        ar = next((h for h in highs if h["idx"] > sc["idx"]), None)
-        if not ar:
-            continue
-        events.append(dict(type="AR", idx=ar["idx"], date=ar["date"], price=ar["price"],
-                           desc="自动反弹", color=EVENT_COLORS["AR"]))
-        for lo in lows:
-            if lo["idx"] > ar["idx"] and lo["price"] < sc["price"] * 1.04:
-                vol_sc = volume[sc["idx"]]
-                vol_lo = volume[lo["idx"]]
-                if vol_lo < vol_sc * 0.85:
-                    events.append(dict(type="ST", idx=lo["idx"], date=lo["date"], price=lo["price"],
-                                       desc="缩量回踩 SC 区", color=EVENT_COLORS["ST"]))
-                break
+    for ev in climax:
+        if ev["type"] == "SC":
+            ar = next((h for h in highs if h["idx"] > ev["idx"]), None)
+            if not ar:
+                continue
+            events.append(dict(type="AR", idx=ar["idx"], date=ar["date"], price=ar["price"],
+                               desc="自动反弹", color=EVENT_COLORS["AR"]))
+            for lo in lows:
+                if lo["idx"] > ar["idx"] and lo["price"] < ev["price"] * 1.04:
+                    vol_sc = volume[ev["idx"]]
+                    vol_lo = volume[lo["idx"]]
+                    if vol_lo < vol_sc * 0.85:
+                        events.append(dict(type="ST", idx=lo["idx"], date=lo["date"], price=lo["price"],
+                                           desc="缩量回踩 SC 区", color=EVENT_COLORS["ST"]))
+                    break
+        elif ev["type"] == "BC":
+            ar = next((l for l in lows if l["idx"] > ev["idx"]), None)
+            if not ar:
+                continue
+            events.append(dict(type="AR", idx=ar["idx"], date=ar["date"], price=ar["price"],
+                               desc="自动回落", color=EVENT_COLORS["AR"]))
     return _dedup(events)
 
 
@@ -206,13 +215,16 @@ def detect_joc_lps_bu(df: pd.DataFrame, pivots, base_events):
                                 desc="放量突破30日收盘高点", color=EVENT_COLORS["SOS"]))
     events = _dedup(events, span=15)
 
-    # LPS / BU: 基于 SOS/JOC 之后的缩量回踩低点
+    # LPS / BU: 基于 SOS/JOC 之后的缩量回踩低点。
+    # base_events 是调用方传入的 (pivot_ev + climax), 不含本函数刚生成的
+    # SOS/JOC —— 若用它作为"突破事件"来源, LPS/BU 永远为空 (实测11只股票
+    # 近3年 0 个 LPS/BU 样本)。修复: 以本函数生成的 events 里的 SOS/JOC 为基准。
     days = df["day"].values
     lows_arr = df["low"].values
     highs_arr = df["high"].values
     volume = df["volume"].values
     vol_ma20 = df["vol_ma20"].values
-    for base in base_events:
+    for base in events:
         if base["type"] not in ("SOS", "JOC"):
             continue
         b_idx = base["idx"]
@@ -230,6 +242,103 @@ def detect_joc_lps_bu(df: pd.DataFrame, pivots, base_events):
                         events.append(dict(type="LPS", idx=lo["idx"], date=lo["date"], price=lo["price"],
                                            desc="缩量回踩不破", color=EVENT_COLORS["LPS"]))
                     break
+    return _dedup(events)
+
+
+def detect_ut(df: pd.DataFrame, pivots, base_events):
+    """UT 上冲测试 (派发 Phase B, 与吸筹侧 ST 对称)。
+
+    BC 之后价格反弹测试区间上沿/前高, 但冲高后收回区间 (收盘未能站稳前高)
+    —— 需求衰减、供给再次压制的试探。UT 与 UTAD 的差别: UT 是区间内对前高的
+    反复测试 (Phase B), UTAD 是刺破前高后的放量回落 (Phase C 诱多)。
+    """
+    events = []
+    n = len(df)
+    highs = [p for p in pivots if p["type"] == "high"]
+    lows = [p for p in pivots if p["type"] == "low"]
+    close = df["close"].values
+    for bc in base_events:
+        if bc["type"] != "BC":
+            continue
+        b_idx = bc["idx"]
+        ref_high = bc["price"]
+        refl = [h for h in highs if b_idx < h["idx"] <= b_idx + 25]
+        if not refl:
+            continue
+        h = refl[0]
+        # 冲高测试: 高点接近前高但收盘收回 (未站稳 BC 高点), 且未构成 UTAD 刺破形态
+        if h["price"] >= ref_high * 0.97 and h["price"] <= ref_high * 1.03:
+            a, b = h["idx"] + 1, min(h["idx"] + 8, n)
+            if a < b and (close[a:b] < ref_high * 0.99).any():
+                events.append(dict(type="UT", idx=h["idx"], date=h["date"], price=h["price"],
+                                   desc="冲高测试前高后收回", color=EVENT_COLORS["UT"]))
+    # 排除与 UTAD 同一根 (UTAD 需要刺破前高, 与 UT 形态互斥 — 以防重叠)
+    utads = {e["idx"] for e in base_events if e["type"] == "UTAD"}
+    events = [e for e in events if e["idx"] not in utads]
+    return _dedup(events)
+
+
+def detect_sow(df: pd.DataFrame, pivots, base_events):
+    """SOW 弱势信号 (Sign of Weakness, 派发 Phase D→E 衔接)。
+
+    UTAD/LPSY 之后放量跌破前低支撑 (LPSY 低点/区间下沿) → 派发确认、破位前奏,
+    对应 config 中 DIST_PHASES Phase D "弱势信号 SOS失败 / LPS失守"。
+    """
+    events = []
+    n = len(df)
+    lows = [p for p in pivots if p["type"] == "low"]
+    close = df["close"].values
+    volume = df["volume"].values
+    vol_ma20 = df["vol_ma20"].values
+    days = df["day"].values
+    for base in base_events:
+        if base["type"] not in ("UTAD", "LPSY", "BC"):
+            continue
+        floor = base["price"]
+        # 事件后 25 根内: 放量跌破前低支撑且收盘位于其下 → 弱势信号
+        for lo in lows:
+            if lo["idx"] <= base["idx"] or lo["idx"] > base["idx"] + 25:
+                continue
+            if lo["price"] < floor * 0.97 \
+                    and volume[lo["idx"]] >= vol_ma20[lo["idx"]] * 1.25 \
+                    and close[lo["idx"]] < floor:
+                events.append(dict(type="SOW", idx=lo["idx"],
+                                   date=pd.Timestamp(days[lo["idx"]]),
+                                   price=lo["price"], desc="放量跌破前低支撑",
+                                   color=EVENT_COLORS["SOW"]))
+                break
+    return _dedup(events)
+
+
+def detect_lpsy(df: pd.DataFrame, pivots, base_events):
+    """LPSY 最后供应点 (派发 Phase D 卖点, 与 LPS 对称)。
+
+    LPS 是 SOS/JOC 之后缩量回踩不破前低 → 买点;
+    LPSY 是 UTAD/BC 冲高回落之后, 反弹缩量且未能重新站上前高 → 卖点,
+    跌破后进入 markdown (下跌趋势)。威科夫标准派发因果链:
+    BC→AR→UT→UTAD→LPSY→SOW→markdown, 但软件此前只做吸筹侧 LPS,
+    派发侧从无 LPSY —— 半组对称缺失。
+    """
+    events = []
+    highs = [p for p in pivots if p["type"] == "high"]
+    volume = df["volume"].values
+    vol_ma20 = df["vol_ma20"].values
+    days = df["day"].values
+    for base in base_events:
+        if base["type"] not in ("UTAD", "BC"):
+            continue
+        b_idx = base["idx"]
+        anchor_high = base["price"]
+        for hi in highs:
+            if hi["idx"] <= b_idx or hi["idx"] > b_idx + 25:
+                continue
+            # 反弹缩量 (供方耗尽前的最后尝试) 且未站上前高 → LPSY
+            if volume[hi["idx"]] < vol_ma20[hi["idx"]] and hi["price"] < anchor_high:
+                events.append(dict(type="LPSY", idx=hi["idx"],
+                                   date=pd.Timestamp(days[hi["idx"]]),
+                                   price=hi["price"], desc="缩量反弹未过前高",
+                                   color=EVENT_COLORS["LPSY"]))
+                break
     return _dedup(events)
 
 
@@ -279,9 +388,12 @@ def detect_all(df: pd.DataFrame, pivots):
     pivot_ev = detect_pivot_events(df, pivots, climax)
     ar_st = detect_ar_st(df, pivots, climax)
     joc_lps = detect_joc_lps_bu(df, pivots, pivot_ev + climax)
+    lpsy = detect_lpsy(df, pivots, pivot_ev + climax)
+    ut = detect_ut(df, pivots, pivot_ev + climax)
+    sow = detect_sow(df, pivots, pivot_ev + climax)
     scs = [e for e in climax if e["type"] == "SC"]
     psy = detect_psy(df, pivots, scs[-1]["idx"]) if scs else []
-    merged = climax + pivot_ev + ar_st + joc_lps + psy
+    merged = climax + pivot_ev + ar_st + joc_lps + lpsy + ut + sow + psy
     merged.sort(key=lambda x: x["idx"])
     scored = event_confidence(df, merged)
     _apply_empirical_calibration(scored)
@@ -361,7 +473,7 @@ def event_confidence(df: pd.DataFrame, events):
         score += min(20, max(0, (rw - 1.0)) * 20)
         if e["type"] in ("SC", "ST", "Spring", "LPS", "PSY"):
             score += min(10, max(0, (0.35 - cpos)) * 25)
-        elif e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR"):
+        elif e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
             score += min(10, max(0, (cpos - 0.65)) * 25)
         # 趋势/均线契合 (事件当日, 因果). ST 在吸筹区常逆均线, 不罚。
         d = event_dir(e["type"])

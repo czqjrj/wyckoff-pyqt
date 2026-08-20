@@ -52,7 +52,7 @@ _PHASE_BONUS = {
 # 买点信号 → 加分基数
 _BULL_SIG = {"Spring": 6, "SC": 5, "ST": 4, "PSY": 3, "SOS": 4,
              "JOC": 4, "LPS": 3, "AR": 2, "BU": 2}
-_BEAR_SIG = {"UTAD", "BC", "UT", "TRU", "SUP", "ND", "ER"}
+_BEAR_SIG = {"UTAD", "BC", "UT", "TRU", "SUP", "ND", "ER", "LPSY", "SOW"}
 
 
 def _load_df(code, datalen=500):

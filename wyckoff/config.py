@@ -138,16 +138,20 @@ EVENT_COLORS = {
     "JOC": "#006400",   # 跨越小溪
     "LPS": "#4c78a8",   # 最后支撑点
     "BU": "#9a6b0a",    # 回撤
+    "LPSY": "#c0532a",  # 最后供应点 (派发 Phase D 卖点, 与 LPS 对称)
+    "UT": "#e07b00",    # 上冲测试 (派发 Phase B, 测试前高失败)
+    "SOW": "#b00020",   # 弱势信号 (破位确认, 派发 Phase D→E 衔接)
 }
 
 EVENT_CN = {
     "PSY": "初步支撑", "SC": "卖出高潮", "BC": "买入高潮", "AR": "自动反弹",
     "ST": "二次测试", "Spring": "弹簧", "UTAD": "上冲派发", "SOS": "强势信号",
-    "JOC": "跨越小溪", "LPS": "最后支撑点", "BU": "回撤",
+    "JOC": "跨越小溪", "LPS": "最后支撑点", "BU": "回撤", "LPSY": "最后供应点",
+    "UT": "上冲测试", "SOW": "弱势信号",
 }
 
 BULL_EVENTS = ("SOS", "JOC", "Spring", "LPS", "ST", "BU")
-BEAR_EVENTS = ("UTAD",)
+BEAR_EVENTS = ("UTAD", "LPSY", "UT", "SOW")
 NEUTRAL_EVENTS = ("SC", "BC", "AR")
 
 
@@ -208,6 +212,31 @@ C_HEADER = THEME["header"]
 C_SEL = THEME["sel"]
 C_GRID = THEME["grid"]
 
+# ── 状态栏滚动头条 (自选股定时扫描结果) ──
+TICKER_MIN_WINRATE = 0.60   # 威科夫事件实测胜率 ≥ 此值才进状态栏 (贝叶斯收缩口径)
+TICKER_MIN_VSA_WINRATE = 0.55  # VSA 标签实测胜率下限 (VSA 收缩分布整体贴近基线, 单独放宽)
+TICKER_MAX_ITEMS = 8        # 单轮最多滚动条数 (超限按胜率降序截断)
+TICKER_SCROLL_MS = 40       # 横幅逐帧步进间隔 (毫秒)
+TICKER_SCROLL_SPEED = 1.2   # 每帧位移像素
+TICKER_ROT_MS = 5000        # 多条消息单条停留时长
+# 威科夫事件方向 (着色用; A股红=多头/看涨, 绿=空头/看跌)
+EVENT_BULL = {"PSY", "SC", "AR", "ST", "Spring", "SOS", "LPS", "BU", "JOC"}
+EVENT_BEAR = {"BC", "UTAD", "LPSY", "UT", "SOW"}
+# VSA 标签方向 (着色 + 胜率方向化共用; 语义核对 vsa._DESC / VSA_CN, 与 fusion 同源)
+VSA_BULL = {"SC", "SV", "SPR", "DEM", "TRD", "ETR", "NS", "TEST"}
+VSA_BEAR = {"BC", "UT", "SUP", "UPT", "ETF", "TRU", "ND"}
+VSA_NEUTRAL = {"ER", "EF", "ABS", "CHOC", "EVR", "N"}
+
+
+def vsa_dir(lab):
+    """VSA 标签方向: 1=多头(标称看多, 上涨即对), -1=空头(标称看空, 下跌即对),
+    0=中性 (量级/结构标签, 无方向含义 → 用上涨占比口径)。"""
+    if lab in VSA_BULL:
+        return 1
+    if lab in VSA_BEAR:
+        return -1
+    return 0
+
 ACC_PHASES = [
     ("A", "初步支撑 PSY + 卖出高潮 SC + 自动反弹 AR", "恐慌抛售 → 初步止跌"),
     ("B", "二次测试 ST / 区间震荡", "抛压衰减, 区间构筑"),
@@ -247,6 +276,28 @@ SCALE_OPTIONS = {
 W_RECENT = 120    # 近期事件/信号统计窗口
 W_PIVOT_LONG = 200  # 长周期枢轴/结构确认窗口
 W_MA_LONG = 200     # 长期均线(年线)采样窗口
+
+# ── 阶段区间检测参数 (phases.py 统一入口) ──
+RANGE_BAND = 0.45       # 区间高/低比上限 (带宽约束)
+RANGE_TOL = 0.02        # 有效突破/刺破容差 (与 events.Spring 刺破阈值 2% 统一口径)
+RANGE_MIN_BARS = 25     # 区间最短根数
+RANGE_MIN_TOUCHES = 2   # 双侧枢轴最少触次数
+RANGE_MERGE_GAP = 8     # 相邻区间合并最大缝隙
+RANGE_PROBE_WIN = 12    # 刺破后判定"收回"的后续窗口根数 (Spring/UTAD 假突破)
+RANGE_EVENT_WEIGHT = 0.65  # 区间类型: 事件证据权重 (进入方向先验 = 1 - 此值)
+
+# 区间类型事件证据权重 (区间内事件加权; AR 吸筹/派发两端通用故不计入)
+ACC_RANGE_EV = {"SC": 1.0, "ST": 0.8, "Spring": 1.0, "PSY": 0.6,
+                "SOS": 0.7, "LPS": 0.5, "BU": 0.5, "JOC": 0.8}
+DIST_RANGE_EV = {"BC": 1.0, "UT": 0.6, "UTAD": 1.0, "LPSY": 0.8, "SOW": 0.8}
+
+# 拐点底部标记参数 (phase_segments 内部, 开放便于统一口径)
+BOTTOM_MIN_BARS = 20    # 拐点标记最短根数
+BOTTOM_JMIN_BARS = 12   # 拐点回升部分最短根数
+BOTTOM_REC_LO = 0.08    # 回升幅度下限
+BOTTOM_REC_HI = 0.30    # 回升幅度上限
+BOTTOM_LOOK = 50        # 低点防守回溯窗口
+BOTTOM_HEAD = 30        # 下跌段回溯窗口
 
 # 量价方向判定 (不同度量, 各自阈值集中于此)
 ER_BULL = 1.2    # 涨带量/跌缩量 量价比 > 此值判多头

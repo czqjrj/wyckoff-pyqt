@@ -145,3 +145,31 @@ def test_elliott_wave_up_valid_stop():
     joined = "\n".join(elliott_wave(df, pivots))
     assert "严格止损" in joined
     assert "1.618扩展位" not in joined
+
+
+def test_lps_qualifies_as_buy_point():
+    """LPS (Phase D 标准买点) 应作为多头/低吸确认 (修复 detect_joc_lps_bu 后)。"""
+    closes = _trend(end_level=10.60)
+    df = _df(closes)
+    events = [{"type": "SC", "price": 9.9, "idx": 90},
+              {"type": "Spring", "price": 10.20, "idx": 100},
+              {"type": "SOS", "price": 10.80, "idx": 108},
+              {"type": "LPS", "price": 10.42, "idx": 112}]
+    lines = build_trade_plan(df, [], events, "底部整固 (Accumulation)",
+                             structure="", targets={}, pnf_t=None, tr=None,
+                             last_close=10.60)
+    joined = "\n".join(lines)
+    assert "方向: 多头/低吸" in joined
+    assert "止损:" in joined
+
+
+def test_isolated_lps_without_spring_still_buy():
+    """仅有 LPS 而无 Spring/ST 时也构成买点 (LPS 自身即吸筹低吸信号)。"""
+    closes = _trend(end_level=10.60)
+    df = _df(closes)
+    events = [{"type": "LPS", "price": 10.42, "idx": 112}]
+    lines = build_trade_plan(df, [], events, "底部整固 (Accumulation)",
+                             structure="", targets={}, pnf_t=None, tr=None,
+                             last_close=10.60)
+    joined = "\n".join(lines)
+    assert "多头/低吸" in joined

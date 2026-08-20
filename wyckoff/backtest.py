@@ -9,7 +9,9 @@ import numpy as np
 from .datasource import fetch_kline, fetch_name
 from .indicators import add_indicators, find_pivots
 from .events import detect_all
+from .config import event_dir, VSA_BULL, VSA_BEAR
 from .phases import judge_phase
+from .vsa import vsa_classify
 from .utils import normalize_symbol
 from .fundamental import (fetch_fundamental, fetch_main_flow, fetch_sector_flow,
                           build_confirm_section, fetch_all_board_stats,
@@ -62,8 +64,9 @@ MARKET_UNIVERSE = [
 
 # 实证权重 (backtest_signals.py, 20根胜率): Spring 82.6% > ST 75.0% > SC 58.3%
 # > SOS 45.7% > JOC 43.5%。JOC/SOS 胜率低于50%不直接加分, 仅作结构确认。
-_BUY_PTS = {"Spring": 22, "ST": 11, "SC": 8, "PSY": 2}
-_SELL_PTS = {"UTAD": -13, "BC": -3}
+# LPS/BU 是 Phase D 标准买点 (修复 detect_joc_lps_bu 后已能生成), 权重对标 ST。
+_BUY_PTS = {"Spring": 22, "ST": 11, "LPS": 11, "BU": 11, "SC": 8, "PSY": 2}
+_SELL_PTS = {"UTAD": -13, "BC": -3, "LPSY": -10, "UT": -6, "SOW": -15}
 
 
 def signal_score(r):
@@ -92,7 +95,13 @@ def signal_score(r):
 def backtest_events(df, events, horizon=20, min_n=3, cost=0.004):
     """因果式回测: 在每个历史时点只用当时已见数据重算枢轴/事件, 消除前瞻偏差。
     返回 {"by_type": {type: stats}, "benchmark": 同期买入持有均值%, "cost": 单边成本}。
-    stats 字段 (均为费后%): n/win/avg/med/best/worst/pl_ratio(盈亏比)/vs_bh。"""
+    stats 字段 (均为费后%): n/win/avg/med/best/worst/pl_ratio(盈亏比)/vs_bh。
+
+    方向约定 (与 config.event_dir 同向, 同 backtest_vsa):
+      多头事件 → 买入持有一期 (ret = close[end]/close[i+1]-1);
+      空头事件 → 反向做空等效 (ret = close[i+1]/close[end]-1, 下跌才盈利);
+      中性事件 → 按买入持有统计 (无方向含义)。
+    因此 win 恒为"方向命中盈利占比", 多头记涨、空头记跌。"""
     n = len(df)
     if n < 150:
         return {"by_type": {}, "benchmark": 0.0, "cost": cost, "note": "样本过短"}
@@ -114,7 +123,11 @@ def backtest_events(df, events, horizon=20, min_n=3, cost=0.004):
             if i + 1 >= n or locked[i] or locked[i + 1]:
                 continue
             end = min(n - 1, i + horizon)
-            ret = (close[end] / close[i + 1] - 1) - cost
+            d = event_dir(e.get("type", ""))
+            if d < 0:
+                ret = (close[i + 1] / close[end] - 1) - cost   # 空头: 下跌才盈利
+            else:
+                ret = (close[end] / close[i + 1] - 1) - cost   # 多头/中性: 买入持有
             per_type[e["type"]].append(ret)
             if e.get("confirmed") is True:
                 per_type_ok[e["type"]].append(ret)
@@ -159,18 +172,18 @@ def backtest_vsa(df, horizon=20, min_n=3, cost=0.004, scale=240):
     消除前瞻偏差 (与 backtest_events 同构)。按标签分组统计未来 horizon 根
     收益 (费后%), 返回 {"by_label": {label: stats}, "benchmark", ...}。
 
-    方向约定 (与 _BUY_PTS/_SELL_PTS 同向):
-      看涨标签 SC/SV/SPR/TEST/DEM/ABS/UPT/TRD/SOS → 买入持有一期;
-      看跌标签 BC/SUP/UT/CHOC/TRU/UTAD/ND → 反向做空等效 (close[i]/close[end] - 1)。
-    其余中性标签 (ER/EF/NS/EVR/ETF/ETR) 不统计 (避免噪声)。"""
+    方向约定 (与 config.vsa_dir 同向, 同 _BUY_PTS/_SELL_PTS 语义):
+      看涨标签 (config.VSA_BULL) → 买入持有一期;
+      看跌标签 (config.VSA_BEAR) → 反向做空等效 (close[i]/close[end] - 1);
+      中性标签 (config.VSA_NEUTRAL, ER/EF/ABS/CHOC/EVR 等) 不统计 (避免噪声)。"""
     from .vsa import vsa_classify
     n = len(df)
     if n < 150:
         return {"by_label": {}, "benchmark": 0.0, "cost": cost, "note": "样本过短"}
     close = df["close"].values
     locked = df["locked"].values if "locked" in df.columns else np.zeros(n, bool)
-    BULL = {"SC", "SV", "SPR", "TEST", "DEM", "ABS", "UPT", "TRD", "SOS"}
-    BEAR = {"BC", "SUP", "UT", "CHOC", "TRU", "UTAD", "ND"}
+    BULL = VSA_BULL
+    BEAR = VSA_BEAR
     ends = list(range(90, n - horizon))
     if len(ends) > 60:
         ends = ends[::max(1, len(ends) // 60)]
@@ -305,9 +318,12 @@ def scan_stock_signals(code, datalen=500, confirm_enabled=True, on_result=None):
         phase, _ = judge_phase(df, pivots, events)
         recent = [e for e in events if e["idx"] >= len(df) - 20]
         priority = ["Spring", "SOS", "JOC", "SC", "ST", "LPS", "BU", "AR",
-                    "PSY", "UTAD", "BC"]
+                    "PSY", "UTAD", "BC", "LPSY", "UT", "SOW"]
         recent.sort(key=lambda e: (-e.get("conf", 50),
                                    priority.index(e["type"]) if e["type"] in priority else 99))
+        # 近期 VSA 标签 (供高命中滚动头条/明细, 免重复计算)
+        recent_vsa = [s for s in vsa_classify(df, scale=240)
+                      if s["idx"] >= len(df) - 20]
         # ── 确认机制 (高置信/需谨慎 + 20日主力 + 板块) ──
         # 熔断生效时跳过确认抓取 (阶段+信号仍由新浪K线给出, 只缺确认列)
         conf_q, flow20, pe = "", None, None
@@ -356,6 +372,11 @@ def scan_stock_signals(code, datalen=500, confirm_enabled=True, on_result=None):
                 log_exc(f"scan_stock_signals({code}) on_result 失败", e)
         return {"code": str(code)[-6:], "name": name, "phase": phase,
                 "signals": [e["type"] for e in recent],
+                "events": [{"type": e["type"], "date": str(e["date"].date()),
+                            "price": float(e["price"]), "conf": int(e.get("conf", 50))}
+                           for e in recent],
+                "vsa": [{"label": s["label"], "date": str(s["date"].date()),
+                         "desc": s["desc"]} for s in recent_vsa],
                 "details": [f"{e['date'].date()} {e['type']} {e['price']:.2f}(置信{e.get('conf', 50)})"
                             for e in recent[:3]],
                 "last": float(df["close"].iloc[-1]),

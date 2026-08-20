@@ -2,7 +2,7 @@
 """结论生成: 结构化信号汇总 + 分节结论 + 文本拼接。"""
 import pandas as pd
 
-from .config import EVENT_CN, W_RECENT, ER_BULL, ER_BEAR, VSA_CN
+from .config import EVENT_CN, W_RECENT, ER_BULL, ER_BEAR, VSA_CN, vsa_dir
 from .vsa_explain import VSA_EXPLAIN, meaning_pure, LONG_ONLY_NOTE
 from .phases import judge_phase
 from .counterevidence import ce_lines
@@ -12,8 +12,8 @@ from .falsify import fal_lines
 
 
 def _recent_win_rate(kind, sig_list, min_n=10):
-    """取近期信号列表里各类型的历史 20 根上涨占比 (样本>=min_n 才标注)。
-
+    """取近期信号列表里各类型的历史 20 根方向命中占比 (样本>=min_n 才标注)。
+    方向化: 空头信号下跌记命中 (config.vsa_dir/event_dir)。
     返回 [(类型, 胜率, 样本数)] 按出现次数降序。
     """
     from .signal_accuracy import load_win_rates
@@ -608,7 +608,8 @@ def build_conclusion(df, pivots, events, phase, detail, wave_lines=None, targets
         vsa_lines = [f"VSA回测·触发后{vsa_bt.get('horizon', 20)}根 (费后均值, 看涨做多/看跌反向):"]
         for lb in sorted(vsa_bt["by_label"], key=lambda x: -vsa_bt["by_label"][x]["win"]):
             s = vsa_bt["by_label"][lb]
-            tag = "看涨" if lb in {"SC", "SV", "SPR", "TEST", "DEM", "ABS", "UPT", "TRD", "SOS"} else "看跌"
+            d = vsa_dir(lb)
+            tag = "看涨" if d > 0 else ("看跌" if d < 0 else "中性")
             vsa_lines.append(f"  {lb:<5s}{tag} {s['n']}次 胜率{s['win']:.0f}% "
                              f"均{s['avg']:+.1f}% 中位{s['med']:+.1f}% 盈亏比{s['pl_ratio']:.1f}")
         vsa_lines.append(f"  同期买入持有: {vsa_bt.get('benchmark', 0):+.1f}% (费前)")

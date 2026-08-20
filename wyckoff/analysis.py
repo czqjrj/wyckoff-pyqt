@@ -67,6 +67,7 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     rtypes = [e["type"] for e in recent]
     spring = "Spring" in rtypes
     utad = "UTAD" in rtypes
+    lpsy = "LPSY" in rtypes
     dist = "Distribution" in (structure[2] if structure else "")
 
     # 提取基础阶段 (去除"高置信"/"需谨慎"修饰)
@@ -105,28 +106,31 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     entry = last_close
     # ═══ 阶段驱动方向判定 ═══
     direction = None
-    if bearish_phase and (utad or "BC" in rtypes):
+    if bearish_phase and (utad or "BC" in rtypes or lpsy):
         direction = "空头/减仓"
-        stop = top or max((e["price"] for e in recent if e["type"] in ("BC", "UTAD")),
+        stop = top or max((e["price"] for e in recent if e["type"] in ("BC", "UTAD", "LPSY")),
                           default=None)
     elif bearish_phase:
         # 无派发事件确认的空头阶段: 仅提示趋势偏弱, 不构成做空信号
         # (校准: 空头/观望类信号实盘命中率仅15%, 强上涨环境下多空翻转)。
         direction = "观望"
         stop = t1 = t2 = None
-    elif bullish_phase and (spring or "ST" in rtypes):
-        # 买点需 Spring/ST 确认 (JOC/SOS 突破日信号实测无边际, 追高不占优)
+    elif bullish_phase and (spring or "ST" in rtypes or "LPS" in rtypes or "BU" in rtypes):
+        # 买点需 Spring/ST 确认 (JOC/SOS 突破日信号实测无边际, 追高不占优)。
+        # LPS/BU 是威科夫 Phase D 标准买点 (SOS/JOC 后的缩量回踩不破)——
+        # 修复 detect_joc_lps_bu 后已能生成, 作为"低吸"确认同样有效。
         direction = "多头/低吸"
-        stop = min((e["price"] for e in recent if e["type"] in ("Spring", "SC")),
+        stop = min((e["price"] for e in recent
+                    if e["type"] in ("Spring", "SC", "LPS", "BU")),
                    default=None)
         stop = stop * 0.99 if stop else ((bottom * 0.99) if bottom else None)
     elif bullish_phase:
         direction = "多头/持有"
         stop = bottom
-    elif neutral_phase and (spring or "ST" in rtypes):
+    elif neutral_phase and (spring or "ST" in rtypes or "LPS" in rtypes or "BU" in rtypes):
         direction = "多头/突破"
         stop = bottom
-    elif neutral_phase and (utad or "BC" in rtypes):
+    elif neutral_phase and (utad or "BC" in rtypes or lpsy):
         direction = "空头/减仓"
         stop = top
     else:

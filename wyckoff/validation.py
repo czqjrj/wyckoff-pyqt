@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from .signal_accuracy import load_signals, _sig_date
+from .config import event_dir, vsa_dir
 
 # 置信度分档边界 (与 accuracy_center 展示口径一致)
 CONF_BANDS = (("≥80", 80), ("60-79", 60), ("40-59", 40), ("<40", 0))
@@ -53,10 +54,20 @@ def _spearman(x, y):
     return float((xm * ym).sum() / denom)
 
 
+def _hit(kind, type_, v):
+    """方向化命中: 标称多头/中性 ret>0 命中; 标称空头 ret<0 命中 (跌才对)。"""
+    if kind == "event":
+        d = event_dir(type_)
+    else:
+        d = vsa_dir(type_)
+    return bool(v < 0) if d < 0 else bool(v >= 0)
+
+
 # ───────────────────────── 1. Rank IC 置信度自检 ─────────────────────────
 
 def _conf_ret_pairs(records, kind="event", horizon=20):
-    """取 (conf, ret) 对: 仅事件信号有置信度, VSA 统一 0 无区分度。"""
+    """取 (conf, ret, hit) 对: 仅事件信号有置信度, VSA 统一 0 无区分度。
+    hit 为方向化命中 (空头信号下跌才对), 分档胜率用它而非原始上涨占比。"""
     pairs = []
     for r in records:
         if r.get("kind") != kind:
@@ -67,7 +78,8 @@ def _conf_ret_pairs(records, kind="event", horizon=20):
         res = (r.get("results") or {}).get(str(horizon))
         if not res or res.get("ret") is None:
             continue
-        pairs.append((float(conf), float(res["ret"])))
+        ret = float(res["ret"])
+        pairs.append((float(conf), ret, _hit(kind, r.get("type", ""), ret)))
     return pairs
 
 
@@ -85,6 +97,7 @@ def rank_ic(records, kind="event", horizon=20, min_n=30):
         return out
     cf = np.array([p[0] for p in pairs])
     rt = np.array([p[1] for p in pairs])
+    ht = np.array([1.0 if p[2] else 0.0 for p in pairs])
     if len(pairs) >= 2:
         out["spearman"] = _spearman(cf, rt)
     for band, lo in CONF_BANDS:
@@ -93,10 +106,11 @@ def rank_ic(records, kind="event", horizon=20, min_n=30):
             sel = cf < 40
         if not sel.any():
             continue
+        h_band = ht[sel]
         r_band = rt[sel]
         out["by_band"][band] = {
             "n": int(sel.sum()),
-            "win": float((r_band > 0).mean() * 100),
+            "win": float(h_band.mean() * 100),
             "mean": float(r_band.mean() * 100),
         }
     return out
@@ -104,21 +118,24 @@ def rank_ic(records, kind="event", horizon=20, min_n=30):
 
 # ───────────────────────── 2. Bootstrap 置信区间 ─────────────────────────
 
-def bootstrap_winrate_ci(rets, n_boot=1000, seed=42, alpha=0.05):
-    """对收益序列重采样估计胜率 CI。
+def bootstrap_winrate_ci(rets, n_boot=1000, seed=42, alpha=0.05, direction=0):
+    """对收益序列重采样估计(方向化)胜率 CI。
 
+    direction<0 (标称空头) → 以 ret<0 为命中; 其余 ret>0 为命中。
     返回 {"n", "win", "ci_lo", "ci_hi"} 或 None (样本 < 3)。
     """
     arr = np.asarray(rets, dtype=float)
     if arr.size < 3:
         return None
+    def _is_hit(v):
+        return bool(v < 0) if direction < 0 else bool(v > 0)
     rng = np.random.default_rng(seed)
     boot = np.empty(n_boot)
     for k in range(n_boot):
         s = arr[rng.integers(0, arr.size, arr.size)]
-        boot[k] = float((s > 0).mean())
+        boot[k] = float(np.mean([_is_hit(v) for v in s]))
     lo, hi = np.percentile(boot, [100 * alpha / 2, 100 * (1 - alpha / 2)])
-    return {"n": int(arr.size), "win": float((arr > 0).mean() * 100),
+    return {"n": int(arr.size), "win": float(np.mean([_is_hit(v) for v in arr]) * 100),
             "ci_lo": float(lo * 100), "ci_hi": float(hi * 100)}
 
 
@@ -140,7 +157,8 @@ def winrate_ci_table(records, kind="event", horizon=20, min_n=3, n_boot=1000):
     for t, rets in by_type.items():
         if len(rets) < min_n:
             continue
-        ci = bootstrap_winrate_ci(rets, n_boot=n_boot)
+        ci = bootstrap_winrate_ci(rets, n_boot=n_boot,
+                                  direction=event_dir(t) if kind == "event" else vsa_dir(t))
         if not ci:
             continue
         ci["insufficient"] = len(rets) < 20
@@ -191,7 +209,8 @@ def significance_table(records, kind="event", horizon=20, min_n=8,
             sims[k] = float(s.mean())
         p = float((sims >= obs).mean())
         out["types"][t] = {
-            "n": int(n), "win": float((arr > 0).mean() * 100),
+            "n": int(n), "win": float(np.mean(
+                [_hit(kind, t, v) for v in arr]) * 100),
             "mean": obs * 100, "p": round(p, 4), "sig_5": bool(p < 0.05),
         }
     return out
@@ -201,10 +220,11 @@ def significance_table(records, kind="event", horizon=20, min_n=8,
 
 def win_rate_of_oos(records, kind, type_, before_ts, horizon=20,
                     baseline=0.5, min_n=10):
-    """样本外胜率: 只用 before_ts 之前已出现的该类型信号记录。
+    """样本外胜率 (方向化): 只用 before_ts 之前已出现的该类型信号记录。
 
     before_ts: datetime/Timestamp 阈值 (信号日期严格早于它才计入)。
     消除前瞻: 评价 t 时刻的信号时, 只用 t 之前已能看到的样本。
+    方向化: 该类型为标称空头 (event_dir/vsa_dir<0) → 以 ret<0 为命中。
     样本 < min_n → 回退 baseline (与 win_rate_of 同约定)。
     """
     before = pd.Timestamp(before_ts)
@@ -226,7 +246,7 @@ def win_rate_of_oos(records, kind, type_, before_ts, horizon=20,
         rets.append(float(res["ret"]))
     if len(rets) < min_n:
         return baseline
-    return sum(1 for v in rets if v > 0) / len(rets)
+    return sum(1 for v in rets if _hit(kind, type_, v)) / len(rets)
 
 
 def oos_record_loader():

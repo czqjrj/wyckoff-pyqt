@@ -22,7 +22,7 @@ from wyckoff.accuracy import (
     run_auto_accuracy_eval,
 )
 from wyckoff.calibration import calibration_status, record_calibration
-from wyckoff.config import _PHASE_STYLE, event_dir
+from wyckoff.config import _PHASE_STYLE, event_dir, vsa_dir
 from wyckoff.signal_accuracy import (
     _fmt_stats, export_signals, load_signals, run_auto_signal_eval,
     signal_stats,
@@ -266,13 +266,17 @@ class CalibrationCenter(QDialog):
         sig_hit = ""
         sig_color = theme.C_TEXT
         if sig_s["evaluated"] > 0:
-            # 统计20根上涨占比
-            all_rets_20 = []
+            # 统计20根方向命中占比 (多头涨记中, 空头跌记中)
+            hits = 0
+            n_all = 0
             for kind in ("event", "vsa"):
                 for t, s in sig[kind].items():
-                    all_rets_20.extend(s["horizons"].get("20", []))
-            if all_rets_20:
-                win = sum(1 for v in all_rets_20 if v > 0) / len(all_rets_20) * 100
+                    d = event_dir(t) if kind == "event" else vsa_dir(t)
+                    h20 = s["horizons"].get("20", [])
+                    n_all += len(h20)
+                    hits += sum(1 for v in h20 if (v < 0 if d < 0 else v > 0))
+            if n_all:
+                win = hits / n_all * 100
                 sig_hit = f"{win:.0f}%"
                 sig_color = theme.C_UP if win >= 55 else (theme.C_DOWN if win < 45 else theme.C_AMBER)
         self._set_card("sig", f"{sig_s['evaluated']}",
@@ -957,10 +961,7 @@ class CalibrationCenter(QDialog):
     def _sig_mark(rec, ret):
         kind = rec.get("kind")
         t = rec.get("type", "")
-        if kind == "event":
-            d = event_dir(t)
-        else:
-            d = 1 if t in ("SPR",) else (-1 if t in ("ND",) else 0)
+        d = event_dir(t) if kind == "event" else vsa_dir(t)
         if d > 0:
             return "✓" if ret > 0 else "✗"
         if d < 0:
@@ -1083,7 +1084,8 @@ class CalibrationCenter(QDialog):
                 h20 = s["horizons"].get("20", [])
                 if len(h20) < 3:
                     continue
-                win = sum(1 for v in h20 if v > 0) / len(h20) * 100
+                d = event_dir(t) if kind == "event" else vsa_dir(t)
+                win = sum(1 for v in h20 if (v < 0 if d < 0 else v > 0)) / len(h20) * 100
                 mean = statistics.mean(h20) * 100
                 items.append((t, len(h20), win, mean, kind))
         if not items:

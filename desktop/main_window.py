@@ -13,7 +13,7 @@ import threading
 import traceback
 
 from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QDockWidget,
     QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
@@ -23,7 +23,12 @@ from PyQt6.QtWidgets import (
 )
 
 from wyckoff.analysis import run_analysis, _ANALYSIS_CACHE, _ANALYSIS_LOCK
-from wyckoff.config import EVENT_CN, PERIOD_OPTIONS, SCALE_OPTIONS, VSA_CN
+from wyckoff.config import (
+    EVENT_BEAR, EVENT_BULL, EVENT_CN, PERIOD_OPTIONS, SCALE_OPTIONS,
+    TICKER_MAX_ITEMS, TICKER_MIN_VSA_WINRATE, TICKER_MIN_WINRATE,
+    TICKER_ROT_MS, TICKER_SCROLL_MS, TICKER_SCROLL_SPEED,
+    VSA_BEAR, VSA_BULL, VSA_CN,
+)
 from wyckoff._log import log_exc, log_msg
 from wyckoff.pinyin import (
     ensure_full_market_index, load_pinyin_cache, load_watchlist_stocks,
@@ -180,10 +185,171 @@ class _LabelAiThread(QThread):
         self.result.emit(out)
 
 
+class _StatusTicker(QLabel):
+    """状态栏中间滚动头条: 一组短消息横向滚动/逐条轮播。
+
+    单条消息过长时在限定宽度内横向滚动 (marquee); 多条消息按序停留轮播。
+    点按整条横幅把当前消息对应的标的载入分析 (消息带 code 时)。
+    """
+    clicked_code = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(24)
+        self.setMinimumWidth(160)
+        self.setToolTip("点击载入当前标的分析")
+        self._msgs = []            # [(text, color, code)]
+        self._cur = 0
+        self._off = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(TICKER_SCROLL_MS)
+        self._timer.timeout.connect(self._step)
+        self._rot = QTimer(self)
+        self._rot.setSingleShot(True)
+        self._rot.timeout.connect(self._advance)
+
+    # ── 消息管理 ──
+    def set_messages(self, msgs):
+        """msgs: [(text, color, code), ...]; 空则清空停止动画。"""
+        self._msgs = list(msgs or [])[:TICKER_MAX_ITEMS]
+        self._cur = 0
+        self._off = 0.0
+        self._rot.stop()
+        if not self._msgs:
+            self._timer.stop()
+            self.setText("")
+            self.update()
+            return
+        self._timer.start()
+        self.update()
+        if len(self._msgs) > 1:
+            self._rot.start(TICKER_ROT_MS)
+
+    def add_messages(self, msgs):
+        """把新消息合并进现有头条 (按文本去重, 新的在前), 保留动画状态。"""
+        msgs = list(msgs or [])
+        if not msgs:
+            return
+        seen = set()
+        merged = []
+        for m in msgs + self._msgs:
+            if m[0] in seen:
+                continue
+            seen.add(m[0])
+            merged.append(m)
+        self._msgs = merged[:TICKER_MAX_ITEMS]
+        if not self._timer.isActive():
+            self._timer.start()
+        self._cur = 0
+        self._off = 0.0
+        self._rot.start(TICKER_ROT_MS)
+        self.update()
+
+    def clear(self):
+        self.set_messages([])
+
+    def current_code(self):
+        if not self._msgs:
+            return ""
+        return self._msgs[self._cur][2] or ""
+
+    # ── 动画 ──
+    def _step(self):
+        self._off += TICKER_SCROLL_SPEED
+        self.update()
+
+    def _advance(self):
+        if len(self._msgs) > 1:
+            self._cur = (self._cur + 1) % len(self._msgs)
+        self._off = 0.0
+        self._rot.start(TICKER_ROT_MS)
+        self.update()
+
+    def paintEvent(self, _ev):
+        if not self._msgs:
+            super().paintEvent(_ev)
+            return
+        text, color, _code = self._msgs[self._cur]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setPen(QColor(color))
+        fm = QFontMetrics(self.font())
+        tw = fm.horizontalAdvance(text)
+        w = self.width()
+        if tw <= w - 8:
+            x = max(0.0, (w - tw) / 2)
+        else:
+            span = tw + 24
+            cycle = span + w
+            x = -(self._off % cycle)
+        text_y = (self.height() - fm.ascent() - fm.descent()) / 2 + fm.ascent()
+        painter.drawText(int(x), int(text_y), text)
+        painter.end()
+
+    def mousePressEvent(self, _ev):
+        code = self.current_code()
+        if code:
+            self.clicked_code.emit(code)
+        super().mousePressEvent(_ev)
+
+
+def _signal_color(kind, sig_type, theme_module=None):
+    """按信号方向取状态栏着色 (A股红涨绿跌; 中性用琥珀)。"""
+    tm = theme_module or theme
+    if kind == "event":
+        if sig_type in EVENT_BULL:
+            return tm.C_UP
+        if sig_type in EVENT_BEAR:
+            return tm.C_DOWN
+    else:  # vsa
+        if sig_type in VSA_BULL:
+            return tm.C_UP
+        if sig_type in VSA_BEAR:
+            return tm.C_DOWN
+    return tm.C_AMBER
+
+
+def build_ticker_msgs(rich_by_code, min_winrate=TICKER_MIN_WINRATE,
+                      min_vsa_winrate=TICKER_MIN_VSA_WINRATE,
+                      max_items=TICKER_MAX_ITEMS):
+    """从扫描结果筛选高实测命中信号, 生成滚动头条消息。
+
+    rich_by_code: {code: scan_stock_signals 结果 dict} (含 events/vsa 明细)。
+    仅保留实测胜率 (贝叶斯收缩) ≥ 对应阈值 (事件用 min_winrate, VSA 用
+    min_vsa_winrate) 的事件/VSA 标签, 按胜率降序, 每只股票最多 2 条
+    (事件+各取最高命中 VSA), 总条数限 max_items。
+    返回 [(text, color, code), ...]。
+    """
+    from wyckoff.signal_accuracy import win_rate_of
+    scored = []
+    for code, r in (rich_by_code or {}).items():
+        name = r.get("name") or code
+        tag = str(code)[-6:]
+        hits = []
+        for e in r.get("events") or []:
+            t = e["type"]
+            wr = win_rate_of("event", t, 20)
+            if wr >= min_winrate:
+                hits.append((wr, f"{name}({tag}) {t} 实测命中{wr * 100:.0f}%",
+                             "event", t))
+        for s in r.get("vsa") or []:
+            lb = s["label"]
+            wr = win_rate_of("vsa", lb, 20)
+            if wr >= min_vsa_winrate:
+                hits.append((wr, f"{name}({tag}) VSA-{lb} 实测命中{wr * 100:.0f}%",
+                             "vsa", lb))
+        hits.sort(key=lambda x: -x[0])
+        scored.extend((wr, text, _signal_color(kind, sig), code)
+                      for wr, text, kind, sig in hits[:2])
+    scored.sort(key=lambda x: -x[0])
+    return [(text, color, code) for _wr, text, color, code in scored[:max_items]]
+
+
 class _WatchScanThread(QThread):
     """后台定时扫描自选股信号: 重算威科夫事件并记录准确度快照。
 
-    结果: (ok, {code: [signal_type, ...]} 本次检测到的近期信号类型)。
+    结果: (ok, sig_by_code, rich) — sig_by_code 供预警,
+    rich: {code: scan_stock_signals dict} 供状态栏高命中头条。
     """
     result = pyqtSignal(object)
 
@@ -196,6 +362,7 @@ class _WatchScanThread(QThread):
         from wyckoff.utils import normalize_symbol
         ok = False
         sig_by_code = {}
+        rich = {}
         for c in self._codes:
             try:
                 sym = normalize_symbol(c)
@@ -204,9 +371,10 @@ class _WatchScanThread(QThread):
                 ok = True
                 if r and r.get("signals"):
                     sig_by_code[sym[2:]] = list(r["signals"])
+                    rich[sym[2:]] = r
             except Exception:
                 continue
-        self.result.emit((ok, sig_by_code))
+        self.result.emit((ok, sig_by_code, rich))
 
 
 class _ScanMarketThread(QThread):
@@ -402,6 +570,9 @@ class MainWindow(QMainWindow):
             self.showMaximized()
 
         self._reload_watchlist()
+        # 启动即做一次自选股扫描, 让状态栏中间头条尽快填充 (不依赖 auto_scan 开关)
+        if self._watchlist:
+            QTimer.singleShot(4000, self._startup_ticker_scan)
         # 启动默认: 优先加载上次退出前最后分析的股票 (自动记住), 否则用设置的默认股票
         last_code = str(self.settings.get("last_analyzed_code", "") or "").strip()
         default_load = str(self.settings.get("default_load", "") or "").strip()
@@ -1060,6 +1231,9 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         self.stock_info = QLabel("")
         sb.addWidget(self.stock_info)
+        self.status_ticker = _StatusTicker(self)
+        self.status_ticker.clicked_code.connect(self._load_code)
+        sb.insertWidget(1, self.status_ticker, 1)
         sb.addPermanentWidget(QLabel("  "))
         self.status_label = QLabel("就绪")
         sb.addPermanentWidget(self.status_label)
@@ -1445,7 +1619,36 @@ class MainWindow(QMainWindow):
         self._refresh_accuracy_window()
         self._schedule_auto_refresh()
         self._accuracy_eval_bg()
+        self._push_analysis_ticker(r)
         self._status(f"完成 {datetime_now()}", theme.C_DOWN)
+
+    def _push_analysis_ticker(self, r):
+        """刚分析的标的若有高实测命中信号, 立即并入状态栏头条 (不等定时扫描)。"""
+        try:
+            df = r.get("df")
+            code = r.get("code") or ""
+            if df is None or not code:
+                return
+            from wyckoff.indicators import find_pivots
+            from wyckoff.events import detect_all
+            from wyckoff.vsa import vsa_classify
+            pivots = find_pivots(df, order=6)
+            events = detect_all(df, pivots)
+            recent_e = [e for e in events if e["idx"] >= len(df) - 20]
+            recent_v = [s for s in vsa_classify(df, scale=240)
+                        if s["idx"] >= len(df) - 20]
+            rich = {str(code)[-6:]: {
+                "name": r.get("name") or str(code)[-6:],
+                "events": [{"type": e["type"], "date": str(e["date"].date()),
+                            "price": float(e["price"]),
+                            "conf": int(e.get("conf", 50))} for e in recent_e],
+                "vsa": [{"label": s["label"], "date": str(s["date"].date()),
+                         "desc": s["desc"]} for s in recent_v]}}
+            msgs = build_ticker_msgs(rich)
+            if msgs:
+                self.status_ticker.add_messages(msgs)
+        except Exception as e:
+            log_exc("_push_analysis_ticker 失败", e)
 
     def _error(self, msg, tb):
         self._analyzing = False
@@ -2176,8 +2379,23 @@ class MainWindow(QMainWindow):
         else:
             self._schedule_auto_scan()
 
+    def _startup_ticker_scan(self):
+        """启动后一次性扫描自选股, 立即填充状态栏头条 (避免等 auto_scan 首轮到点)。"""
+        try:
+            if not getattr(self, "_watchlist", None):
+                return
+            if self._scan_threads:
+                return  # 已在扫描
+            self.status_ticker.set_messages(
+                [(f"正在扫描 {len(self._watchlist)} 只自选股...", theme.C_MUTED, "")])
+            self._auto_scan_watchlist()
+        except Exception as e:
+            log_exc("_startup_ticker_scan 失败", e)
+
     def _on_watch_scan(self, payload):
-        _ok, sig_by_code = payload if isinstance(payload, tuple) else (payload, {})
+        _ok, sig_by_code, rich = (payload if isinstance(payload, tuple) and len(payload) == 3
+                                  else (payload, payload, {}) if isinstance(payload, dict)
+                                  else (payload, {}, {}))
         for th in list(getattr(self, "_scan_threads", {}) or {}):
             self._scan_threads.pop(th, None)
         try:
@@ -2187,6 +2405,17 @@ class MainWindow(QMainWindow):
                 self._notify_alerts(hits)
         except Exception as e:
             log_exc("_on_watch_scan 检查信号预警失败", e)
+        # 高实测命中事件/VSA → 状态栏中间滚动头条
+        try:
+            msgs = build_ticker_msgs(rich)
+            if not msgs:
+                n_scanned = len(rich)
+                if n_scanned:
+                    msgs = [(f"自选股 {n_scanned} 只扫描完成: 暂无高实测命中信号",
+                             theme.C_MUTED, "")]
+            self.status_ticker.set_messages(msgs)
+        except Exception as e:
+            log_exc("_on_watch_scan 生成状态栏头条失败", e)
         # 顺便评估到期记录, 并继续下一轮
         self._accuracy_eval_bg()
         self._schedule_auto_scan()
@@ -2854,6 +3083,11 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         self._cancel_auto_refresh()
         self._cancel_accuracy_eval()
         self._cancel_auto_scan()
+        try:
+            if hasattr(self, "status_ticker"):
+                self.status_ticker.clear()
+        except Exception:
+            pass
         # 记录面板折叠状态与停靠面板布局 (必须在 hide 之前, 否则 isVisible() 恒为 False)
         try:
             self.settings["left_panel_visible"] = self.dock_watch.isVisible()

@@ -10,7 +10,8 @@
 信号强度一致性"决定: 全部同向且强 → 高, 部分同向 → 中, 方向分裂 → 低。
 """
 
-from .config import event_dir, W_RECENT
+from .config import (event_dir, vsa_dir, W_RECENT,
+                     VSA_BULL, VSA_BEAR)
 
 # 各维度权重 (K线结构最重, 威科夫事件次之, VSA与P&F辅助确认)
 W_KLINE = 0.35
@@ -18,17 +19,11 @@ W_EVENT = 0.30
 W_VSA = 0.20
 W_PNF = 0.15
 
-# VSA 标签方向 (方向集合先按经典语义定, 再由 signal_accuracy 日线大样本校准;
-#   1947条/1929已评估实测见 wx_signal_accuracy_export, 20根上涨占比基准48.4%):
-#   多头实测: SV停止量 63.0%(n=154) / TRD诱空陷阱 64.0%(n=50) / SC 55.7%(n=61)
-#   空头实测: NS 42.0%(n=388) / ND 46.9%(n=273) / TRU 42.3%(n=111) / ETF 23.1%(n=13)
-#   UPT上冲量 语义标空, 但实测 60.5%(n=43) 显著偏多 (高量宽幅突破前高后收低端,
-#   10根60%/20根60%上涨, 高于基准48.4%), 按实测归多头; 若后续样本转向再校准。
-#   TEST二次测试 语义偏多 (低量测试前低不破), 实测 33.3%(n=9) 小样本偏空,
-#   样本不足以校准, 保留经典语义方向。
-VSA_BULL = {"SPR", "DEM", "ETR", "TRD", "SV", "UPT", "TEST"}
-VSA_BEAR = {"ND", "SUP", "ETF", "TRU"}
-
+# VSA 标签方向采用 config 统一映射 (config.vsa_dir / VSA_BULL/VSA_BEAR/VSA_NEUTRAL,
+# 语义核对 vsa._DESC / VSA_CN) —— 与 backtest_vsa / 状态栏头条 / 胜率方向化同源。
+# 历史备注: 早期按旧实测把 UPT 归过多头, 新方向化口径 (20根 UPT 方向命中≈49%,
+# 贴近随机) 后按经典语义归空头 (上冲量=诱多); TEST/SC/SV/NS 归多头,
+# ND/BC/UT/SUP/UPT/ETF/TRU 归空头, ABS/CHOC/ER/EF/EVR/N 中性不计入。
 # 威科夫事件方向由 config.event_dir 提供 (多头/空头/中性)
 BULL_PHASES = ("底部整固", "上升趋势")
 BEAR_PHASES = ("顶部构筑", "下跌趋势")
@@ -41,8 +36,9 @@ USE_WINRATE_CALIBRATION = True
 def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
     """按历史实测方向一致性给信号置信加权。
 
-    direction>0 (多头信号): 上涨占比越高越可信 → 权重增大。
-    direction<0 (空头信号): 上涨占比越低 (下跌命中) 越可信 → 权重增大。
+    direction>0 (多头信号): 历史方向命中 (上涨) 占比越高越可信 → 权重增大。
+    direction<0 (空头信号): 历史方向命中 (下跌) 占比越高越可信 → 权重增大。
+    (win_rate_of / win_rate_of_oos 已返回方向化命中占比, 空头信号以跌记中。)
     before_ts: 样本外校准 —— 只统计该信号出现之前的样本 (消除"用未来数据
     校准当前信号权重"的前瞻偏差); None 时用全历史 (含未来, 有轻微前瞻)。
     返回 [0.5, 1.5] 区间系数。样本不足/校准关闭 → 1.0。
@@ -58,12 +54,9 @@ def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
         else:
             from .signal_accuracy import win_rate_of
             win = win_rate_of(kind, type_, horizon=20, baseline=baseline)
-        if direction > 0:
-            alignment = win - baseline
-        elif direction < 0:
-            alignment = baseline - win
-        else:
-            alignment = 0.0
+        if direction == 0:
+            return 1.0
+        alignment = win - baseline
         return max(0.5, min(1.5, 1.0 + alignment * 2.5))
     except Exception:
         return 1.0

@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+# 扫描/校准临时导出 (运行时生成, 随机后缀)
+.wyckoff_tmp_*
 dist/
 build/
 *.spec.bak

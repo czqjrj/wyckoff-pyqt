@@ -42,7 +42,7 @@ DIS_COUNTER = {
 }
 # 派发假设下的正向(派发确认)消减表
 DIS_POSITIVE = {
-    "UTAD": 20, "AR": 10,
+    "UTAD": 20, "AR": 10, "UT": 8, "LPSY": 12, "SOW": 20,
 }
 
 
@@ -152,6 +152,12 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
             score -= DIS_POSITIVE["UTAD"]
         if "AR" in types:
             score -= DIS_POSITIVE["AR"]
+        if "UT" in types:
+            score -= DIS_POSITIVE["UT"]
+        if "LPSY" in types:
+            score -= DIS_POSITIVE["LPSY"]
+        if "SOW" in types:
+            score -= DIS_POSITIVE["SOW"]
         reversal_reason = _dis_reversal_reason(fired)
 
     score = float(min(100, max(0, score)))

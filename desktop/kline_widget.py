@@ -493,7 +493,7 @@ class KlineWidget(pg.GraphicsLayoutWidget):
         self._draw_events(plot, events)
         if vsa_signals:
             self._draw_vsa(plot, df, vsa_signals)
-        if locks or any(e["type"] in ("UTAD", "BC") for e, _s, _d in events):
+        if locks or any(e["type"] in ("UTAD", "BC", "UT", "SOW", "LPSY") for e, _s, _d in events):
             self._draw_locks(plot, events, locks)
 
         if sector and sector.get("name") and sector.get("main20") is not None:
@@ -575,7 +575,7 @@ class KlineWidget(pg.GraphicsLayoutWidget):
             plot.addItem(ti)
 
     def _draw_locks(self, plot, events, locks):
-        sell_types = {"UTAD", "BC"}
+        sell_types = {"UTAD", "BC", "UT", "SOW", "LPSY"}
         defs = [(lx, ly, str(lno), True) for lx, ly, lno in locks]
         defs += [(e["idx"], e["price"], "", False)
                  for e, _s, _d in events
