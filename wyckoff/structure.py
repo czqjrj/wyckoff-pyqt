@@ -9,7 +9,7 @@
 """
 from .config import ACC_PHASES, DIST_PHASES, W_PIVOT_LONG
 
-_ACC_TYPES = ("PSY", "SC", "ST", "Spring", "SOS", "LPS", "BU", "JOC")
+_ACC_TYPES = ("PSY", "SC", "ST", "Spring", "SOS", "LPS", "BU", "JOC", "Shakeout")
 _DIST_TYPES = ("BC", "AR", "UT", "UTAD", "LPSY", "SOW")
 
 # ── 事件推进前置约束: type -> (前置事件类型, 回溯窗口根数) ──
@@ -23,6 +23,9 @@ _ACC_PREREQ = {
     "AR": (("SC",), 40),
     "ST": (("SC",), 60),
     "Spring": (("SC", "ST"), 60),
+    # 震仓/诱空 (放量假破位后收复) 与 Spring 同为刺破低点后收复的吸筹确认,
+    # 因果前置对标 Spring
+    "Shakeout": (("SC", "ST"), 60),
     "SOS": (("SC", "Spring", "ST"), 60),
     "LPS": (("SOS", "JOC"), 40),
     "BU": (("JOC",), 40),
@@ -45,28 +48,47 @@ _DIST_PREREQ = {
 }
 
 # 阶段 marker (推进后所在阶段), 与 config 的 ACC/DIST_PHASES 对齐
-_ACC_MARKER = {"PSY": 0, "SC": 0, "AR": 0, "ST": 1, "Spring": 2,
+_ACC_MARKER = {"PSY": 0, "SC": 0, "AR": 0, "ST": 1, "Spring": 2, "Shakeout": 2,
                "SOS": 3, "LPS": 3, "BU": 3, "JOC": 4}
 _DIST_MARKER = {"BC": 0, "AR": 0, "UT": 1, "UTAD": 2, "LPSY": 3, "SOS": 3,
                 "LPS": 3, "JOC": 4, "SOW": 3}
 
+# 下跌轨道 (Markdown): 下跌趋势 ≠ 派发。派发是"高位构筑后的出货"结构,
+# 下跌是"已在走弱的趋势本身"。二者混标会让用户在下跌末端看到"派发结构"。
+# 推进仍用派发类空头事件 (破位/弱势信号), 但文案与阶段名区分开。
+MD_PHASES = [
+    ("A", "破位初跌 (SOW/跌破区间)", "进入下跌轨道"),
+    ("B", "主跌段 (反弹无力)", "下跌延续"),
+    ("C", "下跌中继 (UT 反弹失败)", "下跌轨道深化"),
+    ("D", "恐慌抛售 SC / 低点支撑测试", "接近止跌"),
+    ("E", "低点防守 + 回升", "止跌企稳"),
+]
+
 
 def _prereqs_for(kind: str):
-    """按结构方向返回前置约束表与 marker 映射。"""
+    """按结构方向返回前置约束表与 marker 映射。
+    kind: "acc"=吸筹, "dist"=派发/顶部构筑, "md"=下跌趋势轨道。"""
     if kind == "acc":
         return _ACC_PREREQ, _ACC_MARKER, ACC_PHASES, "吸筹 (Accumulation)"
+    if kind == "md":
+        return _DIST_PREREQ, _DIST_MARKER, MD_PHASES, "下跌 (Markdown)"
     return _DIST_PREREQ, _DIST_MARKER, DIST_PHASES, "派发 (Distribution)"
 
 
 def _kind_by_phase(phase):
-    """按判段面板决定结构类型: 底部/吸筹/上升 → 吸筹; 顶部/派发/下跌 → 派发。
-    返回结构方向 key ("acc"/"dist") 或 None。"""
+    """按判段面板决定结构类型: 底部/吸筹 → 吸筹; 顶部/派发 → 派发;
+    下跌趋势 → 下跌轨道 (与真正的"派发结构"区分); 上升 → 吸筹(基底语义)。
+    返回结构方向 key ("acc"/"dist"/"md") 或 None。"""
     if not phase:
         return None
-    if any(k in phase for k in ("Accumulation", "吸筹", "底部", "上升")):
+    if any(k in phase for k in ("Accumulation", "吸筹", "底部")):
         return "acc"
-    if any(k in phase for k in ("Distribution", "派发", "顶部", "下跌")):
+    if any(k in phase for k in ("Distribution", "派发", "顶部")):
         return "dist"
+    if any(k in phase for k in ("Markdown", "下跌")):
+        return "md"
+    if "上升" in phase:
+        return "acc"
     return None
 
 

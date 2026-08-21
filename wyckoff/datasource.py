@@ -12,19 +12,23 @@ K线 4h / 复权因子 7d), 重启应用不重抓历史, 批量扫描/回测大�
 import json
 import re
 import time
+from collections import OrderedDict
 from threading import Lock
 
 import numpy as np
 import pandas as pd
-import requests
 
 from .config import MIN_KLINE_BARS, SINA_HEADERS
 from .utils import normalize_symbol
+from ._log import log_exc
+from ._shared import http_session
 from . import sqldb
 
-_KLINE_CACHE = {}
+_KLINE_CACHE = OrderedDict()   # {(symbol, scale): (ts, full_df)} — LRU, 存全量按需截断
 _KLINE_CACHE_TTL = 300  # 5分钟
-_KLINE_CACHE_MAX = 64
+# 全市场扫描几百只股票, 64 条 FIFO 会把刚写入的缓存立刻挤出 (二级扫描全量回源
+# SQLite); 提到 512 并改 LRU, 每条约 24KB, 总占用 ~12MB 可接受。
+_KLINE_CACHE_MAX = 512
 _KLINE_LOCK = Lock()
 
 # SQLite 持久缓存 TTL: 内存未命中时回退到落盘的行情数据, 跨会话复用。
@@ -109,7 +113,7 @@ def _normalize_kline_df(rows) -> pd.DataFrame:
 def _fetch_kline_sina(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     url = "https://quotes.sina.cn/cn/api/jsonp_v2.php/data/CN_MarketDataService.getKLineData"
     params = {"symbol": symbol, "scale": str(scale), "datalen": str(datalen), "ma": "no"}
-    r = requests.get(url, params=params, headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
+    r = http_session().get(url, params=params, headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
     raw = re.search(r"data\((.*)\)", r.text, re.DOTALL)
     if not raw:
         raise RuntimeError("新浪接口未返回数据, 请检查代码或网络")
@@ -136,7 +140,7 @@ def _sina_qfq_factors(symbol: str):
             _FACTOR_CACHE[symbol] = (now, fac)
         return fac
     try:
-        r = requests.get(f"https://finance.sina.com.cn/realstock/company/{symbol}/qfq.js",
+        r = http_session().get(f"https://finance.sina.com.cn/realstock/company/{symbol}/qfq.js",
                          headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
         js, _ = json.JSONDecoder().raw_decode(r.text[r.text.index("{") :])
         rows = js.get("data") or []
@@ -188,7 +192,7 @@ def _fetch_kline_eastmoney(symbol: str, datalen: int, scale: int) -> pd.DataFram
         "beg": "0", "end": "20500101", "lmt": str(datalen),
     }
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"}
-    r = requests.get(url, params=params, headers=headers, timeout=_HTTP_TIMEOUT)
+    r = http_session().get(url, params=params, headers=headers, timeout=_HTTP_TIMEOUT)
     klines = ((r.json().get("data") or {}).get("klines")) or []
     if not klines:
         raise RuntimeError(f"东方财富未返回 {symbol} 数据")
@@ -213,7 +217,7 @@ def _fetch_kline_tencent(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     params = {"param": f"{symbol},{period},,,{datalen},qfq"}
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
-    r = requests.get(url, params=params, headers=headers, timeout=_HTTP_TIMEOUT)
+    r = http_session().get(url, params=params, headers=headers, timeout=_HTTP_TIMEOUT)
     node = (r.json().get("data") or {}).get(symbol) or {}
     klines = node.get(period) or node.get("qfq" + period) or node.get("day") or []
     if not klines:
@@ -227,47 +231,95 @@ def _fetch_kline_tencent(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     return _normalize_kline_df(rows)
 
 
+def _kline_cache_get(symbol, scale, datalen):
+    """内存 LRU 命中: 返回截断到 datalen 的副本, 未命中/过期/根数不足返回 None。"""
+    ck = (symbol, scale)
+    with _KLINE_LOCK:
+        cached = _KLINE_CACHE.get(ck)
+        if cached is not None:
+            _KLINE_CACHE.move_to_end(ck)
+    if cached is None:
+        return None
+    ts, df = cached
+    if time.time() - ts >= _KLINE_CACHE_TTL:
+        with _KLINE_LOCK:
+            _KLINE_CACHE.pop(ck, None)
+        return None
+    if len(df) < datalen:
+        return None
+    return df.tail(datalen).copy()
+
+
+def _kline_cache_put(symbol, scale, full_df):
+    """写入内存 LRU (存全量, 读取时按需截断; 同股不同 datalen 共享一条)。"""
+    ck = (symbol, scale)
+    with _KLINE_LOCK:
+        _KLINE_CACHE[ck] = (time.time(), full_df)
+        _KLINE_CACHE.move_to_end(ck)
+        while len(_KLINE_CACHE) > _KLINE_CACHE_MAX:
+            _KLINE_CACHE.popitem(last=False)
+
+
+def _ordered_kline_sources():
+    """按健康度动态排序 K线源: 失败率高的源排后面。
+
+    样本 <3 次的源不参与重排 (视为中性), 避免偶发失败导致抖动;
+    无任何统计时保持默认顺序 (新浪 → 东财 → 腾讯)。
+    """
+    sources = [("新浪", _fetch_kline_sina),
+               ("东方财富", _fetch_kline_eastmoney),
+               ("腾讯", _fetch_kline_tencent)]
+    with _HEALTH_LOCK:
+        snapshot = {n: dict(h) for n, h in _SOURCE_HEALTH.items()}
+
+    def penalty(item):
+        h = snapshot.get(item[0])
+        if not h:
+            return 0.0
+        total = h["ok"] + h["fail"]
+        if total < 3:
+            return 0.0
+        return h["fail"] / total
+
+    return sorted(sources, key=penalty)
+
+
 def fetch_kline(symbol: str, datalen: int = 700, scale: int = 240, use_cache: bool = True) -> pd.DataFrame:
     """从行情接口获取K线 (scale: 240日线 / 120两小时 / 60一小时), 两级缓存。
     内存 5min 命中直接返回; 未命中回退到 SQLite 持久缓存 (重启后跨会话复用,
     需满足 datalen 根数否则视为失效重拉); 均未命中才请求网络
-    (新浪 → 东方财富 → 腾讯 自动切换)。
+    (新浪 → 东方财富 → 腾讯 自动切换, 源顺序按健康度动态调整)。
     无论哪个源, 最终都只保留最近 datalen 根 K 线 (东方财富接口在 beg=0 时会忽略
     lmt 参数返回全部历史, 必须在此强制截断), 保证"时间段"选择真正生效。
     use_cache=False 时忽略缓存强制重新拉取 (并刷新内存/SQLite 缓存,
     供定时刷新/手动刷新用)。"""
     key = (symbol, datalen, scale)
     if use_cache:
-        with _KLINE_LOCK:
-            cached = _KLINE_CACHE.get(key)
-            if cached and time.time() - cached[0] < _KLINE_CACHE_TTL:
-                return cached[1].copy()
-        hit = sqldb.kline_load(symbol, scale, _KLINE_DB_TTL)
+        hit = _kline_cache_get(symbol, scale, datalen)
         if hit is not None:
-            df, source = hit
+            with _KLINE_LOCK:
+                source = _SOURCE_LOG.get(key, "新浪")
+            return hit
+        dbhit = sqldb.kline_load(symbol, scale, _KLINE_DB_TTL)
+        if dbhit is not None:
+            df, source = dbhit
             if len(df) >= datalen:
-                df = df.tail(datalen).reset_index(drop=True)
+                _kline_cache_put(symbol, scale, df)
                 with _KLINE_LOCK:
-                    if len(_KLINE_CACHE) >= _KLINE_CACHE_MAX:
-                        _KLINE_CACHE.pop(next(iter(_KLINE_CACHE)), None)
-                    _KLINE_CACHE[key] = (time.time(), df.copy())
                     _SOURCE_LOG[key] = source
-                return df.copy()
+                return df.tail(datalen).reset_index(drop=True).copy()
     last_err = None
-    for name, fn in (("新浪", _fetch_kline_sina),
-                     ("东方财富", _fetch_kline_eastmoney),
-                     ("腾讯", _fetch_kline_tencent)):
+    for name, fn in _ordered_kline_sources():
         try:
             df = fn(symbol, datalen, scale)
             _health_hit(name, True)
-            df = df.tail(datalen).reset_index(drop=True)
+            full_df = df.copy()
+            out = df.tail(datalen).reset_index(drop=True)
+            _kline_cache_put(symbol, scale, full_df)
             with _KLINE_LOCK:
-                if len(_KLINE_CACHE) >= _KLINE_CACHE_MAX:
-                    _KLINE_CACHE.pop(next(iter(_KLINE_CACHE)), None)
-                _KLINE_CACHE[key] = (time.time(), df.copy())
                 _SOURCE_LOG[key] = name
-            sqldb.kline_save(symbol, scale, df, name)
-            return df
+            sqldb.kline_save(symbol, scale, out, name)
+            return out
         except Exception as e:
             _health_hit(name, False, e)
             last_err = e
@@ -288,7 +340,7 @@ def fetch_realtime(codes):
         return {}
     try:
         url = "https://hq.sinajs.cn/list=" + ",".join(symbols)
-        r = requests.get(url, headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
+        r = http_session().get(url, headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
         r.encoding = "gbk"
         entries = {}
         for line in r.text.strip().splitlines():
@@ -324,8 +376,8 @@ def fetch_realtime(codes):
                             e = dict(e)
                             e.update(q)
                             entries[s] = e
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_exc("腾讯行情兜底失败", e)
                 for s in list(entries):
                     if entries[s].get("price", 0) <= 0:
                         entries.pop(s)
@@ -345,7 +397,7 @@ def _fetch_realtime_tencent(symbols):
     """腾讯实时行情兜底。返回结构同 fetch_realtime。"""
     try:
         url = "https://qt.gtimg.cn/q=" + ",".join(symbols)
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0",
+        r = http_session().get(url, headers={"User-Agent": "Mozilla/5.0",
                                        "Referer": "https://gu.qq.com/"},
                          timeout=_HTTP_TIMEOUT)
         r.encoding = "gbk"
@@ -420,7 +472,7 @@ def fetch_name(symbol: str, use_cache: bool = True) -> str:
     name = _name_from_local(symbol)
     if not name:
         try:
-            r = requests.get(f"https://hq.sinajs.cn/list={symbol}",
+            r = http_session().get(f"https://hq.sinajs.cn/list={symbol}",
                              headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
             m = re.search(r'="([^,]+),', r.text)
             if m:

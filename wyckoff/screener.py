@@ -24,6 +24,7 @@ import numpy as np
 
 from .backtest import signal_score as _wyckoff_signal_score
 from .datasource import fetch_kline
+from ._log import log_exc
 from .indicators import add_indicators
 from .phases import judge_phase
 from .events import detect_all
@@ -128,8 +129,8 @@ def _run_parallel(items, fn, workers=6, cancel_event=None):
                     out.append((x, fut.result()))
                 except Exception:
                     out.append((x, None))
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("并行扫描框架异常", e)
     return out
 
 
@@ -143,7 +144,7 @@ _PHASE_BASE = {
     "下跌趋势": -10,  # 下跌阶段
 }
 
-# 威科夫信号加分
+# 威科夫信号加分 (静态表: 仅在信号库无实证数据时回退使用)
 _SIGNAL_BONUS = {
     "Spring": 15,     # 最强买入信号 (弹簧效应)
     "SC": 10,         # 抛售高潮
@@ -157,6 +158,64 @@ _SIGNAL_BONUS = {
     "BC": -5,         # 买入高潮 (顶部)
     "BU": 3,          # 回测支撑
 }
+
+# ── 实证有效信号门槛: 综合选股只认实测胜率超过该值的信号 ──
+# 实测 (20根方向化口径): Spring/Shakeout/ST/LPS/SC >60% 有效;
+# SOS/JOC/BU/AR/PSY/BC ≈ 随机 → 不再参与选股加分与筛选。
+VALID_WINRATE = 0.60
+
+
+def empirical_signal_rates(horizon=20, threshold=VALID_WINRATE):
+    """从本机信号准确度库计算实测有效的威科夫事件集合。
+
+    返回 {"long": {类型: 收缩胜率}, "bear": {类型: 收缩胜率}}:
+      long: 多头事件收缩胜率>threshold; 中性事件需胜率>threshold 且均收益>0
+      bear: 空头事件收缩胜率>threshold (方向正确但利空 → 选股扣分)
+    信号库无数据返回 {} (调用方回退静态 _SIGNAL_BONUS)。
+    """
+    from .config import event_dir
+    from .signal_accuracy import load_win_rates
+    rates = load_win_rates(horizon)
+    if not rates:
+        return {}
+    out = {"long": {}, "bear": {}}
+    for (kind, typ), rec in rates.items():
+        if kind != "event":
+            continue
+        shrunk = float(rec.get("shrunk") or 0.0)
+        if shrunk <= threshold:
+            continue
+        d = event_dir(typ)
+        if d > 0:
+            out["long"][typ] = shrunk
+        elif d < 0:
+            out["bear"][typ] = shrunk
+        elif float(rec.get("mean") or 0.0) > 0:
+            # 中性事件 (SC 等): 命中口径即上涨占比, 均收益为正才视为多头有效
+            out["long"][typ] = shrunk
+    return out
+
+
+def _signal_points(signals, emp_rates):
+    """实证信号加分: 只统计实测胜率>阈值的信号。
+
+    多头有效信号按优势幅度加分 ((胜率-50%)×100÷2, 与静态表量级对齐:
+    Spring≈+17 / Shakeout≈+11 / ST≈+9); 空头有效信号同幅扣分;
+    胜率≤阈值或无实证的信号一律 0 分。emp_rates 为空 dict → 返回 None
+    (调用方回退静态表)。
+    """
+    if not emp_rates:
+        return None
+
+    def _best(mapping):
+        pts = 0
+        for s in set(signals or []):
+            r = mapping.get(s)
+            if r is not None:
+                pts = max(pts, int(round((r - 0.5) * 100 / 2)))
+        return pts
+
+    return _best(emp_rates["long"]) - _best(emp_rates["bear"])
 
 # 市值区间偏好 (中小盘略加分, 大盘中性)
 _CAP_RANGE = {
@@ -236,7 +295,7 @@ def score_stock(code, datalen=500):
 
     返回 {
         "code", "name", "last", "phase", "phase_base",
-        "signals", "signal_bonus", "conf_q",
+        "signals", "signals_valid", "signal_bonus", "conf_q",
         "flow20", "flow20_pct", "flow_trend", "flow_score",
         "pe", "pb", "mcap_yi", "net_growth", "fund_score",
         "ma_arrangement", "vol_state", "rsi", "macd_hist", "tech_score",
@@ -248,7 +307,8 @@ def score_stock(code, datalen=500):
     flt = _ensure_filters()
     result = {
         "code": code, "name": "", "last": None, "phase": "",
-        "phase_base": "", "signals": [], "signal_bonus": 0, "conf_q": "",
+        "phase_base": "", "signals": [], "signals_valid": [],
+        "signal_bonus": 0, "conf_q": "",
         "flow20": None, "flow20_pct": None, "flow_trend": "", "flow_score": 0,
         "pe": None, "pb": None, "mcap_yi": None, "net_growth": None,
         "fund_score": 0,
@@ -276,12 +336,20 @@ def score_stock(code, datalen=500):
         # 近20根信号
         recent = [e for e in events if e["idx"] >= len(df) - 20]
         result["signals"] = [e["type"] for e in recent]
-        # 威科夫评分
-        phase_pts = _PHASE_BASE.get(base, 0)
-        sig_pts = max([_SIGNAL_BONUS.get(s, 0) for s in result["signals"]] + [0])
-        sig_pts += sum(_SIGNAL_BONUS.get(s, 0) for s in result["signals"]
-                       if _SIGNAL_BONUS.get(s, 0) < 0)
-        result["signal_bonus"] = phase_pts + sig_pts
+        # 威科夫评分: 只认实测胜率>阈值的信号 (无实证数据时回退静态表)
+        emp = empirical_signal_rates()
+        pts = _signal_points(result["signals"], emp)
+        if pts is None:
+            phase_pts = _PHASE_BASE.get(base, 0)
+            sig_pts = max([_SIGNAL_BONUS.get(s, 0) for s in result["signals"]] + [0])
+            sig_pts += sum(_SIGNAL_BONUS.get(s, 0) for s in result["signals"]
+                           if _SIGNAL_BONUS.get(s, 0) < 0)
+            result["signal_bonus"] = phase_pts + sig_pts
+            result["signals_valid"] = []
+        else:
+            result["signal_bonus"] = _PHASE_BASE.get(base, 0) + pts
+            result["signals_valid"] = sorted(
+                {s for s in result["signals"] if s in emp["long"]})
     except Exception as e:
         result["error"] = f"K线分析失败: {e}"
         return result
@@ -542,10 +610,14 @@ def _apply_filters(r, filters):
     phase_filter = filters.get("phases")
     if phase_filter and r["phase_base"] not in phase_filter:
         return False
-    # 信号白名单
+    # 信号白名单: 只对实测胜率>阈值的信号生效 (signals_valid;
+    # 无实证数据时回退全部检测信号, 保持旧行为)
     sig_filter = filters.get("signals")
     if sig_filter:
-        matched = [s for s in r["signals"] if s in sig_filter]
+        pool = r.get("signals_valid")
+        if pool is None:
+            pool = r["signals"]
+        matched = [s for s in pool if s in sig_filter]
         if filters.get("signals_mode", "any") == "any":
             if not matched:
                 return False  # 硬过滤: 任一命中才入选
@@ -570,6 +642,8 @@ def screen_stocks(codes, filters=None, on_progress=None, workers=6,
         "mcap_min", "mcap_max", "pe_min", "pe_max", "pb_min", "pb_max",
         "phases": ["底部整固", "上升趋势", ...],  # 阶段白名单
         "signals": ["Spring", "SC", ...],  # 信号筛选 (见 signals_mode)
+        #   匹配池为 signals_valid (实测胜率>60% 的信号); 无实证数据时
+        #   回退全部检测信号。胜率≤阈值的信号 (如 SOS/JOC/PSY) 不再命中。
         "signals_mode": "any"|"soft",  # any=硬过滤(任一命中才入选, 默认) soft=匹配加分
         "sector": ["板块名", ...],  # 板块白名单 (任一命中)
         "min_score": 0,  # 最低总分
@@ -658,7 +732,8 @@ PRESET_STRATEGIES = {
         "filters": {
             "pe_max": 35, "pb_max": 4,
             "phases": ["底部整固"],
-            "signals": ["Spring", "SC", "ST", "PSY", "SOS"],
+            # 只含实测胜率>60%的多头信号 (SOS 48%/PSY 42% 已剔除)
+            "signals": ["Spring", "Shakeout", "SC", "ST", "LPS"],
             "sort_by": "total_score", "limit": 30,
         },
     },

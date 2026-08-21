@@ -41,9 +41,12 @@ def _mkdf(n=400):
         lo = close - 0.2
         rows.append([days[i], op, hi, lo, close, vol * 1e6])
     df = pd.DataFrame(rows, columns=["day", "open", "high", "low", "close", "volume"])
-    # 补齐 indicators 需要的列 (detect_joc_lps_bu 只用 volume/vol_ma20/high/low/day)
+    # 补齐 _EventContext 需要的指标列 (SOS/JOC/LPS/BU 判定 + 上下文预计算)
     df["vol_ma20"] = df["volume"].rolling(20).mean()
+    df["vol_ratio_20"] = df["volume"] / df["vol_ma20"].replace(0, np.nan)
     df["range"] = df["high"] - df["low"]
+    df["lower_wick"] = np.minimum(df["open"], df["close"]) - df["low"]
+    df["upper_wick"] = df["high"] - np.maximum(df["open"], df["close"])
     return df
 
 

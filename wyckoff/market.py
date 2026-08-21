@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """资金流 / 筹码分布 / 股东户数 / 大盘背景 / 供需与交易区间分析。"""
 import time
+from threading import Lock
 
 import numpy as np
 import pandas as pd
 
 from .config import MIN_KLINE_BARS, SINA_HEADERS, W_RECENT
-from .datasource import fetch_kline, _KLINE_LOCK
+from .datasource import fetch_kline
 from .fundamental import _get, fetch_main_flow, holder_ratio_ok
 from .indicators import add_indicators
 
 _HOLDER_CACHE = {}
 _HOLDER_TTL = 3600  # 股东户数 1小时缓存
+_HOLDER_LOCK = Lock()   # 独立锁: 不与 datasource 的 K线缓存锁共用 (锁随数据走)
 
 _MARKET_CACHE = {}
 _MARKET_TTL = 1800  # 大盘背景 30分钟缓存
+_MARKET_LOCK = Lock()
 
 
 def estimate_fund_flow(df, bars: int = 20) -> float:
@@ -106,7 +109,7 @@ def fetch_holder_history(code: str):
     code6 = (code or "")[-6:]
     if not (len(code6) == 6 and code6.isdigit()):
         return []
-    with _KLINE_LOCK:
+    with _HOLDER_LOCK:
         cached = _HOLDER_CACHE.get(code6)
         if cached and time.time() - cached[0] < _HOLDER_TTL:
             return list(cached[1])
@@ -138,7 +141,7 @@ def fetch_holder_history(code: str):
         out = [s for s in out if holder_ratio_ok(s)]
     except Exception:
         return []
-    with _KLINE_LOCK:
+    with _HOLDER_LOCK:
         _HOLDER_CACHE[code6] = (time.time(), out)
     return out
 
@@ -266,12 +269,12 @@ def find_trading_range(df, pivots, window=150, min_tests=1):
 def fetch_market_series():
     """上证指数K线 (日线, 缓存30分钟), 用于相对强度计算。失败返回 None。"""
     try:
-        with _KLINE_LOCK:
+        with _MARKET_LOCK:
             cached = _MARKET_CACHE.get("sse_df")
             if cached and time.time() - cached[0] < _MARKET_TTL:
                 return cached[1]
         df = add_indicators(fetch_kline("sh000001", datalen=250, scale=240))
-        with _KLINE_LOCK:
+        with _MARKET_LOCK:
             _MARKET_CACHE["sse_df"] = (time.time(), df)
         return df
     except Exception:
@@ -341,7 +344,7 @@ def relative_strength_series(df, index_df=None, window=20):
 def fetch_market_env():
     """上证指数背景: 价/MA20/MA50/MA200 定牛熊震荡。失败返回 None。"""
     try:
-        with _KLINE_LOCK:
+        with _MARKET_LOCK:
             cached = _MARKET_CACHE.get("sse")
             if cached and time.time() - cached[0] < _MARKET_TTL:
                 return cached[1]
@@ -362,7 +365,7 @@ def fetch_market_env():
             env, tone = "震荡环境", "neutral"
         out = {"name": "上证指数", "close": last, "ma20": ma20, "ma50": ma50,
                "ma200": ma200, "env": env, "tone": tone}
-        with _KLINE_LOCK:
+        with _MARKET_LOCK:
             _MARKET_CACHE["sse"] = (time.time(), out)
         return out
     except Exception:

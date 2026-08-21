@@ -45,6 +45,17 @@ def test_spring_after_sc_advances():
     assert letter == "C"
 
 
+def test_shakeout_requires_sc_st_prereq():
+    """震仓 Shakeout 与 Spring 同构: 无 SC/ST 铺垫不推进, 有铺垫推进。"""
+    df = _df()
+    isolated = structure_progress([_ev("Shakeout", 60)], df,
+                                  phase="底部整固 (Accumulation)")
+    assert isolated[0] == "A" and "未推进" in isolated[2]
+    chained = structure_progress([_ev("SC", 45, conf=90), _ev("Shakeout", 60)],
+                                 df, phase="底部整固 (Accumulation)")
+    assert chained[0] == "C"
+
+
 def test_spring_beyond_window_blocked():
     """SC 距今超过 60 根窗口, 前置失效 → Spring 不推进。"""
     df = _df()

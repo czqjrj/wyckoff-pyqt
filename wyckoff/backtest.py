@@ -13,6 +13,7 @@ from .config import event_dir, VSA_BULL, VSA_BEAR
 from .phases import judge_phase
 from .vsa import vsa_classify
 from .utils import normalize_symbol
+from ._shared import http_session
 from .fundamental import (fetch_fundamental, fetch_main_flow, fetch_sector_flow,
                           build_confirm_section, fetch_all_board_stats,
                           fetch_board_constituents)
@@ -65,7 +66,8 @@ MARKET_UNIVERSE = [
 # 实证权重 (backtest_signals.py, 20根胜率): Spring 82.6% > ST 75.0% > SC 58.3%
 # > SOS 45.7% > JOC 43.5%。JOC/SOS 胜率低于50%不直接加分, 仅作结构确认。
 # LPS/BU 是 Phase D 标准买点 (修复 detect_joc_lps_bu 后已能生成), 权重对标 ST。
-_BUY_PTS = {"Spring": 22, "ST": 11, "LPS": 11, "BU": 11, "SC": 8, "PSY": 2}
+_BUY_PTS = {"Spring": 22, "Shakeout": 20, "ST": 11, "LPS": 11, "BU": 11,
+            "SC": 8, "PSY": 2}
 _SELL_PTS = {"UTAD": -13, "BC": -3, "LPSY": -10, "UT": -6, "SOW": -15}
 
 
@@ -317,13 +319,28 @@ def scan_stock_signals(code, datalen=500, confirm_enabled=True, on_result=None):
         events = detect_all(df, pivots)
         phase, _ = judge_phase(df, pivots, events)
         recent = [e for e in events if e["idx"] >= len(df) - 20]
-        priority = ["Spring", "SOS", "JOC", "SC", "ST", "LPS", "BU", "AR",
+        priority = ["Spring", "Shakeout", "SOS", "JOC", "SC", "ST", "LPS", "BU", "AR",
                     "PSY", "UTAD", "BC", "LPSY", "UT", "SOW"]
         recent.sort(key=lambda e: (-e.get("conf", 50),
                                    priority.index(e["type"]) if e["type"] in priority else 99))
         # 近期 VSA 标签 (供高命中滚动头条/明细, 免重复计算)
         recent_vsa = [s for s in vsa_classify(df, scale=240)
                       if s["idx"] >= len(df) - 20]
+        # 阶段×资金信号 (供预警/扫描列): 仅K线量价资金口径, 全环境可用。
+        # 资金背离 = 阶段偏多但近5日量价资金净流出 (诱多/下跌中继, 谨慎);
+        # 资金回流 = 阶段偏空但近5日资金净流入 (止跌/反抽, 关注)。
+        # 用户可在 自选股预警 里选"出现信号"并填这两个名字, 触发弹窗+语音。
+        try:
+            from .phases import flow_confirmed
+            _fc = flow_confirmed(df)
+        except Exception:
+            _fc = True
+        _base_phase = phase.split(" ")[0]
+        _flow_sigs = []
+        if _base_phase in ("底部整固", "上升趋势") and not _fc:
+            _flow_sigs.append("资金背离")
+        elif _base_phase in ("下跌趋势", "顶部构筑") and _fc:
+            _flow_sigs.append("资金回流")
         # ── 确认机制 (高置信/需谨慎 + 20日主力 + 板块) ──
         # 熔断生效时跳过确认抓取 (阶段+信号仍由新浪K线给出, 只缺确认列)
         conf_q, flow20, pe = "", None, None
@@ -371,7 +388,7 @@ def scan_stock_signals(code, datalen=500, confirm_enabled=True, on_result=None):
                 from ._log import log_exc
                 log_exc(f"scan_stock_signals({code}) on_result 失败", e)
         return {"code": str(code)[-6:], "name": name, "phase": phase,
-                "signals": [e["type"] for e in recent],
+                "signals": [e["type"] for e in recent] + _flow_sigs,
                 "events": [{"type": e["type"], "date": str(e["date"].date()),
                             "price": float(e["price"]), "conf": int(e.get("conf", 50))}
                            for e in recent],
@@ -505,7 +522,6 @@ def _fallback_constituents(board_name: str, limit: int = 30):
 def _get_ths_leader_stocks(board_name: str):
     """从 THS 行业板块摘要中提取领涨股, 用 Sina 搜索API 查找代码。
     返回 [(prefix_code, name, price), ...] 或 []。"""
-    import requests
     try:
         import akshare as ak
         df = ak.stock_board_industry_summary_ths()
@@ -518,7 +534,7 @@ def _get_ths_leader_stocks(board_name: str):
             return []
         # Sina suggest API 搜代码
         url = f"https://suggest3.sinajs.cn/suggest/type=11&key={leader_name}"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0",
+        r = http_session().get(url, headers={"User-Agent": "Mozilla/5.0",
                                         "Referer": "https://finance.sina.com.cn/"},
                          timeout=8)
         if r.status_code != 200 or not r.text:

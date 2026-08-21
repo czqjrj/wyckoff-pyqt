@@ -50,7 +50,7 @@ _PHASE_BONUS = {
 }
 
 # 买点信号 → 加分基数
-_BULL_SIG = {"Spring": 6, "SC": 5, "ST": 4, "PSY": 3, "SOS": 4,
+_BULL_SIG = {"Spring": 6, "Shakeout": 5, "SC": 5, "ST": 4, "PSY": 3, "SOS": 4,
              "JOC": 4, "LPS": 3, "AR": 2, "BU": 2}
 _BEAR_SIG = {"UTAD", "BC", "UT", "TRU", "SUP", "ND", "ER", "LPSY", "SOW"}
 
@@ -788,7 +788,7 @@ def scan_absorption(codes, workers=6, cancel_event=None, datalen=500):
             return None
         ev = sorted(events, key=lambda e: e["idx"])
         types = [e["type"] for e in ev]
-        if types[-1] not in ("Spring", "AR", "SOS", "ST", "JOC"):
+        if types[-1] not in ("Spring", "Shakeout", "AR", "SOS", "ST", "JOC"):
             return None
         had_acc = ("SC" in types or "PSY" in types) and \
             any(t in ("Spring", "AR", "SOS") for t in types)

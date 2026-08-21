@@ -207,7 +207,14 @@ def significance_table(records, kind="event", horizon=20, min_n=8,
         for k in range(n_perm):
             s = pool[rng.integers(0, pool.size, n)]
             sims[k] = float(s.mean())
-        p = float((sims >= obs).mean())
+        # 方向化 p 值: 多头/中性信号 obs 越大越显著; 空头信号 obs 越小越显著。
+        # 旧逻辑一律用 `sims >= obs`, 导致空头信号预测跌但实际跌 (obs 为负)
+        # 被误判为"≈随机" (p=1), 反向失败却被误判为"优于随机"。
+        d = event_dir(t) if kind == "event" else vsa_dir(t)
+        if d < 0:
+            p = float((sims <= obs).mean())
+        else:
+            p = float((sims >= obs).mean())
         out["types"][t] = {
             "n": int(n), "win": float(np.mean(
                 [_hit(kind, t, v) for v in arr]) * 100),

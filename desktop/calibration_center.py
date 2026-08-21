@@ -23,6 +23,11 @@ from wyckoff.accuracy import (
 )
 from wyckoff.calibration import calibration_status, record_calibration
 from wyckoff.config import _PHASE_STYLE, event_dir, vsa_dir
+from wyckoff.pnf_accuracy import (
+    PNF_ACC_DIR as _PNF_ACC_DIR,
+    load_latest_report as _pnf_load_latest,
+    run_eval as _pnf_run_eval,
+)
 from wyckoff.signal_accuracy import (
     _fmt_stats, export_signals, load_signals, run_auto_signal_eval,
     signal_stats,
@@ -35,18 +40,35 @@ from . import theme
 
 
 class _EvalThread(QThread):
-    finished = pyqtSignal()
+    # 携带错误列表 (空列表 = 全部成功), 供 UI 反馈失败原因
+    finished = pyqtSignal(object)
 
     def run(self):
+        errors = []
+        for name, fn in (
+            ("阶段准确度评估", run_auto_accuracy_eval),
+            ("信号准确度评估", run_auto_signal_eval),
+            ("点数图三档评估", lambda: _pnf_run_eval(
+                print_stdout=False, export_json=True, n_seeds=15)),
+        ):
+            try:
+                fn()
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+        self.finished.emit(errors)
+
+
+class _PnfEvalThread(QThread):
+    """PNF 三档目标准确率评估 (只跑 PNF, 更快反馈)。"""
+    finished = pyqtSignal(object)
+
+    def run(self):
+        errors = []
         try:
-            run_auto_accuracy_eval()
-        except Exception:
-            pass
-        try:
-            run_auto_signal_eval()
-        except Exception:
-            pass
-        self.finished.emit()
+            _pnf_run_eval(print_stdout=False, export_json=True, n_seeds=30)
+        except Exception as e:
+            errors.append(f"点数图三档评估: {e}")
+        self.finished.emit(errors)
 
 
 class _AiVerifyThread(QThread):
@@ -126,6 +148,9 @@ class CalibrationCenter(QDialog):
         self._last_scale = 240
         self._last_df = None
         self._ai_tts_playing = False
+        self._eval_thread = None
+        self._pnf_th = None
+        self._model_th = None
 
         # 全局样式: 统一铺底色, 消除白色空隙
         _bg = theme.C_BG
@@ -194,6 +219,7 @@ class CalibrationCenter(QDialog):
         self._build_feedback_tab()
         self._build_accuracy_tab()
         self._build_signal_tab()
+        self._build_pnf_tab()
         self._build_timeline_tab()
         self.tabs.setCurrentIndex(0)  # 默认落在模型校准 (校准中心旗舰页)
 
@@ -205,6 +231,7 @@ class CalibrationCenter(QDialog):
         row.setSpacing(10)
         self._ov_cards = {}
         for key, title in [("acc", "分析准确度"), ("sig", "信号准确度"),
+                           ("pnf", "点数图(PNF)"),
                            ("fb", "阶段带反馈"), ("calib", "校准状态")]:
             card = _card()
             card.setMinimumWidth(200)
@@ -282,6 +309,37 @@ class CalibrationCenter(QDialog):
         self._set_card("sig", f"{sig_s['evaluated']}",
                        f"已评估  ·  待评估 {sig_s['pending']}",
                        color=sig_color, badge_text=sig_hit, badge_color=sig_color)
+
+        # 点数图(PNF)测算卡
+        pnf_rep = _pnf_load_latest()
+        pnf_n = pnf_rep.get("total_segments", 0) or 0
+        near_total = (pnf_rep.get("near") or {}).get("total") or {}
+        pnf_hr = near_total.get("rate%") if near_total.get("n") else None
+        # 概率校准:|bias|>10pt 的占比用来标色 (小=好)
+        cal = pnf_rep.get("calibration") or []
+        bad_bias = sum(1 for c in cal if abs(c.get("bias_pp", 0)) > 10)
+        pnf_badge = ""
+        pnf_color = theme.C_TEXT
+        if pnf_n > 0 and pnf_hr is not None:
+            pnf_badge = f"近端 {pnf_hr:.0f}%"
+            if pnf_hr >= 85:
+                pnf_color = theme.C_UP
+            elif pnf_hr >= 65:
+                pnf_color = theme.C_AMBER
+            else:
+                pnf_color = theme.C_DOWN
+        if bad_bias > 0:
+            pnf_color = theme.C_AMBER
+        pnf_sub = f"样本 {pnf_n}段 · 校准偏差桶 {bad_bias}/{len(cal)}" if cal else (
+            f"样本 {pnf_n}段" if pnf_n else "尚无评估 — 点 ⚡立即评估 或运行 cron")
+        ts = pnf_rep.get("ts") or ""
+        if ts:
+            # ts 形如 2026-08-21T07:10:16, 截成 MM-DD HH:MM
+            t = ts[5:16].replace("T", " ")
+            pnf_sub = f"{t}  {pnf_sub}"
+        self._set_card("pnf", f"{pnf_n}" if pnf_n else "—",
+                       pnf_sub, color=pnf_color,
+                       badge_text=pnf_badge, badge_color=pnf_color)
 
         # 阶段带反馈卡
         fb_correct = sum(1 for r in fb if r.get("verdict") == "correct")
@@ -441,6 +499,8 @@ class CalibrationCenter(QDialog):
         self._model_coef_lay.addStretch(1)
 
     def _on_model_retrain(self):
+        if self._model_th is not None and self._model_th.isRunning():
+            return
         btn = self.sender() or self
         btn.setEnabled(False)
         btn.setText("训练中...")
@@ -453,6 +513,7 @@ class CalibrationCenter(QDialog):
         th.start()
 
     def _on_model_retrain_done(self, btn, th):
+        self._model_th = None
         btn.setEnabled(True)
         btn.setText("⟳ 重新训练")
         self._render_model_tab()
@@ -989,7 +1050,7 @@ class CalibrationCenter(QDialog):
         waiting = sum(1 for r in records if r.get("waiting"))
         if waiting:
             self.sig_summary.setText(
-                self.sig_summary.toPlainText() +
+                self.sig_summary.text() +
                 f"\n说明: {waiting} 条信号在行情末端, 等待未来K线走满后再评估 (非故障)。")
         # 更新筛选器
         self._update_signal_filters(records)
@@ -1284,16 +1345,376 @@ class CalibrationCenter(QDialog):
         self.tl_lay.addStretch(1)
 
     # ══════════════════════════════════════════════════════════════════
+    #  点数图 (PNF) 三档目标测算校准
+    # ══════════════════════════════════════════════════════════════════
+    def _build_pnf_tab(self):
+        page = QWidget()
+        self._pnf_page = page
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(6, 6, 6, 6)
+
+        head = QHBoxLayout()
+        t = QLabel("点数图(PNF) 三档目标测算校准")
+        t.setStyleSheet("font-weight:bold;font-size:11pt;")
+        head.addWidget(t)
+        t2 = QLabel("TR/POC / 保守·中·激进三档 / 概率校准曲线")
+        t2.setStyleSheet(f"color:{theme.C_MUTED};")
+        head.addWidget(t2)
+        head.addStretch(1)
+        btn_eval = QPushButton("⚡ 立即评估")
+        btn_eval.setToolTip("生成合成行情+真实股票,重新评估三档目标准确率")
+        btn_eval.clicked.connect(self._on_pnf_eval)
+        head.addWidget(btn_eval)
+        btn_reload = QPushButton("⟳ 重载报告")
+        btn_reload.setToolTip("从 latest.json 重新加载最近一次评估结果")
+        btn_reload.clicked.connect(self._render_pnf_tab)
+        head.addWidget(btn_reload)
+        btn_export = QPushButton("📤 导出JSON")
+        btn_export.setToolTip("导出最近一次 PNF 评估 JSON 报告副本")
+        btn_export.clicked.connect(self._on_pnf_export)
+        head.addWidget(btn_export)
+        lay.addLayout(head)
+
+        # ── 顶部:近端口径 + 三档(全部样本) 汇总卡片 ──
+        self._pnf_cards = {}
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        for key, title in [
+            ("near_total", "近端目标(±4%)"),
+            ("near_up",    "近端·上涨"),
+            ("near_dn",    "近端·下跌"),
+            ("cons",       "保守档(到达)"),
+            ("mid",        "中档(到达)"),
+            ("agg",        "激进档(到达)"),
+        ]:
+            card = _card()
+            card.setMinimumWidth(150)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 8, 12, 8)
+            cl.setSpacing(2)
+            cl.addWidget(_card_title(title, "9pt"))
+            val = _card_value("—")
+            cl.addWidget(val)
+            sub = _card_sub("")
+            cl.addWidget(sub)
+            self._pnf_cards[key] = (val, sub)
+            row.addWidget(card, 1)
+        lay.addLayout(row)
+
+        # 指标说明
+        note = QLabel(
+            "三档口径: 保守 (TR极值,最近) · 中档 (POC控制点) · 激进 (横向计数线,最远)。  "
+            "理想: 保守档到达率最高 (≥65%) · 激进档最低 (30~50%) · 概率偏差 |bias|&lt;±10pt 为校准合格。  "
+            f"报告目录: <code>{_PNF_ACC_DIR}</code>")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(note)
+
+        # ── 中部: 两个图表 (左:三档到达率柱状图  右:概率校准可靠性曲线) ──
+        charts = QHBoxLayout()
+        charts.setSpacing(8)
+        self.pnf_chart_tiers = pg.PlotWidget(title="三档到达率 · 按保守/中/激进")
+        self.pnf_chart_tiers.setBackground(theme.C_BG)
+        self.pnf_chart_tiers.getViewBox().setBackgroundColor(pg.mkColor(theme.C_BG))
+        self.pnf_chart_tiers.showGrid(x=False, y=True, alpha=0.3)
+        self.pnf_chart_tiers.getAxis('bottom').setPen(pg.mkPen(theme.C_MUTED))
+        self.pnf_chart_tiers.getAxis('left').setPen(pg.mkPen(theme.C_MUTED))
+        self.pnf_chart_tiers.getAxis('left').setRange(0, 100)
+        self.pnf_chart_tiers.getAxis('left').setLabel("到达率 %")
+        charts.addWidget(self.pnf_chart_tiers, 1)
+
+        self.pnf_chart_calib = pg.PlotWidget(title="概率校准 (预测x轴 vs 实际到达y轴)")
+        self.pnf_chart_calib.setBackground(theme.C_BG)
+        self.pnf_chart_calib.getViewBox().setBackgroundColor(pg.mkColor(theme.C_BG))
+        self.pnf_chart_calib.showGrid(x=True, y=True, alpha=0.3)
+        self.pnf_chart_calib.getAxis('bottom').setPen(pg.mkPen(theme.C_MUTED))
+        self.pnf_chart_calib.getAxis('left').setPen(pg.mkPen(theme.C_MUTED))
+        self.pnf_chart_calib.setAspectLocked(lock=False)
+        self.pnf_chart_calib.getAxis('bottom').setRange(30, 100)
+        self.pnf_chart_calib.getAxis('left').setRange(30, 100)
+        self.pnf_chart_calib.getAxis('bottom').setLabel("均预测概率 %")
+        self.pnf_chart_calib.getAxis('left').setLabel("实际到达率 %")
+        charts.addWidget(self.pnf_chart_calib, 1)
+        lay.addLayout(charts)
+
+        # ── 底部: 滚动区 (上半=三档明细表  下半=概率校准表) ──
+        self.pnf_scroll = QScrollArea()
+        self.pnf_scroll.setWidgetResizable(True)
+        self.pnf_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.pnf_content = QWidget()
+        self.pnf_lay = QVBoxLayout(self.pnf_content)
+        self.pnf_lay.setContentsMargins(0, 0, 0, 0)
+        self.pnf_lay.setSpacing(6)
+        self.pnf_scroll.setWidget(self.pnf_content)
+        lay.addWidget(self.pnf_scroll, 1)
+
+        self._render_pnf_tab()
+        self.tabs.addTab(page, "点数图校准")
+
+    def _on_pnf_eval(self):
+        """在 PNF 标签页点击立即评估: 后台线程只跑 PNF (更快反馈)。"""
+        if self._pnf_th is not None and self._pnf_th.isRunning():
+            QMessageBox.information(self, "评估中", "点数图评估正在进行, 请稍候。")
+            return
+        self._pnf_th = _PnfEvalThread(self)
+        self._pnf_th.finished.connect(self._after_pnf_eval)
+        old_title = self.windowTitle()
+        self.setWindowTitle("点数图校准 (评估中...)")
+        self._pnf_old_title = old_title
+        self._pnf_th.start()
+
+    def _after_pnf_eval(self, errors=None):
+        t = getattr(self, "_pnf_old_title", None) or "校准中心"
+        self.setWindowTitle(t)
+        if errors:
+            QMessageBox.warning(self, "评估失败", "\n".join(errors))
+        self.render_all()
+
+    def _on_pnf_export(self):
+        import os, json, shutil
+        rep = _pnf_load_latest()
+        if not rep:
+            QMessageBox.information(self, "PNF 导出", "尚无最新评估报告 — 请先点 ⚡立即评估")
+            return
+        d = QFileDialog.getExistingDirectory(self, "选择导出目录 (PNF 三档目标准确率)")
+        if not d:
+            return
+        ts = (rep.get("ts") or "").replace(":", "-")
+        name = f"pnf_accuracy_{ts}.json" if ts else "pnf_accuracy.json"
+        path = os.path.join(d, name)
+        # 直接复制 latest.json 到用户目录 (保证与 UI 显示完全一致)
+        src = os.path.join(_PNF_ACC_DIR, "pnf_latest.json")
+        if os.path.exists(src):
+            shutil.copy2(src, path)
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(rep, f, ensure_ascii=False, indent=2, default=str)
+        QMessageBox.information(self, "导出完成", f"PNF 评估报告已导出到:\n{path}")
+
+    def _render_pnf_tab(self):
+        rep = _pnf_load_latest()
+        _clear(self.pnf_lay)
+        # ── 汇总卡片 ──
+        def _card_set(key, text, color=None, sub=""):
+            if key not in self._pnf_cards:
+                return
+            val, s = self._pnf_cards[key]
+            val.setText(str(text))
+            c = color or theme.C_TEXT
+            val.setStyleSheet(f"font-size:18pt;font-weight:bold;color:{c};")
+            s.setText(sub)
+        near = rep.get("near") or {}
+        def _near_sub(k):
+            d = near.get(k) or {}
+            n = d.get("n", 0) or 0
+            return f"{d.get('hit', 0)}/{n}" if n else "—"
+        def _hr_color(r, lo=45, hi=65):
+            if r is None:
+                return theme.C_MUTED
+            if r >= hi:
+                return theme.C_UP
+            if r >= lo:
+                return theme.C_AMBER
+            return theme.C_DOWN
+        tot = near.get("total") or {}
+        _card_set("near_total",
+                  f"{tot['rate%']:.0f}%" if tot.get("n") else "—",
+                  color=_hr_color(tot.get("rate%"), 70, 85),
+                  sub=_near_sub("total"))
+        up = near.get("up") or {}
+        _card_set("near_up",
+                  f"{up['rate%']:.0f}%" if up.get("n") else "—",
+                  color=_hr_color(up.get("rate%"), 70, 85),
+                  sub=_near_sub("up"))
+        dn = near.get("dn") or {}
+        _card_set("near_dn",
+                  f"{dn['rate%']:.0f}%" if dn.get("n") else "—",
+                  color=_hr_color(dn.get("rate%"), 70, 85),
+                  sub=_near_sub("dn"))
+
+        # 三档汇总 (bucket="全部" × dir=上方/下方 × tier)
+        tiers = rep.get("tiers") or []
+        all_rows = [t for t in tiers if t.get("bucket") == "全部"]
+        tmap = {}
+        for r in all_rows:
+            tmap.setdefault(r["tier"], []).append(r)
+        def _merge(list_of_rows):
+            n = sum(r.get("n_valid", 0) for r in list_of_rows)
+            h = sum(r.get("n_hit", 0) for r in list_of_rows)
+            return n, h, (h / n * 100.0 if n else None)
+        for tk, key in [("保守", "cons"), ("中", "mid"), ("激进", "agg")]:
+            n, h, hr = _merge(tmap.get(tk, []))
+            if tk == "保守":
+                lo, hi = 55, 65
+            elif tk == "中":
+                lo, hi = 40, 55
+            else:
+                lo, hi = 25, 40
+            _card_set(key, f"{hr:.0f}%" if n else "—",
+                      color=_hr_color(hr, lo, hi),
+                      sub=f"{h}/{n}" if n else "—")
+
+        # ── 图表1: 三档到达率 (全部分桶 × 档位) ──
+        self.pnf_chart_tiers.clear()
+        if tiers:
+            buckets_uniq = list(dict.fromkeys(t["bucket"] for t in tiers))
+            tier_order = ["保守", "中", "激进"]
+            palette = [theme.C_UP, theme.C_AMBER, theme.C_DOWN]
+            # x 轴: 每个 bucket 3 根
+            xs_cons, xs_mid, xs_agg = [], [], []
+            h_cons, h_mid, h_agg = [], [], []
+            for bi, b in enumerate(buckets_uniq):
+                for ti, tk in enumerate(tier_order):
+                    rows = [t for t in tiers if t["bucket"] == b and t["tier"] == tk]
+                    n, h, hr = _merge(rows)
+                    if not n:
+                        continue
+                    xi = bi * 3 + ti
+                    if tk == "保守":
+                        xs_cons.append(xi); h_cons.append(hr)
+                    elif tk == "中":
+                        xs_mid.append(xi); h_mid.append(hr)
+                    else:
+                        xs_agg.append(xi); h_agg.append(hr)
+            if xs_cons:
+                self.pnf_chart_tiers.addItem(pg.BarGraphItem(
+                    x=xs_cons, height=h_cons, width=0.8,
+                    brush=pg.mkBrush(palette[0]), name="保守"))
+            if xs_mid:
+                self.pnf_chart_tiers.addItem(pg.BarGraphItem(
+                    x=xs_mid, height=h_mid, width=0.8,
+                    brush=pg.mkBrush(palette[1]), name="中"))
+            if xs_agg:
+                self.pnf_chart_tiers.addItem(pg.BarGraphItem(
+                    x=xs_agg, height=h_agg, width=0.8,
+                    brush=pg.mkBrush(palette[2]), name="激进"))
+            # x 轴刻度: bucket 名 → 中心位置 (保守的 xi + 1)
+            ticks = []
+            for bi, b in enumerate(buckets_uniq):
+                center = bi * 3 + 1
+                ticks.append((center, b))
+            self.pnf_chart_tiers.getAxis('bottom').setTicks([ticks])
+
+        # ── 图表2: 概率校准散点 (x=avg_prob% y=hit_rate%) + 45度理想线 ──
+        self.pnf_chart_calib.clear()
+        cal = rep.get("calibration") or []
+        if cal:
+            xs, ys, sizes, colors = [], [], [], []
+            for c in cal:
+                ap = c.get("avg_prob%")
+                hr = c.get("hit_rate%")
+                if ap is None or hr is None:
+                    continue
+                xs.append(ap); ys.append(hr)
+                n = c.get("n", 1) or 1
+                sizes.append(min(24, 6 + n // 30))
+                bias = c.get("bias_pp", 0) or 0
+                if abs(bias) <= 10:
+                    colors.append(pg.mkColor(theme.C_UP))
+                elif abs(bias) <= 20:
+                    colors.append(pg.mkColor(theme.C_AMBER))
+                else:
+                    colors.append(pg.mkColor(theme.C_DOWN))
+            if xs:
+                sp = pg.ScatterPlotItem(size=10, pen=pg.mkPen(None))
+                sp.setData(x=xs, y=ys, size=sizes, brush=colors)
+                self.pnf_chart_calib.addItem(sp)
+            # 45° 理想线 y=x
+            ideal_x = [30, 100]; ideal_y = [30, 100]
+            self.pnf_chart_calib.plot(
+                ideal_x, ideal_y,
+                pen=pg.mkPen(theme.C_MUTED, width=1, style=Qt.PenStyle.DashLine))
+
+        # ── 没有报告: 提示占位 ──
+        if not rep:
+            self._placeholder(
+                self.pnf_lay,
+                "(尚无 PNF 评估结果 — 请点击 ⚡立即评估 或先运行 "
+                "`python scripts/eval_pnf_tier_accuracy.py --run` 生成报告。\n"
+                "生产使用: 把脚本加入 crontab (每日 02:10) 自动跑, 结果落盘到 latest.json)")
+            return
+
+        # ── 明细表 1: 三档 × 分桶 ──
+        h_sec1, bs_sec1 = _row_frame(vertical=True)
+        t1 = QLabel("三档到达率 / 概率校准明细")
+        t1.setStyleSheet("font-weight:bold;")
+        bs_sec1.addWidget(t1)
+        hdr = (f"{'分桶':<12}{'方向':<6}{'档位':<6}{'样本':>6}{'到达':>6}"
+               f"{'到达率':>8}{'均概率':>9}{'校准差':>8}{'均空间':>8}")
+        hl = QLabel(hdr)
+        hl.setStyleSheet(f"color:{theme.C_MUTED};font-weight:bold;font-size:9pt;")
+        hl.setFont(pg.QtGui.QFont("Monospace", 9))
+        bs_sec1.addWidget(hl)
+        lines = []
+        for t in tiers:
+            hr_str = f"{t['hit_rate%']:.1f}%"
+            prob_str = f"{t['avg_prob%']:.1f}%" if t.get('avg_prob%') is not None else "  --"
+            cal_str = f"{t['calib_pp']:+.1f}pt" if t.get('calib_pp') is not None else "    --"
+            sp_str = f"{t['avg_space%']:.1f}%" if t.get('avg_space%') is not None else "   --"
+            lines.append(
+                f"{t['bucket']:<12}{t['dir']:<6}{t['tier']:<6}"
+                f"{t['n_valid']:>6}{t['n_hit']:>6}"
+                f"{hr_str:>8}{prob_str:>9}{cal_str:>8}{sp_str:>8}"
+            )
+        lbl1 = QLabel("\n".join(lines))
+        lbl1.setStyleSheet(f"color:{theme.C_TEXT};font-size:9pt;")
+        lbl1.setFont(pg.QtGui.QFont("Monospace", 9))
+        lbl1.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        bs_sec1.addWidget(lbl1)
+        self.pnf_lay.addWidget(h_sec1)
+
+        # ── 明细表 2: 概率校准 (5段×3档=15桶) ──
+        h_sec2, bs_sec2 = _row_frame(vertical=True)
+        t2 = QLabel("概率校准表 (桶=预测概率分档 × 档位)")
+        t2.setStyleSheet("font-weight:bold;")
+        bs_sec2.addWidget(t2)
+        hdr2 = f"{'预测概率档':<18}{'样本':>6}{'到达':>6}{'到达率':>8}{'均预测概率':>11}{'偏差':>8}"
+        hl2 = QLabel(hdr2)
+        hl2.setStyleSheet(f"color:{theme.C_MUTED};font-weight:bold;font-size:9pt;")
+        hl2.setFont(pg.QtGui.QFont("Monospace", 9))
+        bs_sec2.addWidget(hl2)
+        lines2 = []
+        for c in cal:
+            hr_str = f"{c['hit_rate%']:>7.1f}%"
+            ap_str = f"{c['avg_prob%']:>10.1f}%"
+            bias = c.get("bias_pp", 0) or 0
+            mark = "  ⚠" if abs(bias) > 10 else ("  ✓" if abs(bias) <= 5 else "")
+            lines2.append(
+                f"{c['bucket']:<18}{c['n']:>6}{c['n_hit']:>6}"
+                f"{hr_str:>8}{ap_str:>11}{bias:>+7.1f}pt{mark}"
+            )
+        lbl2 = QLabel("\n".join(lines2))
+        lbl2.setStyleSheet(f"color:{theme.C_TEXT};font-size:9pt;")
+        lbl2.setFont(pg.QtGui.QFont("Monospace", 9))
+        lbl2.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        bs_sec2.addWidget(lbl2)
+        self.pnf_lay.addWidget(h_sec2)
+
+        # 评估时间
+        ts = rep.get("ts") or ""
+        meta = QLabel(f"评估时间: {ts}  ·  样本 {rep.get('total_segments')} 段  "
+                      f"(合成 {rep.get('synthetic_n')} + 真实 {rep.get('real_n')})")
+        meta.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        self.pnf_lay.addWidget(meta)
+        self.pnf_lay.addStretch(1)
+
+    # ══════════════════════════════════════════════════════════════════
     #  动作
     # ══════════════════════════════════════════════════════════════════
     def on_eval(self):
+        if self._eval_thread is not None and self._eval_thread.isRunning():
+            QMessageBox.information(self, "评估中", "全面评估正在进行, 请稍候。")
+            return
         self._eval_thread = _EvalThread(self)
         self._eval_thread.finished.connect(self._after_eval)
         self.setWindowTitle("校准中心 (评估中...)")
         self._eval_thread.start()
 
-    def _after_eval(self):
+    def _after_eval(self, errors=None):
         self.setWindowTitle("校准中心")
+        if errors:
+            QMessageBox.warning(self, "部分评估失败", "\n".join(errors))
         self.render_all()
 
     def on_calibrate(self):
@@ -1400,6 +1821,7 @@ class CalibrationCenter(QDialog):
         self._render_model_tab()
         self._render_accuracy()
         self._render_signal_accuracy()
+        self._render_pnf_tab()
         self._render_timeline()
         if self._last_segs:
             self._render_feedback()

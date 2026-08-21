@@ -18,16 +18,21 @@ ROLE_PRICE = Qt.ItemDataRole.UserRole + 4
 ROLE_PCT = Qt.ItemDataRole.UserRole + 5
 
 PHASE_TAG = {
-    "底部整固": ("底", theme.C_UP),
-    "上升趋势": ("升", theme.C_UP),
-    "区间整理": ("区", theme.C_AMBER),
-    "顶部构筑": ("顶", theme.C_DOWN),
-    "下跌趋势": ("跌", theme.C_DOWN),
+    "底部整固": ("底", "up"),
+    "上升趋势": ("升", "up"),
+    "区间整理": ("区", "amber"),
+    "顶部构筑": ("顶", "down"),
+    "下跌趋势": ("跌", "down"),
 }
 
 
 def tag_for(base):
-    return PHASE_TAG.get(base or "", ("", theme.C_MUTED))
+    """返回 (徽标文字, 颜色)。颜色运行时从 theme.C 取, 主题切换后即时生效。"""
+    key = PHASE_TAG.get(base or "")
+    if key is None:
+        return "", theme.C_MUTED
+    txt, color_key = key
+    return txt, theme.C.get(color_key, theme.C_MUTED)
 
 
 class WatchCardDelegate(QStyledItemDelegate):

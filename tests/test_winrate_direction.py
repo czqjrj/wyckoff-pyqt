@@ -27,6 +27,7 @@ def test_vsa_dir_semantics():
 
 def test_event_dir_semantics():
     assert event_dir("Spring") == 1
+    assert event_dir("Shakeout") == 1
     assert event_dir("UTAD") == -1
     assert event_dir("LPSY") == -1
     assert event_dir("SOW") == -1

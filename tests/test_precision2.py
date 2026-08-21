@@ -4,7 +4,7 @@
    因果性 (只用后续已见bar), 中性/末端事件为待确认 None;
 2. 融合层加权: 已确认事件 ×1.2 / 未确认 ×0.5 / 待确认 ×0.9;
 3. 高周期对齐 (_align + fuse_signals mf): 顺周/月线方向加权, 逆势降权;
-4. 波动率状态门 (event_confidence): 低波动蓄势突破加分, 高波动追高减分;
+4. 波动率特征 (event_confidence): 带宽分位 bw_pct 只记录不参与打分;
 5. 回测确认子集 (backtest_events win_confirmed): 已确认事件单独统计。
 """
 import numpy as np
@@ -158,7 +158,11 @@ def test_fuse_with_mf_aligns_score():
 # ─────────────────────── 4. 波动率状态门 (event_confidence) ──────────────────
 
 def test_vol_gate_breaks_in_low_vol():
-    """低波动蓄势中的突破事件置信度更高 (带宽分位<30 加分), 高波动追高减分。"""
+    """带宽分位 (bw_pct) 只记录特征不参与打分 (实证 rho=+0.007 无预测力)。
+
+    回归: 低波动蓄势 / 高波动追高两种形态下, bw_pct 特征应被正确计算
+    (压缩→低分位, 扩张→高分位), 且不影响置信度评分。
+    """
     from wyckoff.events import event_confidence
 
     def conf_for(compress_before, expand_before):
@@ -175,12 +179,18 @@ def test_vol_gate_breaks_in_low_vol():
         else:
             df.loc[:i - expand_before - 1, ["boll_up", "boll_dn"]] = 1.01, 0.99  # 前期压缩
         ev = event_confidence(df, [{"idx": i, "type": "SOS", "price": float(df['close'].iloc[i])}])
-        return ev[0]["conf"]
+        return ev[0]
 
-    c_low = conf_for(compress_before=True, expand_before=20)    # 事件前收窄→蓄势
-    c_hi = conf_for(compress_before=False, expand_before=20)    # 事件前扩张→追高
-    assert c_low > c_hi, f"低波动突破应比高波动更可信: {c_low} vs {c_hi}"
-    assert c_low > 40, f"低波动突破应加分, got {c_low}"
+    e_low = conf_for(compress_before=True, expand_before=20)    # 事件前收窄→蓄势
+    e_hi = conf_for(compress_before=False, expand_before=20)    # 事件前扩张→追高
+    # 特征记录: 压缩段带宽分位应显著低于扩张段
+    assert e_low["feat"]["bw_pct"] is not None and e_hi["feat"]["bw_pct"] is not None
+    assert e_low["feat"]["bw_pct"] < e_hi["feat"]["bw_pct"], \
+        f"低波动带宽分位应更低: {e_low['feat']['bw_pct']} vs {e_hi['feat']['bw_pct']}"
+    # 打分不受带宽状态影响 (bw_pct 不参与打分)
+    assert e_low["conf"] == e_hi["conf"], \
+        f"带宽分位不应影响置信度: {e_low['conf']} vs {e_hi['conf']}"
+    assert 0 < e_low["conf"] <= 100
 
 
 # ─────────────────────── 5. 回测确认子集 win_confirmed ───────────────────────

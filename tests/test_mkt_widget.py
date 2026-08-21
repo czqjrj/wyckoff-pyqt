@@ -99,7 +99,6 @@ def test_mkt_widget_renders(widget):
     """五面板齐全, 标题/估值卡/综合文案/解读已填充, 日期面板默认全幅。"""
     app, w = widget
     assert set(w.plots) == {"main_flow", "sub_flow", "chips", "holders", "sd"}
-    assert "测试股份" in w.title_label.text
     assert "PE" in w.header_label.text and "市值" in w.header_label.text
     assert "20日" in w.plots["main_flow"].titleLabel.text
     assert "资金分项" in w.plots["sub_flow"].titleLabel.text

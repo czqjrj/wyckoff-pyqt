@@ -6,22 +6,56 @@
 import json
 import os
 import tempfile
+import threading
 import time
+
+import requests
+from requests.adapters import HTTPAdapter
 
 from .config import W_RECENT
 
+# ── 共享 HTTP Session ──
+# 全项目所有行情/基本面请求复用一条连接池: 每请求省去完整 TCP+TLS 握手
+# (实测 0.13s → 0.05s), 全市场扫描数千请求累计节省数分钟。
+# urllib3 连接池线程安全, 可多线程共享; connect/read 失败自动重试 1 次。
+_SESSION = None
+_SESSION_LOCK = threading.Lock()
 
-def atomic_write_json(path, data):
+
+def http_session():
+    """返回全局共享 requests.Session (懒初始化, 线程安全)。"""
+    global _SESSION
+    if _SESSION is None:
+        with _SESSION_LOCK:
+            if _SESSION is None:
+                s = requests.Session()
+                try:
+                    from urllib3.util.retry import Retry
+                    retry = Retry(total=1, connect=1, read=1,
+                                  backoff_factor=0.3,
+                                  allowed_methods=frozenset(["GET"]))
+                    adapter = HTTPAdapter(pool_connections=8, pool_maxsize=16,
+                                          max_retries=retry)
+                except Exception:
+                    adapter = HTTPAdapter(pool_connections=8, pool_maxsize=16)
+                s.mount("https://", adapter)
+                s.mount("http://", adapter)
+                _SESSION = s
+    return _SESSION
+
+
+def atomic_write_json(path, data, indent=2):
     """原子写 JSON: 先写临时文件再 os.replace, 崩溃/断电不会截断目标文件。
 
     所有用户数据落盘 (设置/自选/笔记/持仓/准确度/拼音索引等) 都应走这里。
+    indent=None 用紧凑序列化 (大文件体积 -40% 左右, 供高频写入的大记录集用)。
     """
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".wyckoff_tmp_", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=indent)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)

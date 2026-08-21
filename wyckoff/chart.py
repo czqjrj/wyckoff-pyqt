@@ -579,7 +579,7 @@ def _build_locks(df, events, pivots, recent_n=W_RECENT):
     返回 [(idx, price, level)]。与 plot_chart 内联逻辑完全一致, 供桌面端
     pyqtgraph K 线图复用, 避免两处漂移。"""
     locks = []
-    lock_map = {1: {"Spring", "ST", "SC"}, 2: {"SOS", "JOC"}, 3: {"LPS", "BU"}}
+    lock_map = {1: {"Spring", "ST", "SC", "Shakeout"}, 2: {"SOS", "JOC"}, 3: {"LPS", "BU"}}
     recent_ev = [e for e in events if e["idx"] >= len(df) - recent_n]
     recent_ev.sort(key=lambda e: e["idx"])
     for e in recent_ev:
@@ -1040,8 +1040,13 @@ def plot_chart(df, pivots, events, title, fig=None, waves=None, draw_locks=True,
     return fig
 
 
-def _confirm_banner(mkt):
-    """确认机制横幅文本: 阶段置信 + 估值 + 20日主力/5日超大单。无数据返回 None。"""
+def _confirm_banner(mkt, include_valuation=True):
+    """确认机制横幅文本: 阶段置信 + 估值 + 20日主力/5日超大单。无数据返回 None。
+
+    include_valuation=False 时省略 PE/PB 段, 用于 build_market_data (新 pyqtgraph
+    资金透视): 该路径会把 PE/PB 等指标作为结构化 chips 单独输出到 header_items,
+    若 banner 也含 PE/PB 会导致 header 重复渲染同样的指标。
+    """
     q = mkt.get("conf_q")
     if not q and not mkt.get("fund") and not (mkt.get("flow") is not None):
         return None
@@ -1050,7 +1055,7 @@ def _confirm_banner(mkt):
         label = {"high": "高置信", "caution": "需谨慎"}.get(q, "")
         parts.append(f"阶段确认: {label}")
     fund = mkt.get("fund") or {}
-    if fund.get("pe_ttm") and fund["pe_ttm"] > 0:
+    if include_valuation and fund.get("pe_ttm") and fund["pe_ttm"] > 0:
         parts.append(f"PE {fund['pe_ttm']:.1f} / PB {fund.get('pb') or 0:.2f}")
     flow = mkt.get("flow")
     if flow is not None and len(flow):
@@ -1480,15 +1485,18 @@ def build_market_data(market):
             return str(v)
 
     # ── 顶部: 标题 + 估值卡 ──
+    # header_items: [(label, value, color), ...]  label=None 表示横幅整段文本
+    # 用于 widget 侧构建富文本 HTML (加粗标签 + 着色数值 + 分隔符), 替代旧的
+    # 纯文本 "PE 15.3 | PB 2.1 | ..." 单行, 让估值卡视觉层级清晰。
     title_parts = []
     if fund.get("name"):
         title_parts.append(str(fund["name"]))
     title_parts.append("资金透视")
     out["title"] = "  ——  ".join(title_parts)
-    banner = _confirm_banner(mkt)
-    header_parts = []
+    banner = _confirm_banner(mkt, include_valuation=False)
+    header_items = []
     if banner:
-        header_parts.append(banner)
+        header_items.append((None, banner, None))
     if fund:
         pe = fund.get("pe_ttm") or 0
         pb = fund.get("pb") or 0
@@ -1497,19 +1505,24 @@ def build_market_data(market):
         eps = fund.get("eps") or 0
         growth = fund.get("net_growth") or 0
         if pe:
-            header_parts.append(f"PE {pe:.1f}")
+            header_items.append(("PE", f"{pe:.1f}", None))
         if pb:
-            header_parts.append(f"PB {pb:.2f}")
+            header_items.append(("PB", f"{pb:.2f}", None))
         if mcap:
-            header_parts.append(f"市值 {mcap/1e4:.0f}万亿" if mcap >= 1e4
-                                else f"市值 {mcap:.0f}亿")
+            v = (f"{mcap/1e4:.0f}万亿" if mcap >= 1e4 else f"{mcap:.0f}亿")
+            header_items.append(("市值", v, None))
         if turnover:
-            header_parts.append(f"换手率 {turnover:.2f}%")
+            header_items.append(("换手率", f"{turnover:.2f}%", None))
         if eps:
-            header_parts.append(f"EPS {eps:.2f}")
+            header_items.append(("EPS", f"{eps:.2f}", None))
         if growth:
-            header_parts.append(f"净利 {growth:+.1f}%")
-    out["header"] = "  |  ".join(p for p in header_parts if p) or None
+            # 净利增速: 正(红涨) / 负(绿跌) / 平(灰), 给数值着色突出方向
+            gc = _UP if growth > 0 else _DN if growth < 0 else "#64748b"
+            header_items.append(("净利", f"{growth:+.1f}%", gc))
+    out["header"] = "  |  ".join(
+        (v if l is None else f"{l} {v}") for l, v, _c in header_items
+    ) or None
+    out["header_items"] = header_items or None
 
     # ── 左上: 主力资金流向 ──
     if flow_source:
@@ -1679,7 +1692,9 @@ def build_market_data(market):
         caps.append((f"股东户数 {hr:+.1f}%({ht})", hc))
     out["caps"] = None
     out["caps_color"] = None
+    out["caps_items"] = None  # [(text, color), ...]  widget 侧按色 span 渲染
     out["insights"] = None
+    out["insights_items"] = None  # [(text, color), ...]
     if caps:
         cap_text = "  ·  ".join(t for t, _c in caps)
         greens = sum(1 for _t, c in caps if c == _DN)
@@ -1688,6 +1703,7 @@ def build_market_data(market):
                      else _UP if reds and not greens else "#d97706")
         out["caps"] = cap_text
         out["caps_color"] = cap_color
+        out["caps_items"] = caps  # 透传 [(text, color), ...]
         insights = []
         if flow_source:
             m20_v = float(sum(s.get("main", s.get("flow", 0))
@@ -1731,5 +1747,6 @@ def build_market_data(market):
                 insights.append(("卖方主导 · 供给压力", _DN))
         if insights:
             out["insights"] = "  |  ".join(t for t, _c in insights)
+            out["insights_items"] = insights  # 透传 [(text, color), ...]
     return out
 

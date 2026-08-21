@@ -7,8 +7,8 @@
 排版与原版 matplotlib plot_market 一致:
   标题行 + 估值卡行
   主力资金流向 (全宽单行)
-  资金分项 | 当前筹码堆积形态
-  股东户数变化 | 供需强度
+  供需强度 | 当前筹码堆积形态
+  股东户数变化 | 资金分项
   底部综合文案 + 解读提示 (全宽)
 
 交互 (原版为静态图, 这里各面板独立操作):
@@ -24,13 +24,10 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui
 from pyqtgraph.Qt.QtCore import Qt
 
-from wyckoff.config import (C_UP, C_DOWN, FONT_CANDIDATES)
+from wyckoff.config import FONT_CANDIDATES
 
 from . import theme
 from .crosshair import Crosshair
-
-_UP = C_UP
-_DN = C_DOWN
 
 
 def _pen(color, width=1.0, style=None, alpha=1.0):
@@ -110,7 +107,7 @@ class _MktViewBox(pg.ViewBox):
 class MktWidget(pg.GraphicsLayoutWidget):
     """pyqtgraph 资金透视: 标题 + 估值卡 + 主力资金流向全宽 + 4面板 2×2 + 底部总结。"""
 
-    def __init__(self, parent=None, font_size=11):
+    def __init__(self, parent=None, font_size=12):
         super().__init__(parent)
         self._font_size = int(font_size)
         self._n = 0
@@ -131,47 +128,39 @@ class MktWidget(pg.GraphicsLayoutWidget):
     def _build_plots(self, empty=False):
         self.ci.clear()
         self.ci.setContentsMargins(18, 14, 18, 14)
-        self.ci.setSpacing(18)
+        self.ci.setSpacing(12)
         self.plots = {}
         self._date_axes = {}
         self._full_x = {}
-        # 标题行
-        title = self.ci.addLabel("", row=0, col=0, colspan=2, justify="center",
-                                 color=theme.C_TEXT, bold=True,
-                                 size=f"{self._fs(5)}pt")
-        self.title_label = title
-        # 估值卡行
-        head = self.ci.addLabel("", row=1, col=0, colspan=2, justify="center",
+        # 顶部估值卡行 (横幅 + 估值合并一行, 靠左对齐图表)
+        head = self.ci.addLabel("", row=0, col=0, colspan=2, justify="left",
                                 size=f"{self._fs(1)}pt")
         self.header_label = head
         self.ci.layout.setRowStretchFactor(0, 2)
-        self.ci.layout.setRowStretchFactor(1, 2)
 
         # 主力资金流向单独一行全宽 + 其余 4 面板 2×2
-        row2 = self._add_plot("main_flow", "主力资金流向", 2, 0, colspan=2, stretch=63)
-        row3 = self._add_plot("sub_flow", "资金分项", 3, 0, stretch=63)
-        row4 = self._add_plot("chips", "当前筹码堆积形态", 3, 1, stretch=63)
-        row5 = self._add_plot("holders", "股东户数变化", 4, 0, stretch=63)
-        row6 = self._add_plot("sd", "供需强度", 4, 1, stretch=63)
+        row2 = self._add_plot("main_flow", "主力资金流向", 1, 0, colspan=2, stretch=63)
+        row3 = self._add_plot("sub_flow", "资金分项", 3, 1, stretch=63)
+        row4 = self._add_plot("chips", "当前筹码堆积形态", 2, 1, stretch=63)
+        row5 = self._add_plot("holders", "股东户数变化", 3, 0, stretch=63)
+        row6 = self._add_plot("sd", "供需强度", 2, 0, stretch=63)
         self.ci.layout.setRowStretchFactor(row2, 63)
         self.ci.layout.setRowStretchFactor(row3, 63)
         self.ci.layout.setRowStretchFactor(row4, 63)
         self.ci.layout.setRowStretchFactor(row5, 63)
         self.ci.layout.setRowStretchFactor(row6, 63)
 
-        cap = self.ci.addLabel("", row=5, col=0, colspan=2, justify="center",
+        cap = self.ci.addLabel("", row=4, col=0, colspan=2, justify="center",
                                size=f"{self._fs(1)}pt", bold=True)
         self.cap_label = cap
-        self.ci.layout.setRowStretchFactor(5, 3)
-        ins = self.ci.addLabel("", row=6, col=0, colspan=2, justify="center",
+        self.ci.layout.setRowStretchFactor(4, 3)
+        ins = self.ci.addLabel("", row=5, col=0, colspan=2, justify="center",
                                size=f"{self._fs(0)}pt")
         self.insights_label = ins
-        self.ci.layout.setRowStretchFactor(6, 3)
+        self.ci.layout.setRowStretchFactor(5, 3)
 
         if empty:
             self._n = 0
-            self.title_label.setText("资金透视", color=theme.C_TEXT, bold=True,
-                                     size=f"{self._fs(5)}pt")
             self._show_empty(True)
 
     def _add_plot(self, key, title, row, col, colspan=1, stretch=13):
@@ -184,7 +173,7 @@ class MktWidget(pg.GraphicsLayoutWidget):
                       **{"bold": True})
         plot.hideButtons()
         plot.getViewBox().setBackgroundColor(pg.mkColor(theme.C_PANEL))
-        plot.showGrid(x=True, y=True, alpha=0.3)
+        plot.showGrid(x=True, y=True, alpha=0.25)
         plot.getViewBox().setMouseEnabled(x=True, y=False)
         for ax_name in ("left", "bottom"):
             ax = plot.getAxis(ax_name)
@@ -205,7 +194,7 @@ class MktWidget(pg.GraphicsLayoutWidget):
             self.insights_label.setText("")
 
     def _wrap_bottom_labels(self):
-        """限制底部文案行文本宽度, 超宽自动换行, 避免横向溢出画布。"""
+        """限制文案行文本宽度, 超宽自动换行, 避免横向溢出画布。"""
         w = max(self.width() - 64, 280)
         for lab in (self.header_label, self.cap_label, self.insights_label):
             if lab is not None and lab.item is not None:
@@ -239,22 +228,11 @@ class MktWidget(pg.GraphicsLayoutWidget):
         self._detach_crosshairs()
         self._build_plots(empty=True)
         if not d:
-            self.title_label.setText("资金透视", color=theme.C_TEXT, bold=True,
-                                     size=f"{self._fs(5)}pt")
             self._show_empty(True)
             return
         self._empty = False
-        self.title_label.setText(d.get("title") or "资金透视", color=theme.C_TEXT,
-                                 bold=True, size=f"{self._fs(5)}pt")
-        header = d.get("header")
-        if header:
-            self.header_label.setText(
-                f"<div style=\"background:{theme.C_PANEL};border:1px solid {theme.C_BORDER};"
-                f"border-radius:6px;padding:6px 16px;color:{theme.C_TEXT};"
-                f"letter-spacing:1px;\">"
-                f"{header}</div>", size=f"{self._fs(1)}pt")
-        else:
-            self.header_label.setText("")
+        self.header_label.setText(
+            self._render_header_html(d), size=f"{self._fs(1)}pt")
 
         self._draw_main_flow(d.get("main_flow"))
         self._draw_sub_flow(d.get("sub_flow"))
@@ -262,17 +240,10 @@ class MktWidget(pg.GraphicsLayoutWidget):
         self._draw_holders(d.get("holders"))
         self._draw_sd(d.get("sd"))
 
-        cap_text = d.get("caps")
-        cap_color = d.get("caps_color") or theme.C_TEXT
-        self.cap_label.setText(cap_text or "", color=cap_color, bold=True,
-                               size=f"{self._fs(1)}pt")
-        insights_text = d.get("insights") or ""
-        if insights_text:
-            self.insights_label.setText(
-                f"<div style=\"color:{theme.C_MUTED};letter-spacing:0.5px;\">"
-                f"{insights_text}</div>", size=f"{self._fs(0)}pt")
-        else:
-            self.insights_label.setText("")
+        self.cap_label.setText(
+            self._render_caps_html(d), size=f"{self._fs(1)}pt")
+        self.insights_label.setText(
+            self._render_insights_html(d), size=f"{self._fs(0)}pt")
         self._wrap_bottom_labels()
         self._set_panel_title("main_flow", (d.get("main_flow") or {}).get("title"))
         self._set_panel_title("sub_flow", (d.get("sub_flow") or {}).get("title"))
@@ -340,7 +311,6 @@ class MktWidget(pg.GraphicsLayoutWidget):
     def _set_chips_shape(self, shape_txt, color):
         plot = self.plots["chips"]
         t = plot.titleLabel.text
-        # 第二行着色: 重设 titleLabel 的富文本
         plot.titleLabel.setText(
             f"<span style='color:{theme.C_TEXT};font-weight:bold;font-size:{self._fs(1)}pt;'>"
             f"{t}</span><br/>"
@@ -367,7 +337,7 @@ class MktWidget(pg.GraphicsLayoutWidget):
         vals = np.asarray(mf["vals"], dtype=float)
         plot, n = self._date_plot("main_flow", days)
         plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=_pen("#9ca3af", 0.8)))
-        brushes = [pg.mkBrush(_UP if v >= 0 else _DN) for v in vals]
+        brushes = [pg.mkBrush(theme.C_UP if v >= 0 else theme.C_DOWN) for v in vals]
         plot.addItem(pg.BarGraphItem(x=x, height=vals, width=0.72,
                                      brushes=brushes, pen=None))
         legend = plot.addLegend(offset=(12, 4))
@@ -422,7 +392,7 @@ class MktWidget(pg.GraphicsLayoutWidget):
         else:
             x = np.arange(len(sf["vals"]))
             vals = np.asarray(sf["vals"], dtype=float)
-            brushes = [pg.mkBrush(_UP if v >= 0 else _DN) for v in vals]
+            brushes = [pg.mkBrush(theme.C_UP if v >= 0 else theme.C_DOWN) for v in vals]
             plot.addItem(pg.BarGraphItem(x=x, height=vals, width=0.72,
                                          brushes=brushes, pen=None))
             plot.setYRange(*self._yrange0(vals), padding=0)
@@ -438,7 +408,7 @@ class MktWidget(pg.GraphicsLayoutWidget):
         cur = float(chips["cur"])
         poc = float(chips["poc"])
         h = (prices[1] - prices[0]) * 0.85 if len(prices) > 1 else 1.0
-        brushes = [pg.mkBrush(_UP if p >= cur else _DN) for p in prices]
+        brushes = [pg.mkBrush(theme.C_UP if p >= cur else theme.C_DOWN) for p in prices]
         plot.addItem(pg.BarGraphItem(x0=np.zeros(len(prices)), x1=weights,
                                      y=prices - h / 2, height=h,
                                      brushes=brushes, pen=None))
@@ -472,7 +442,7 @@ class MktWidget(pg.GraphicsLayoutWidget):
         x = np.arange(len(days))
         nums = np.asarray(holders["nums"], dtype=float)
         ratios = holders["ratios"]
-        cols = [pg.mkBrush(_UP if r > 0 else _DN) for r in ratios]
+        cols = [pg.mkBrush(theme.C_UP if r > 0 else theme.C_DOWN) for r in ratios]
         plot.addItem(pg.BarGraphItem(x=x, height=nums, width=0.6,
                                      brushes=cols, pen=None))
         plot.plot(x, nums, pen=_pen(theme.C_MUTED, 1.5), symbol="d", symbolSize=4,
@@ -496,9 +466,9 @@ class MktWidget(pg.GraphicsLayoutWidget):
         wd2 = 0.36
         legend = plot.addLegend(offset=(12, 4))
         bd = pg.BarGraphItem(x=x - wd2 / 2, height=dem, width=wd2, pen=None,
-                             brush=pg.mkBrush(_UP))
+                             brush=pg.mkBrush(theme.C_UP))
         bs = pg.BarGraphItem(x=x + wd2 / 2, height=sup, width=wd2, pen=None,
-                             brush=pg.mkBrush(_DN))
+                             brush=pg.mkBrush(theme.C_DOWN))
         plot.addItem(bd)
         plot.addItem(bs)
         legend.addItem(bd, "需求")
@@ -508,6 +478,66 @@ class MktWidget(pg.GraphicsLayoutWidget):
         plot.setYRange(0.0, max(hi * 1.15, 1e-9), padding=0)
 
     # ── 辅助 ──
+    def _render_header_html(self, d):
+        """顶部估值卡: 横幅 + 估值合并一行, 简洁富文本。
+        横幅项 accent 色, 估值项 [标签 muted] [值 text+bold 或方向色], | 分隔。"""
+        if not d:
+            return ""
+        items = d.get("header_items")
+        if not items:
+            txt = d.get("header") or ""
+            return txt
+        sep = f"&nbsp;<span style=\"color:{theme.C_BORDER};\">|</span>&nbsp;"
+        parts = []
+        for label, value, color in items:
+            if label is None:
+                # 横幅: accent 色 + bold
+                parts.append(
+                    f"<span style=\"color:{theme.C_ACCENT};font-weight:bold;\">"
+                    f"{value}</span>")
+            else:
+                vc = color or theme.C_TEXT
+                parts.append(
+                    f"<span style=\"color:{theme.C_MUTED};\">{label}</span>&nbsp;"
+                    f"<b style=\"color:{vc};\">{value}</b>")
+        return sep.join(parts)
+
+    def _render_header2_html(self, d):
+        """已废弃: 横幅与估值合并回单行, 此方法保留空返回避免调用报错。"""
+        return ""
+
+    def _render_caps_html(self, d):
+        """综合文案: 每项按方向色着色, · 分隔。简洁单行, 无卡片装饰。"""
+        if not d:
+            return ""
+        items = d.get("caps_items")
+        if items:
+            sep = f"&nbsp;<span style=\"color:{theme.C_BORDER};\">·</span>&nbsp;"
+            spans = [
+                f"<span style=\"color:{c or theme.C_TEXT};font-weight:bold;\">{t}</span>"
+                for t, c in items
+            ]
+            return sep.join(spans)
+        txt = d.get("caps") or ""
+        if not txt:
+            return ""
+        color = d.get("caps_color") or theme.C_TEXT
+        return f"<span style=\"color:{color};font-weight:bold;\">{txt}</span>"
+
+    def _render_insights_html(self, d):
+        """解读提示: 每条按方向色着色, | 分隔。简洁辅助文案。"""
+        if not d:
+            return ""
+        items = d.get("insights_items")
+        if items:
+            sep = f"&nbsp;<span style=\"color:{theme.C_BORDER};\">|</span>&nbsp;"
+            spans = [
+                f"<span style=\"color:{c or theme.C_MUTED};\">{t}</span>"
+                for t, c in items
+            ]
+            return sep.join(spans)
+        return d.get("insights") or ""
+
     def _empty_panel(self, key):
         plot = self.plots[key]
         plot.clear()

@@ -110,7 +110,7 @@ def _build_qss(C):
     return f"""
 * {{
     font-family: "{FONT_CANDIDATES[0]}";
-    font-size: 11pt;
+    font-size: 12pt;
 }}
 QMainWindow, QDialog {{
     background: {C_BG};
@@ -121,8 +121,8 @@ QWidget {{
 QToolBar {{
     background: {C_PANEL};
     border-bottom: 1px solid {C_BORDER};
-    padding: 4px;
-    spacing: 6px;
+    padding: 6px;
+    spacing: 10px;
 }}
 QWidget#topBar {{
     background: {C_PANEL};
@@ -157,8 +157,8 @@ QLabel#tbAdvice {{
 QLabel#panelHead {{
     color: {C_MUTED};
     font-weight: bold;
-    font-size: 10pt;
-    padding-left: 2px;
+    font-size: 12pt;
+    padding-left: 4px;
 }}
 QWidget#rightPanel {{
     background: {C_PANEL};
@@ -180,7 +180,7 @@ QListWidget#sectionList {{
 }}
 QListWidget#sectionList::item {{
     border-radius: 3px;
-    padding: 2px 8px;
+    padding: 6px 12px;
     margin: 1px 0;
     color: {C_TEXT};
 }}
@@ -216,7 +216,7 @@ QTableWidget {{
     selection-color: {C_TEXT};
 }}
 QTableWidget::item {{
-    padding: 3px 6px;
+    padding: 5px 8px;
 }}
 QHeaderView::section {{
     background: {C["header"]};
@@ -224,14 +224,14 @@ QHeaderView::section {{
     border: none;
     border-right: 1px solid {C_BORDER};
     border-bottom: 1px solid {C_BORDER};
-    padding: 5px 6px;
+    padding: 6px 8px;
     font-weight: bold;
 }}
 QToolBar QToolButton {{
     background: {C_PANEL};
     border: 1px solid {C_BORDER};
     border-radius: 4px;
-    padding: 4px 10px;
+    padding: 6px 12px;
     color: {C_TEXT};
 }}
 QToolBar QToolButton:hover {{
@@ -275,7 +275,7 @@ QTabWidget::pane {{
 }}
 QTabBar::tab {{
     background: transparent;
-    padding: 5px 14px;
+    padding: 7px 18px;
     border: 1px solid transparent;
     border-bottom: none;
     margin-right: 2px;
@@ -297,7 +297,7 @@ QListWidget {{
     outline: none;
 }}
 QListWidget::item {{
-    padding: 4px 8px;
+    padding: 5px 10px;
     border-bottom: 1px solid {C["zebra"]};
 }}
 QListWidget::item:hover {{
@@ -309,26 +309,26 @@ QListWidget::item:selected {{
 }}
 QScrollBar:vertical {{
     background: {C_BG};
-    width: 10px;
+    width: 12px;
     margin: 0;
 }}
 QScrollBar::handle:vertical {{
     background: {C_BORDER};
-    border-radius: 5px;
-    min-height: 24px;
+    border-radius: 6px;
+    min-height: 30px;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 QScrollBar:horizontal {{
     background: {C_BG};
-    height: 10px;
+    height: 12px;
     margin: 0;
 }}
 QScrollBar::handle:horizontal {{
     background: {C_BORDER};
-    border-radius: 5px;
-    min-width: 24px;
+    border-radius: 6px;
+    min-width: 30px;
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0;
@@ -336,6 +336,11 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
 QStatusBar {{
     background: {C_PANEL};
     border-top: 1px solid {C_BORDER};
+    padding: 4px 8px;
+    spacing: 8px;
+}}
+QStatusBar::item {{
+    border: none;
 }}
 QGroupBox {{
     border: 1px solid {C_BORDER};
@@ -433,6 +438,7 @@ QMenu::separator {{
 }}
 QDialog {{
     background: {C_PANEL};
+    font-size: 13pt;
 }}
 QDockWidget {{
     background: {C_PANEL};

@@ -17,13 +17,30 @@ dependencies = [
     "requests>=2.31",
     "pypinyin>=0.50",
     "openai>=1.30",
+    "msgpack>=1.0",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+lint = ["ruff>=0.6"]
 
 [tool.setuptools]
 packages = ["wyckoff", "desktop"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["docs", "build", "dist"]
+
+[tool.ruff.lint]
+# E/F=pyflakes+pycodestyle, W=warnings, I=import排序, UP=pyupgrade
+select = ["E", "F", "W", "I", "UP"]
+ignore = [
+    "E501",   # 行长由 line-length 控制, 不强制报错
+    "E722",   # 项目已统一用 except Exception (非 bare except), 允许
+    "E402",   # 模块延迟导入 (QThread.run 内 import) 较多, 允许
+    "UP035",  # typing.List/Dict 等兼容旧写法, 不强制升级
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

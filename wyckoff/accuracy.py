@@ -24,6 +24,7 @@ import time
 import numpy as np
 
 from ._shared import atomic_write_json, run_pending_eval
+from ._log import log_exc
 from .config import VERSION, W_RECENT
 from .paths import ACCURACY_FILE, DATA_DIR
 from .indicators import add_indicators, find_pivots
@@ -328,7 +329,8 @@ def _evaluate_one(rec):
         mdf = add_indicators(fetch_kline("sh000001", datalen=len(df), scale=scale))
         if len(mdf) >= len(df):
             bench = {"close": mdf["close"].to_numpy()[:len(df)]}
-    except Exception:
+    except Exception as e:
+        log_exc("获取上证基准失败 (降级为无 bench)", e)
         bench = None
     results = dict(rec.get("results") or {})
     changed = False
@@ -356,8 +358,8 @@ def _evaluate_one(rec):
         ev = detect_all(df, piv)
         auto_evaluate_feedback(df, rec.get("symbol") or "", scale,
                                phase_segments(df, piv, ev))
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("评估时自动标注阶段带反馈失败", e)
     return changed
 
 
@@ -632,6 +634,15 @@ if __name__ == "__main__":
             print(f"本次新增信号评估 {ns} 条")
         except Exception as e:
             print(f"信号评估跳过: {e}")
+        # 在线校准模型同步重训 (同一 cron 钩子): 评估产出新标签后立即刷新模型
+        try:
+            from .online_model import run_auto_model_retrain
+            st = run_auto_model_retrain()
+            print(f"\n模型重训: 标签 {st.get('n_labels', 0)} 条, "
+                  f"AUC={st.get('auc_oos')}, "
+                  f"接管conf={'是' if st.get('ready') else '否'}")
+        except Exception as e:
+            print(f"模型重训跳过: {e}")
     elif "--export" in sys.argv:
         p = export_accuracy(load_accuracy())
         print(f"已导出: {p}")

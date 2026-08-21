@@ -1,0 +1,543 @@
+{
+  "ts": "2026-08-21T07:02:15",
+  "total_segments": 530,
+  "synthetic_n": 530,
+  "real_n": 0,
+  "near": {
+    "up": {
+      "n": 259,
+      "hit": 248,
+      "rate%": 95.8
+    },
+    "dn": {
+      "n": 271,
+      "hit": 267,
+      "rate%": 98.5
+    },
+    "total": {
+      "n": 530,
+      "hit": 515,
+      "rate%": 97.2
+    }
+  },
+  "tiers": [
+    {
+      "bucket": "全部",
+      "dir": "上方",
+      "tier": "保守",
+      "n_valid": 530,
+      "n_hit": 331,
+      "hit_rate%": 62.5,
+      "avg_prob%": 68.5,
+      "calib_pp": 6.0,
+      "avg_space%": 17.8
+    },
+    {
+      "bucket": "全部",
+      "dir": "上方",
+      "tier": "中",
+      "n_valid": 530,
+      "n_hit": 268,
+      "hit_rate%": 50.6,
+      "avg_prob%": 55.9,
+      "calib_pp": 5.3,
+      "avg_space%": 29.5
+    },
+    {
+      "bucket": "全部",
+      "dir": "上方",
+      "tier": "激进",
+      "n_valid": 530,
+      "n_hit": 261,
+      "hit_rate%": 49.2,
+      "avg_prob%": 52.7,
+      "calib_pp": 3.5,
+      "avg_space%": 31.2
+    },
+    {
+      "bucket": "全部",
+      "dir": "下方",
+      "tier": "保守",
+      "n_valid": 530,
+      "n_hit": 385,
+      "hit_rate%": 72.6,
+      "avg_prob%": 68.9,
+      "calib_pp": -3.8,
+      "avg_space%": -16.8
+    },
+    {
+      "bucket": "全部",
+      "dir": "下方",
+      "tier": "中",
+      "n_valid": 530,
+      "n_hit": 315,
+      "hit_rate%": 59.4,
+      "avg_prob%": 56.0,
+      "calib_pp": -3.4,
+      "avg_space%": -28.6
+    },
+    {
+      "bucket": "全部",
+      "dir": "下方",
+      "tier": "激进",
+      "n_valid": 530,
+      "n_hit": 302,
+      "hit_rate%": 57.0,
+      "avg_prob%": 52.4,
+      "calib_pp": -4.6,
+      "avg_space%": -29.2
+    },
+    {
+      "bucket": "方向=上",
+      "dir": "上方",
+      "tier": "保守",
+      "n_valid": 259,
+      "n_hit": 193,
+      "hit_rate%": 74.5,
+      "avg_prob%": 77.3,
+      "calib_pp": 2.8,
+      "avg_space%": 11.5
+    },
+    {
+      "bucket": "方向=上",
+      "dir": "上方",
+      "tier": "中",
+      "n_valid": 259,
+      "n_hit": 164,
+      "hit_rate%": 63.3,
+      "avg_prob%": 66.3,
+      "calib_pp": 3.0,
+      "avg_space%": 17.3
+    },
+    {
+      "bucket": "方向=上",
+      "dir": "上方",
+      "tier": "激进",
+      "n_valid": 259,
+      "n_hit": 161,
+      "hit_rate%": 62.2,
+      "avg_prob%": 62.0,
+      "calib_pp": -0.2,
+      "avg_space%": 17.3
+    },
+    {
+      "bucket": "方向=下",
+      "dir": "下方",
+      "tier": "保守",
+      "n_valid": 271,
+      "n_hit": 214,
+      "hit_rate%": 79.0,
+      "avg_prob%": 76.7,
+      "calib_pp": -2.2,
+      "avg_space%": -11.3
+    },
+    {
+      "bucket": "方向=下",
+      "dir": "下方",
+      "tier": "中",
+      "n_valid": 271,
+      "n_hit": 191,
+      "hit_rate%": 70.5,
+      "avg_prob%": 64.6,
+      "calib_pp": -5.9,
+      "avg_space%": -20.1
+    },
+    {
+      "bucket": "方向=下",
+      "dir": "下方",
+      "tier": "激进",
+      "n_valid": 271,
+      "n_hit": 186,
+      "hit_rate%": 68.6,
+      "avg_prob%": 59.7,
+      "calib_pp": -8.9,
+      "avg_space%": -17.9
+    },
+    {
+      "bucket": "区间=吸筹",
+      "dir": "上方",
+      "tier": "保守",
+      "n_valid": 251,
+      "n_hit": 199,
+      "hit_rate%": 79.3,
+      "avg_prob%": 75.8,
+      "calib_pp": -3.5,
+      "avg_space%": 12.9
+    },
+    {
+      "bucket": "区间=吸筹",
+      "dir": "上方",
+      "tier": "中",
+      "n_valid": 251,
+      "n_hit": 171,
+      "hit_rate%": 68.1,
+      "avg_prob%": 64.4,
+      "calib_pp": -3.7,
+      "avg_space%": 19.5
+    },
+    {
+      "bucket": "区间=吸筹",
+      "dir": "上方",
+      "tier": "激进",
+      "n_valid": 251,
+      "n_hit": 168,
+      "hit_rate%": 66.9,
+      "avg_prob%": 60.3,
+      "calib_pp": -6.7,
+      "avg_space%": 19.9
+    },
+    {
+      "bucket": "区间=吸筹",
+      "dir": "下方",
+      "tier": "保守",
+      "n_valid": 251,
+      "n_hit": 160,
+      "hit_rate%": 63.7,
+      "avg_prob%": 62.2,
+      "calib_pp": -1.6,
+      "avg_space%": -21.7
+    },
+    {
+      "bucket": "区间=吸筹",
+      "dir": "下方",
+      "tier": "中",
+      "n_valid": 251,
+      "n_hit": 117,
+      "hit_rate%": 46.6,
+      "avg_prob%": 48.6,
+      "calib_pp": 2.0,
+      "avg_space%": -36.5
+    },
+    {
+      "bucket": "区间=吸筹",
+      "dir": "下方",
+      "tier": "激进",
+      "n_valid": 251,
+      "n_hit": 108,
+      "hit_rate%": 43.0,
+      "avg_prob%": 46.1,
+      "calib_pp": 3.1,
+      "avg_space%": -39.8
+    },
+    {
+      "bucket": "区间=派发",
+      "dir": "上方",
+      "tier": "保守",
+      "n_valid": 279,
+      "n_hit": 132,
+      "hit_rate%": 47.3,
+      "avg_prob%": 61.8,
+      "calib_pp": 14.5,
+      "avg_space%": 22.3
+    },
+    {
+      "bucket": "区间=派发",
+      "dir": "上方",
+      "tier": "中",
+      "n_valid": 279,
+      "n_hit": 97,
+      "hit_rate%": 34.8,
+      "avg_prob%": 48.2,
+      "calib_pp": 13.4,
+      "avg_space%": 38.4
+    },
+    {
+      "bucket": "区间=派发",
+      "dir": "上方",
+      "tier": "激进",
+      "n_valid": 279,
+      "n_hit": 93,
+      "hit_rate%": 33.3,
+      "avg_prob%": 45.9,
+      "calib_pp": 12.6,
+      "avg_space%": 41.4
+    },
+    {
+      "bucket": "区间=派发",
+      "dir": "下方",
+      "tier": "保守",
+      "n_valid": 279,
+      "n_hit": 225,
+      "hit_rate%": 80.6,
+      "avg_prob%": 74.9,
+      "calib_pp": -5.7,
+      "avg_space%": -12.4
+    },
+    {
+      "bucket": "区间=派发",
+      "dir": "下方",
+      "tier": "中",
+      "n_valid": 279,
+      "n_hit": 198,
+      "hit_rate%": 71.0,
+      "avg_prob%": 62.7,
+      "calib_pp": -8.3,
+      "avg_space%": -21.5
+    },
+    {
+      "bucket": "区间=派发",
+      "dir": "下方",
+      "tier": "激进",
+      "n_valid": 279,
+      "n_hit": 194,
+      "hit_rate%": 69.5,
+      "avg_prob%": 58.0,
+      "calib_pp": -11.5,
+      "avg_space%": -19.7
+    },
+    {
+      "bucket": "吸筹+向上",
+      "dir": "上方",
+      "tier": "保守",
+      "n_valid": 218,
+      "n_hit": 174,
+      "hit_rate%": 79.8,
+      "avg_prob%": 78.7,
+      "calib_pp": -1.1,
+      "avg_space%": 10.3
+    },
+    {
+      "bucket": "吸筹+向上",
+      "dir": "上方",
+      "tier": "中",
+      "n_valid": 218,
+      "n_hit": 150,
+      "hit_rate%": 68.8,
+      "avg_prob%": 67.0,
+      "calib_pp": -1.8,
+      "avg_space%": 16.1
+    },
+    {
+      "bucket": "吸筹+向上",
+      "dir": "上方",
+      "tier": "激进",
+      "n_valid": 218,
+      "n_hit": 147,
+      "hit_rate%": 67.4,
+      "avg_prob%": 62.5,
+      "calib_pp": -4.9,
+      "avg_space%": 16.3
+    },
+    {
+      "bucket": "吸筹+向上",
+      "dir": "下方",
+      "tier": "保守",
+      "n_valid": 218,
+      "n_hit": 141,
+      "hit_rate%": 64.7,
+      "avg_prob%": 61.2,
+      "calib_pp": -3.4,
+      "avg_space%": -22.1
+    },
+    {
+      "bucket": "吸筹+向上",
+      "dir": "下方",
+      "tier": "中",
+      "n_valid": 218,
+      "n_hit": 101,
+      "hit_rate%": 46.3,
+      "avg_prob%": 47.2,
+      "calib_pp": 0.8,
+      "avg_space%": -37.5
+    },
+    {
+      "bucket": "吸筹+向上",
+      "dir": "下方",
+      "tier": "激进",
+      "n_valid": 218,
+      "n_hit": 93,
+      "hit_rate%": 42.7,
+      "avg_prob%": 44.6,
+      "calib_pp": 1.9,
+      "avg_space%": -41.3
+    },
+    {
+      "bucket": "派发+向下",
+      "dir": "上方",
+      "tier": "保守",
+      "n_valid": 238,
+      "n_hit": 113,
+      "hit_rate%": 47.5,
+      "avg_prob%": 60.5,
+      "calib_pp": 13.0,
+      "avg_space%": 23.1
+    },
+    {
+      "bucket": "派发+向下",
+      "dir": "上方",
+      "tier": "中",
+      "n_valid": 238,
+      "n_hit": 83,
+      "hit_rate%": 34.9,
+      "avg_prob%": 45.7,
+      "calib_pp": 10.8,
+      "avg_space%": 41.0
+    },
+    {
+      "bucket": "派发+向下",
+      "dir": "上方",
+      "tier": "激进",
+      "n_valid": 238,
+      "n_hit": 79,
+      "hit_rate%": 33.2,
+      "avg_prob%": 43.7,
+      "calib_pp": 10.5,
+      "avg_space%": 44.5
+    },
+    {
+      "bucket": "派发+向下",
+      "dir": "下方",
+      "tier": "保守",
+      "n_valid": 238,
+      "n_hit": 195,
+      "hit_rate%": 81.9,
+      "avg_prob%": 77.9,
+      "calib_pp": -4.0,
+      "avg_space%": -10.2
+    },
+    {
+      "bucket": "派发+向下",
+      "dir": "下方",
+      "tier": "中",
+      "n_valid": 238,
+      "n_hit": 175,
+      "hit_rate%": 73.5,
+      "avg_prob%": 65.4,
+      "calib_pp": -8.1,
+      "avg_space%": -18.8
+    },
+    {
+      "bucket": "派发+向下",
+      "dir": "下方",
+      "tier": "激进",
+      "n_valid": 238,
+      "n_hit": 171,
+      "hit_rate%": 71.8,
+      "avg_prob%": 60.2,
+      "calib_pp": -11.7,
+      "avg_space%": -16.2
+    }
+  ],
+  "calibration": [
+    {
+      "bucket": "50~60%(中)",
+      "n": 102,
+      "n_hit": 59,
+      "hit_rate%": 57.8,
+      "avg_prob%": 54.9,
+      "bias_pp": -2.9
+    },
+    {
+      "bucket": "50~60%(保守)",
+      "n": 66,
+      "n_hit": 28,
+      "hit_rate%": 42.4,
+      "avg_prob%": 54.3,
+      "bias_pp": 11.8
+    },
+    {
+      "bucket": "50~60%(激进)",
+      "n": 127,
+      "n_hit": 79,
+      "hit_rate%": 62.2,
+      "avg_prob%": 54.6,
+      "bias_pp": -7.7
+    },
+    {
+      "bucket": "60~70%(中)",
+      "n": 83,
+      "n_hit": 59,
+      "hit_rate%": 71.1,
+      "avg_prob%": 64.8,
+      "bias_pp": -6.3
+    },
+    {
+      "bucket": "60~70%(保守)",
+      "n": 49,
+      "n_hit": 34,
+      "hit_rate%": 69.4,
+      "avg_prob%": 64.8,
+      "bias_pp": -4.6
+    },
+    {
+      "bucket": "60~70%(激进)",
+      "n": 85,
+      "n_hit": 62,
+      "hit_rate%": 72.9,
+      "avg_prob%": 64.5,
+      "bias_pp": -8.4
+    },
+    {
+      "bucket": "70~80%(中)",
+      "n": 88,
+      "n_hit": 70,
+      "hit_rate%": 79.5,
+      "avg_prob%": 74.7,
+      "bias_pp": -4.9
+    },
+    {
+      "bucket": "70~80%(保守)",
+      "n": 68,
+      "n_hit": 52,
+      "hit_rate%": 76.5,
+      "avg_prob%": 74.1,
+      "bias_pp": -2.3
+    },
+    {
+      "bucket": "70~80%(激进)",
+      "n": 81,
+      "n_hit": 65,
+      "hit_rate%": 80.2,
+      "avg_prob%": 74.9,
+      "bias_pp": -5.3
+    },
+    {
+      "bucket": "<50%(中)",
+      "n": 121,
+      "n_hit": 42,
+      "hit_rate%": 34.7,
+      "avg_prob%": 41.1,
+      "bias_pp": 6.4
+    },
+    {
+      "bucket": "<50%(保守)",
+      "n": 56,
+      "n_hit": 18,
+      "hit_rate%": 32.1,
+      "avg_prob%": 41.5,
+      "bias_pp": 9.3
+    },
+    {
+      "bucket": "<50%(激进)",
+      "n": 148,
+      "n_hit": 62,
+      "hit_rate%": 41.9,
+      "avg_prob%": 40.4,
+      "bias_pp": -1.5
+    },
+    {
+      "bucket": "≥80%(中)",
+      "n": 136,
+      "n_hit": 125,
+      "hit_rate%": 91.9,
+      "avg_prob%": 89.4,
+      "bias_pp": -2.6
+    },
+    {
+      "bucket": "≥80%(保守)",
+      "n": 291,
+      "n_hit": 275,
+      "hit_rate%": 94.5,
+      "avg_prob%": 91.7,
+      "bias_pp": -2.8
+    },
+    {
+      "bucket": "≥80%(激进)",
+      "n": 89,
+      "n_hit": 79,
+      "hit_rate%": 88.8,
+      "avg_prob%": 87.3,
+      "bias_pp": -1.5
+    }
+  ]
+}

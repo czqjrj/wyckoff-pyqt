@@ -80,8 +80,12 @@ def _test_counts(df, pivots, level, is_support):
 
 
 def _spring_confirmed(events, df):
-    """最近 Spring 是否成功 (后 8 根收盘未跌破其低点)。"""
-    springs = [e for e in events if e["type"] == "Spring"]
+    """最近 Spring/Shakeout 是否成功 (后 8 根收盘未跌破其低点)。
+
+    Shakeout 与 Spring 同为"刺破低点后收复"的震仓形态 (实证收复后 20 根
+    +12.7%), 视作等同的吸筹确认证据。
+    """
+    springs = [e for e in events if e["type"] in ("Spring", "Shakeout")]
     if not springs:
         return False
     sp = springs[-1]

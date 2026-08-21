@@ -300,7 +300,22 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
         if lb == "N":
             continue
         row = df.iloc[i]
+        # features: 量比/波幅比/收盘位置/趋势 (供准确度分析)
+        ma20 = df["price_ma20"].values if "price_ma20" in df.columns else None
+        ma50 = df["price_ma50"].values if "price_ma50" in df.columns else None
+        trend = 0
+        if ma20 is not None and ma50 is not None and i < len(ma20) and i < len(ma50):
+            trend = 1 if (np.isfinite(ma20[i]) and np.isfinite(ma50[i])
+                          and ma20[i] > ma50[i] and close[i] > ma50[i]) else 0
+        rw_val = float(rng[i] / roll[i]) if np.isfinite(roll[i]) and roll[i] > 1e-9 else 1.0
         out.append({"idx": i, "date": row["day"], "label": lb,
                     "color": VSA_COLOR[lb],
-                    "desc": f"量{vr[i]:.1f}x {_DESC.get(lb, lb)}"})
+                    "desc": f"量{vr[i]:.1f}x {_DESC.get(lb, lb)}",
+                    "features": {
+                        "vr": round(float(vr[i]), 4),
+                        "rw": round(rw_val, 4),
+                        "cpos": round(float(cpos[i]), 4),
+                        "trend": int(trend),
+                        "dir": int(1 if up_bar[i] else (-1 if dn_bar[i] else 0)),
+                    }})
     return out

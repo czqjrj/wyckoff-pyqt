@@ -155,7 +155,8 @@ class _WatchRTThread(QThread):
         rt = {}
         try:
             rt = fetch_realtime(self._codes) or {}
-        except Exception:
+        except Exception as e:
+            log_exc("自选股实时行情刷新失败", e)
             rt = {}
         phases = {}
         for c in self._codes:
@@ -180,7 +181,8 @@ class _LabelAiThread(QThread):
     def run(self):
         try:
             out = self._work()
-        except Exception:
+        except Exception as e:
+            log_exc("AI 解读后台任务失败", e)
             out = None
         self.result.emit(out)
 
@@ -190,6 +192,9 @@ class _StatusTicker(QLabel):
 
     单条消息过长时在限定宽度内横向滚动 (marquee); 多条消息按序停留轮播。
     点按整条横幅把当前消息对应的标的载入分析 (消息带 code 时)。
+
+    性能注意: set_messages / add_messages 自带 80ms debounce 合并, 避免
+    后台线程高频率刷新触发 UI 动画连续重建进而把状态栏滚动画卡。
     """
     clicked_code = pyqtSignal(str)
 
@@ -207,32 +212,71 @@ class _StatusTicker(QLabel):
         self._rot = QTimer(self)
         self._rot.setSingleShot(True)
         self._rot.timeout.connect(self._advance)
+        # debounce: 1 帧内多次 set/add 合并应用
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(80)
+        self._debounce.timeout.connect(self._flush_pending)
+        self._pending_set = None  # None / list
+        self._pending_add = []    # 累积待合并的新增
 
     # ── 消息管理 ──
     def set_messages(self, msgs):
-        """msgs: [(text, color, code), ...]; 空则清空停止动画。"""
-        self._msgs = list(msgs or [])[:TICKER_MAX_ITEMS]
-        self._cur = 0
-        self._off = 0.0
-        self._rot.stop()
-        if not self._msgs:
-            self._timer.stop()
-            self.setText("")
-            self.update()
-            return
-        self._timer.start()
-        self.update()
-        if len(self._msgs) > 1:
-            self._rot.start(TICKER_ROT_MS)
+        """msgs: [(text, color, code), ...]; 空则清空停止动画。带 80ms debounce。"""
+        self._pending_set = list(msgs or [])[:TICKER_MAX_ITEMS]
+        self._pending_add = []  # set 会覆盖掉 add 缓存
+        if not self._debounce.isActive():
+            self._debounce.start()
 
     def add_messages(self, msgs):
-        """把新消息合并进现有头条 (按文本去重, 新的在前), 保留动画状态。"""
+        """把新消息合并进现有头条 (按文本去重, 新的在前)。带 debounce, 1帧内批量合并。"""
         msgs = list(msgs or [])
+        if not msgs:
+            return
+        self._pending_add = list(msgs) + list(self._pending_add)
+        if not self._debounce.isActive():
+            self._debounce.start()
+
+    def _flush_pending(self):
+        """实际应用 pending_set / pending_add。同一次 debounce 窗口里两者都有的话, 先 set 再 add (正确语义)。"""
+        applied = False
+        if self._pending_set is not None:
+            msgs = self._pending_set
+            self._pending_set = None
+            self._apply_messages(msgs, reset=True)
+            applied = True
+        if self._pending_add:
+            adds = self._pending_add
+            self._pending_add = []
+            self._apply_messages(adds, reset=False)
+            applied = True
+        return applied
+
+    def _apply_messages(self, msgs, reset: bool):
+        if reset:
+            self._msgs = list(msgs or [])[:TICKER_MAX_ITEMS]
+            self._cur = 0
+            self._off = 0.0
+            self._rot.stop()
+            if not self._msgs:
+                self._timer.stop()
+                self.setText("")
+                self.update()
+                return
+            if not self._timer.isActive():
+                self._timer.start()
+            self.update()
+            if len(self._msgs) > 1:
+                self._rot.start(TICKER_ROT_MS)
+            return
+        # add_messages: 合并到现有 _msgs (按文本去重, 新在前)
         if not msgs:
             return
         seen = set()
         merged = []
         for m in msgs + self._msgs:
+            if not m or not m[0]:
+                continue
             if m[0] in seen:
                 continue
             seen.add(m[0])
@@ -247,6 +291,16 @@ class _StatusTicker(QLabel):
 
     def clear(self):
         self.set_messages([])
+
+    def flush_now(self):
+        """同步入口: 立即触发 debounce flush, 确保 set/add 的消息落到 _msgs。
+
+        供单元测试/需要立即读 _msgs 的场景用, 避免等 80ms 定时器。
+        生产 UI 路径不要调, 让 debounce 自然合并节流。
+        """
+        if self._debounce.isActive():
+            self._debounce.stop()
+        self._flush_pending()
 
     def current_code(self):
         if not self._msgs:
@@ -346,16 +400,19 @@ def build_ticker_msgs(rich_by_code, min_winrate=TICKER_MIN_WINRATE,
 
 
 class _WatchScanThread(QThread):
-    """后台定时扫描自选股信号: 重算威科夫事件并记录准确度快照。
+    """后台定时扫描自选股信号: 重算威科夫事件 + 构建 ticker 头条消息 (一并搬后台, 防 UI 线程被 win_rate_of 循环卡住)。
 
-    结果: (ok, sig_by_code, rich) — sig_by_code 供预警,
-    rich: {code: scan_stock_signals dict} 供状态栏高命中头条。
+    结果: (ok, sig_by_code, rich, msgs) — msgs 可直接丢给 status_ticker.set_messages。
     """
     result = pyqtSignal(object)
 
     def __init__(self, codes, parent=None):
         super().__init__(parent)
         self._codes = codes
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
 
     def run(self):
         from wyckoff.backtest import scan_stock_signals
@@ -364,6 +421,8 @@ class _WatchScanThread(QThread):
         sig_by_code = {}
         rich = {}
         for c in self._codes:
+            if self._stopped:
+                break
             try:
                 sym = normalize_symbol(c)
                 r = scan_stock_signals(c, datalen=500, confirm_enabled=False,
@@ -371,10 +430,17 @@ class _WatchScanThread(QThread):
                 ok = True
                 if r and r.get("signals"):
                     sig_by_code[sym[2:]] = list(r["signals"])
-                    rich[sym[2:]] = r
+                    rich[sym] = r
             except Exception:
                 continue
-        self.result.emit((ok, sig_by_code, rich))
+        # 末尾: 在后台线程构建头条消息 (避免 UI 线程跑 N*M 次 win_rate_of 被卡)
+        msgs = []
+        try:
+            if not self._stopped:
+                msgs = build_ticker_msgs(rich)
+        except Exception:
+            msgs = []
+        self.result.emit((ok, sig_by_code, rich, msgs))
 
 
 class _ScanMarketThread(QThread):
@@ -396,6 +462,60 @@ class _ScanMarketThread(QThread):
             self.result.emit(codes, f"全市场风格扫描 ({src})")
         except Exception:
             self.result.emit(None, "")
+
+
+class _AnalysisTickerThread(QThread):
+    """后台线程: 对刚分析完的标的做近期事件/VSA + ticker 头条构建。
+
+    原本这段(find_pivots / detect_all / vsa_classify / build_ticker_msgs)
+    在 UI 线程里跑, 几百根 K 线下会让状态栏/整个 UI 卡几十毫秒~几百毫秒。
+    挪到后台后, UI 线程只收到 msgs 并 add_messages, 耗时 <1ms。
+    """
+    result = pyqtSignal(object)  # msgs: List[(text, color, code)]
+
+    def __init__(self, df, code, name, parent=None):
+        super().__init__(parent)
+        self._df = df
+        self._code = code
+        self._name = name
+        self._stopped = False
+
+    def stop(self):
+        self._stopped = True
+
+    def run(self):
+        if self._stopped or self._df is None or not self._code:
+            self.result.emit([])
+            return
+        try:
+            from wyckoff.indicators import find_pivots
+            from wyckoff.events import detect_all
+            from wyckoff.vsa import vsa_classify
+            df = self._df
+            code = self._code
+            name = self._name or str(code)[-6:]
+            pivots = find_pivots(df, order=6)
+            events = detect_all(df, pivots)
+            if self._stopped:
+                self.result.emit([])
+                return
+            recent_e = [e for e in events if e["idx"] >= len(df) - 20]
+            recent_v = [s for s in vsa_classify(df, scale=240)
+                        if s["idx"] >= len(df) - 20]
+            if self._stopped:
+                self.result.emit([])
+                return
+            rich = {code: {
+                "name": name,
+                "events": [{"type": e["type"], "date": str(e["date"].date()),
+                            "price": float(e["price"]),
+                            "conf": int(e.get("conf", 50))} for e in recent_e],
+                "vsa": [{"label": s["label"], "date": str(s["date"].date()),
+                         "desc": s["desc"]} for s in recent_v]}}
+            msgs = build_ticker_msgs(rich)
+            self.result.emit(msgs)
+        except Exception:
+            self.result.emit([])
 
 
 # ──────────────────────────────────────────── 结论 HTML 渲染 ────────────────────────────────────────────
@@ -516,6 +636,12 @@ class MainWindow(QMainWindow):
         self._tts_playing = False
         self._tts_done_sig.connect(self._on_tts_done)
         self._text_font_size = int(self.settings.get("text_font_size", 11) or 11)
+        # 信号汇总 resize 防抖 timer: 视口尺寸变化时延迟重排 (避免拖拽时频繁 rebuild)
+        self._summary_relayout_timer = QTimer(self)
+        self._summary_relayout_timer.setSingleShot(True)
+        self._summary_relayout_timer.setInterval(150)
+        self._summary_relayout_timer.timeout.connect(self._relayout_summary)
+        self._last_summary = None
         self._last_sections = None
         self._last_interp_lines = None
         self._last_kline = {}
@@ -1053,6 +1179,15 @@ class MainWindow(QMainWindow):
         self.interp_tts_btn.setToolTip("朗读本条 AI 解读 (设置→语音播报 可配置引擎/音色/语速)")
         self.interp_tts_btn.clicked.connect(self._on_interp_tts_click)
         head.layout().addWidget(self.interp_tts_btn)
+        self.interp_chat_btn = QPushButton("AI 问股")
+        self.interp_chat_btn.setObjectName("ttsBtn")
+        self.interp_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.interp_chat_btn.setFixedHeight(22)
+        self.interp_chat_btn.setToolTip(
+            "多轮对话追问当前分析 (AI 解读的进阶形态)\n"
+            "系统已注入当前报告 + 该标的历史信号实证, 可连续追问")
+        self.interp_chat_btn.clicked.connect(self._on_ai_chat)
+        head.layout().addWidget(self.interp_chat_btn)
         head.layout().addWidget(self._zoom_buttons())
         lay.addWidget(head)
         self.interp_text = QTextBrowser(self.tab_interp)
@@ -1077,7 +1212,7 @@ class MainWindow(QMainWindow):
         strip.setStyleSheet(f"background:{theme.C_ACCENT};border-radius:2px;")
         h.addWidget(strip)
         lab = QLabel(text)
-        lab.setStyleSheet(f"color:{theme.C_TEXT};font-weight:bold;font-size:11pt;")
+        lab.setStyleSheet(f"color:{theme.C_TEXT};font-weight:bold;font-size:12pt;")
         h.addWidget(lab)
         h.addStretch(1)
         return box
@@ -1142,10 +1277,14 @@ class MainWindow(QMainWindow):
         self.summary_lay = _grid_layout()
         self.summary_grid.setLayout(self.summary_lay)
         self.summary_scroll.setWidget(self.summary_grid)
+        # 监听视口尺寸变化 → 响应式重排信号汇总卡片列数
+        self.summary_scroll.viewport().installEventFilter(self)
         top_lay.addWidget(self.summary_scroll, 1)
+        # 信号汇总/分析结论分隔线: 弱色细线 + 上下留白
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet(f"color:{theme.C_BORDER};")
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background:{theme.C_BORDER};border:none;margin:2px 0;")
         top_lay.addWidget(line)
 
         # ── 下: 分析结论 ──
@@ -1438,6 +1577,10 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.KeyPress:
             if self._maybe_open_spirit(event):
                 return True
+        # 信号汇总视口尺寸变化 → 防抖触发响应式重排
+        if (event.type() == QEvent.Type.Resize
+                and obj is self.summary_scroll.viewport()):
+            self._schedule_summary_relayout()
         return super().eventFilter(obj, event)
 
     def _maybe_open_spirit(self, event):
@@ -1586,69 +1729,80 @@ class MainWindow(QMainWindow):
         self._last_pnf = r.get("pnf_data") or {}
         self._last_ind = r.get("ind_data") or {}
         self._last_mkt = r.get("mkt_data") or {}
-        self.kline_widget.set_data(**self._last_kline)
-        self.pnf_widget.set_data(**self._last_pnf)
-        self.ind_widget.set_data(**self._last_ind)
-        self._current_code = r["code"]
-        self._current_name = r.get("name") or ""
-        self._remember_last_analyzed()
-        self._last_summary = r["summary"]
-        self._last_df = r.get("df")
-        self._last_vsa = r.get("vsa_signals")
-        self._last_segs = r.get("segs")
-        self._last_symbol = r["code"]
-        scale_key = self.cb_scale.currentText()
-        period_key = self.cb_period.currentText()
-        self._last_scale = SCALE_OPTIONS.get(scale_key, 240)
-        self._last_datalen = PERIOD_OPTIONS.get(period_key, 700)
-        self._update_watch_name(r["code"], self._current_name)
-        self._render_summary(r["summary"])
-        self._render_sections(r["sections"])
-        interp = self._interp_lines(r["sections"])
-        self._last_interp_lines = interp
-        if interp:
-            self.interp_text.setHtml(self._interp_html(interp, self._text_font_size))
-        else:
-            self._set_interp_placeholder(self._text_font_size)
-        market = r.get("market")
-        if market:
-            self.mkt_widget.set_data(**self._last_mkt)
-        self._update_stock_bar(r["summary"])
-        self._select_watch(r["code"])
-        self._update_source_health()
-        self._refresh_accuracy_window()
-        self._schedule_auto_refresh()
-        self._accuracy_eval_bg()
-        self._push_analysis_ticker(r)
+        # 批量渲染: 禁用重绘, 避免逐个 set_data 触发多次 layout (4图表提速)
+        self.setUpdatesEnabled(False)
+        try:
+            self.kline_widget.set_data(**self._last_kline)
+            self.pnf_widget.set_data(**self._last_pnf)
+            self.ind_widget.set_data(**self._last_ind)
+            self._current_code = r["code"]
+            self._current_name = r.get("name") or ""
+            self._remember_last_analyzed()
+            self._last_summary = r["summary"]
+            self._last_df = r.get("df")
+            self._last_vsa = r.get("vsa_signals")
+            self._last_segs = r.get("segs")
+            self._last_symbol = r["code"]
+            scale_key = self.cb_scale.currentText()
+            period_key = self.cb_period.currentText()
+            self._last_scale = SCALE_OPTIONS.get(scale_key, 240)
+            self._last_datalen = PERIOD_OPTIONS.get(period_key, 700)
+            self._update_watch_name(r["code"], self._current_name)
+            self._render_summary(r["summary"])
+            self._render_sections(r["sections"])
+            interp = self._interp_lines(r["sections"])
+            self._last_interp_lines = interp
+            if interp:
+                self.interp_text.setHtml(self._interp_html(interp, self._text_font_size))
+            else:
+                self._set_interp_placeholder(self._text_font_size)
+            market = r.get("market")
+            if market:
+                self.mkt_widget.set_data(**self._last_mkt)
+            self._update_stock_bar(r["summary"])
+            self._select_watch(r["code"])
+            self._update_source_health()
+            self._refresh_accuracy_window()
+            self._schedule_auto_refresh()
+            self._accuracy_eval_bg()
+            self._push_analysis_ticker(r)
+        finally:
+            self.setUpdatesEnabled(True)
         self._status(f"完成 {datetime_now()}", theme.C_DOWN)
 
     def _push_analysis_ticker(self, r):
-        """刚分析的标的若有高实测命中信号, 立即并入状态栏头条 (不等定时扫描)。"""
+        """刚分析的标的若有高实测命中信号 → 并入状态栏头条。
+
+        ⚠️ 注意: find_pivots/detect_all/vsa_classify/build_ticker_msgs 这些耗时逻辑
+        必须在后台线程跑, UI 线程只拿 msgs 做 add_messages (<1ms)。否则状态栏滚动
+        动画会被卡、整段 UI 僵住。
+        """
         try:
             df = r.get("df")
             code = r.get("code") or ""
             if df is None or not code:
                 return
-            from wyckoff.indicators import find_pivots
-            from wyckoff.events import detect_all
-            from wyckoff.vsa import vsa_classify
-            pivots = find_pivots(df, order=6)
-            events = detect_all(df, pivots)
-            recent_e = [e for e in events if e["idx"] >= len(df) - 20]
-            recent_v = [s for s in vsa_classify(df, scale=240)
-                        if s["idx"] >= len(df) - 20]
-            rich = {str(code)[-6:]: {
-                "name": r.get("name") or str(code)[-6:],
-                "events": [{"type": e["type"], "date": str(e["date"].date()),
-                            "price": float(e["price"]),
-                            "conf": int(e.get("conf", 50))} for e in recent_e],
-                "vsa": [{"label": s["label"], "date": str(s["date"].date()),
-                         "desc": s["desc"]} for s in recent_v]}}
-            msgs = build_ticker_msgs(rich)
-            if msgs:
-                self.status_ticker.add_messages(msgs)
+            name = r.get("name") or ""
+            # 若上一次 analysis ticker 线程还在跑 (用户快速连续切股票), 先 stop 再丢弃其结果, 避免旧结果把新标的顶掉
+            prev = getattr(self, "_analysis_ticker_th", None)
+            if prev is not None and prev.isRunning():
+                try:
+                    prev.stop()
+                except Exception:
+                    pass
+            th = _AnalysisTickerThread(df, code, name, self)
+            th.result.connect(self._on_analysis_ticker_msgs)
+            self._analysis_ticker_th = th
+            th.start()
         except Exception as e:
-            log_exc("_push_analysis_ticker 失败", e)
+            log_exc("_push_analysis_ticker 启动线程失败", e)
+
+    def _on_analysis_ticker_msgs(self, msgs):
+        if msgs:
+            try:
+                self.status_ticker.add_messages(msgs)
+            except Exception as e:
+                log_exc("_on_analysis_ticker_msgs 状态栏写消息失败", e)
 
     def _error(self, msg, tb):
         self._analyzing = False
@@ -1670,45 +1824,90 @@ class MainWindow(QMainWindow):
             pass
 
     # ── 右面板渲染 ──
-    def _render_summary(self, cards):
-        _clear_layout(self.summary_lay)
+    def _summary_cols(self):
+        """根据信号汇总视口宽度动态计算列数 (响应式布局)。
+        每张卡片最小宽度约 150px (strip + label + value + 留白),
+        宽度不足时降为 1 列避免挤压。"""
+        try:
+            w = self.summary_scroll.viewport().width()
+        except Exception:
+            w = 280
+        w = max(int(w or 0), 1)
+        # 150px/列 + 6px spacing, 至少 1 列, 至多 4 列 (避免过窄卡片)
+        cols = max(1, min(4, (w + 6) // 156))
+        return cols
+
+    def _schedule_summary_relayout(self):
+        """视口尺寸变化时启动防抖 timer, 150ms 后重排 (避免拖拽中频繁 rebuild)。"""
+        self._summary_relayout_timer.start()
+
+    def _relayout_summary(self):
+        """按当前视口宽度重排信号汇总卡片列数 (保留卡片数据, 仅重排布局)。"""
+        cards = getattr(self, "_last_summary", None)
         if not cards:
-            lbl = QLabel("(待分析)")
-            lbl.setStyleSheet(f"color:{theme.C_MUTED};")
-            self.summary_lay.addWidget(lbl)
             return
-        row = 0
-        col = 0
-        self.summary_lay.setColumnStretch(0, 1)
-        self.summary_lay.setColumnStretch(1, 1)
-        for item in cards:
-            tone = item.get("tone", "neutral")
-            color = theme.TONE_COLOR.get(tone, theme.C_MUTED)
-            card = QWidget()
-            card.setFixedHeight(30)
-            card.setStyleSheet(f"background:{theme.C_PANEL};border:1px solid {theme.C_BORDER};"
-                               f"border-radius:4px;")
-            ch = QHBoxLayout(card)
-            ch.setContentsMargins(0, 0, 8, 0)
-            ch.setSpacing(8)
-            strip = QLabel()
-            strip.setFixedWidth(4)
-            strip.setStyleSheet(f"background:{color};border-radius:2px;")
-            ch.addWidget(strip)
-            lab = QLabel(str(item.get("label", "")))
-            lab.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
-            lab.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-            val = QLabel(str(item.get("value", "")))
-            val.setStyleSheet(f"color:{color};font-weight:bold;font-size:10pt;")
-            val.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-            ch.addWidget(lab, 0, Qt.AlignmentFlag.AlignVCenter)
-            ch.addWidget(val, 0, Qt.AlignmentFlag.AlignVCenter)
-            ch.addStretch(1)
-            self.summary_lay.addWidget(card, row, col)
-            col += 1
-            if col >= 2:
-                col = 0
-                row += 1
+        cols = self._summary_cols()
+        # 避免列数未变时无谓 rebuild (QGridLayout 重建会闪一下)
+        cur_cols = getattr(self, "_summary_cols_cached", None)
+        if cur_cols == cols:
+            return
+        self._summary_cols_cached = cols
+        self._render_summary(cards, cols=cols)
+
+    def _render_summary(self, cards, cols=None):
+        # 批量更新: 卡片创建期间禁用重绘 (10+ 卡片时减少闪烁)
+        self.summary_scroll.setUpdatesEnabled(False)
+        try:
+            _clear_layout(self.summary_lay)
+            if cols is None:
+                cols = self._summary_cols()
+            self._summary_cols_cached = cols
+            if not cards:
+                lbl = QLabel("(待分析)")
+                lbl.setStyleSheet(f"color:{theme.C_MUTED};font-size:11pt;padding:8px;")
+                self.summary_lay.addWidget(lbl)
+                return
+            row = 0
+            col = 0
+            for c in range(cols):
+                self.summary_lay.setColumnStretch(c, 1)
+            for item in cards:
+                tone = item.get("tone", "neutral")
+                color = theme.TONE_COLOR.get(tone, theme.C_MUTED)
+                card = QWidget()
+                card.setObjectName("summaryCard")
+                card.setFixedHeight(36)
+                card.setStyleSheet(
+                    f"QWidget#summaryCard {{ background:{theme.C_PANEL};"
+                    f"border:1px solid {theme.C_BORDER};border-radius:6px; }}"
+                    f"QWidget#summaryCard:hover {{ border:1px solid {color}; }}")
+                ch = QHBoxLayout(card)
+                ch.setContentsMargins(0, 0, 10, 0)
+                ch.setSpacing(8)
+                strip = QLabel()
+                strip.setFixedWidth(4)
+                strip.setStyleSheet(f"background:{color};border-radius:2px;")
+                ch.addWidget(strip)
+                lab = QLabel(str(item.get("label", "")))
+                lab.setStyleSheet(f"color:{theme.C_MUTED};font-size:11pt;")
+                lab.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                val = QLabel(str(item.get("value", "")))
+                val.setStyleSheet(f"color:{color};font-weight:bold;font-size:12pt;")
+                val.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                tip = str(item.get("tooltip") or "")
+                if tip:
+                    val.setToolTip(tip)
+                    lab.setToolTip(tip)
+                ch.addWidget(lab, 0, Qt.AlignmentFlag.AlignVCenter)
+                ch.addWidget(val, 0, Qt.AlignmentFlag.AlignVCenter)
+                ch.addStretch(1)
+                self.summary_lay.addWidget(card, row, col)
+                col += 1
+                if col >= cols:
+                    col = 0
+                    row += 1
+        finally:
+            self.summary_scroll.setUpdatesEnabled(True)
 
     def _section_row_widget(self, _row, title):
         """标签行控件: 仅标题。"""
@@ -1834,6 +2033,31 @@ class MainWindow(QMainWindow):
         else:
             self._set_interp_placeholder(self._text_font_size)
             self._status("AI 解读生成失败 (网络/模型错误), 请重试", theme.C_UP)
+
+    def _on_ai_chat(self):
+        """打开多轮 AI 问股窗口 (注入当前报告 + 该标的历史信号实证)。"""
+        sections = getattr(self, "_last_sections", None)
+        if not sections:
+            self._status("请先完成一次分析", theme.C_MUTED)
+            return
+        from wyckoff.ai_chat import build_system_context, symbol_signal_stats
+        from wyckoff.report import build_export_report
+        report = build_export_report(
+            getattr(self, "_current_code", "") or "",
+            getattr(self, "_current_name", "") or "",
+            self.cb_scale.currentText(), self.cb_period.currentText(),
+            getattr(self, "_last_df", None), sections,
+            summary_cards=getattr(self, "_last_summary", None),
+            vsa_signals=getattr(self, "_last_vsa", None),
+            scale=getattr(self, "_last_scale", 240))
+        stats = symbol_signal_stats(getattr(self, "_current_code", "") or "")
+        ctx = build_system_context(report, stats)
+        from .ai_chat_window import AiChatDialog
+        code = getattr(self, "_current_code", "") or ""
+        name = getattr(self, "_current_name", "") or ""
+        dlg = AiChatDialog(self, self.settings, ctx,
+                           title=f"AI 问股 · {code} {name}".strip())
+        dlg.exec()
 
     # ── 语音朗读 (TTS) ──
     def _tts_parts(self):
@@ -2393,9 +2617,16 @@ class MainWindow(QMainWindow):
             log_exc("_startup_ticker_scan 失败", e)
 
     def _on_watch_scan(self, payload):
-        _ok, sig_by_code, rich = (payload if isinstance(payload, tuple) and len(payload) == 3
-                                  else (payload, payload, {}) if isinstance(payload, dict)
-                                  else (payload, {}, {}))
+        # 兼容 3-tuple (旧) / 4-tuple (新: 第4位是后台线程已构建好的 msgs)
+        if isinstance(payload, tuple) and len(payload) == 4:
+            _ok, sig_by_code, rich, msgs = payload
+        elif isinstance(payload, tuple) and len(payload) == 3:
+            _ok, sig_by_code, rich = payload
+            msgs = None  # 旧线程没构建, 这里不主动重算以免卡UI
+        elif isinstance(payload, dict):
+            _ok, sig_by_code, rich, msgs = payload, payload, {}, None
+        else:
+            _ok, sig_by_code, rich, msgs = payload, {}, {}, None
         for th in list(getattr(self, "_scan_threads", {}) or {}):
             self._scan_threads.pop(th, None)
         try:
@@ -2406,16 +2637,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log_exc("_on_watch_scan 检查信号预警失败", e)
         # 高实测命中事件/VSA → 状态栏中间滚动头条
+        # msgs 已由 _WatchScanThread 在后台线程构建完成, UI 线程只做一次 set_messages (<1ms)
         try:
-            msgs = build_ticker_msgs(rich)
-            if not msgs:
-                n_scanned = len(rich)
+            final_msgs = msgs or []
+            if not final_msgs:
+                n_scanned = len(rich or {})
                 if n_scanned:
-                    msgs = [(f"自选股 {n_scanned} 只扫描完成: 暂无高实测命中信号",
-                             theme.C_MUTED, "")]
-            self.status_ticker.set_messages(msgs)
+                    final_msgs = [(f"自选股 {n_scanned} 只扫描完成: 暂无高实测命中信号",
+                                   theme.C_MUTED, "")]
+            self.status_ticker.set_messages(final_msgs)
         except Exception as e:
-            log_exc("_on_watch_scan 生成状态栏头条失败", e)
+            log_exc("_on_watch_scan 写状态栏头条失败", e)
         # 顺便评估到期记录, 并继续下一轮
         self._accuracy_eval_bg()
         self._schedule_auto_scan()
@@ -3027,34 +3259,39 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
     def _apply_theme(self):
         theme.set_theme(str(self.settings.get("theme", "light") or "light"))
         self.setStyleSheet(theme.QSS)
-        # 先刷新四个图表控件的背景/坐标轴配色
-        for w in (self.kline_widget, self.pnf_widget,
-                  self.ind_widget, self.mkt_widget):
+        # 批量更新: 4图表重渲染 + 主题刷新合并为一次重绘
+        self.setUpdatesEnabled(False)
+        try:
+            # 先刷新四个图表控件的背景/坐标轴配色
+            for w in (self.kline_widget, self.pnf_widget,
+                      self.ind_widget, self.mkt_widget):
+                try:
+                    w.apply_theme()
+                except Exception:
+                    pass
             try:
-                w.apply_theme()
+                self.ind_scroll.apply_theme()
             except Exception:
                 pass
-        try:
-            self.ind_scroll.apply_theme()
-        except Exception:
-            pass
-        # 再以当前数据重渲染, 刷新数据项配色
-        try:
-            self.kline_widget.set_data(**self._last_kline or {})
-        except Exception:
-            pass
-        try:
-            self.pnf_widget.set_data(**self._last_pnf or {})
-        except Exception:
-            pass
-        try:
-            self.ind_widget.set_data(**self._last_ind or {})
-        except Exception:
-            pass
-        try:
-            self.mkt_widget.set_data(**self._last_mkt or {})
-        except Exception:
-            pass
+            # 再以当前数据重渲染, 刷新数据项配色
+            try:
+                self.kline_widget.set_data(**self._last_kline or {})
+            except Exception:
+                pass
+            try:
+                self.pnf_widget.set_data(**self._last_pnf or {})
+            except Exception:
+                pass
+            try:
+                self.ind_widget.set_data(**self._last_ind or {})
+            except Exception:
+                pass
+            try:
+                self.mkt_widget.set_data(**self._last_mkt or {})
+            except Exception:
+                pass
+        finally:
+            self.setUpdatesEnabled(True)
         if getattr(self, "_last_sections", None) is not None:
             self._render_sections(self._last_sections)
         if getattr(self, "_last_summary", None) is not None:
@@ -3097,10 +3334,10 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
                 self.saveState(version=1)).decode("ascii")
             try:
                 save_settings(self.settings)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as e:
+                log_exc("closeEvent 保存设置失败", e)
+        except Exception as e:
+            log_exc("closeEvent 收集窗口状态失败", e)
         # 隐藏窗口: 让用户感觉"已关闭", 线程收尾在后台进行, 避免关窗卡顿。
         try:
             self.hide()
@@ -3150,7 +3387,8 @@ def _grid_layout():
     from PyQt6.QtWidgets import QGridLayout
     g = QGridLayout()
     g.setContentsMargins(0, 0, 0, 0)
-    g.setSpacing(4)
+    # spacing 4→6: 信号汇总卡片之间留更多呼吸空间
+    g.setSpacing(6)
     return g
 
 
@@ -3169,7 +3407,19 @@ def datetime_now():
 
 def main():
     import sys
+    from PyQt6.QtCore import qInstallMessageHandler
     from PyQt6.QtWidgets import QApplication
+
+    def _qt_msg_handler(msg_type, context, message):
+        # Deepin 会话全局设置 QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough,
+        # Qt 创建 QApplication 时内部读取该变量并调用静态 setter, 此时实例
+        # 已存在 → 触发 "must be called before creating ..." 警告。纯噪音,
+        # 过滤之; 其余消息照常输出到 stderr。
+        if "setHighDpiScaleFactorRoundingPolicy" in message:
+            return
+        sys.stderr.write(message + "\n")
+
+    qInstallMessageHandler(_qt_msg_handler)
     app = QApplication(sys.argv)
     app.setApplicationName("WyckoffClient")
     win = MainWindow()

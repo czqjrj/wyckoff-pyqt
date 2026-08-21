@@ -44,6 +44,13 @@ def _pen(color, width=1.0, style=None, alpha=1.0):
     return pg.mkPen(**kw)
 
 
+def _brush_alpha(color, alpha=1.0):
+    c = pg.mkColor(color)
+    if alpha is not None:
+        c.setAlphaF(float(alpha))
+    return pg.mkBrush(c)
+
+
 class PnfGridItem(pg.GraphicsObject):
     """点数图圈叉图: 浅色方格坐标纸 + X列(红)× / O列(绿)○, 记号填满格子。
 
@@ -205,8 +212,9 @@ class _VapViewBox(pg.ViewBox):
         vb = self._host._vb
         if vb is None:
             return
-        xr = vb.viewRange()[0]
-        self._host.zoom_about((xr[0] + xr[1]) / 2, 0.0,
+        # 以鼠标位置为锚点缩放 (而非中心点), 与主图行为一致
+        pos = vb.mapSceneToView(ev.scenePos())
+        self._host.zoom_about(pos.x(), pos.y(),
                               0.8 if ev.delta() > 0 else 1.25)
         ev.accept()
 
@@ -324,7 +332,7 @@ class PnfWidget(pg.GraphicsLayoutWidget):
     set_data(**pnf_data) 接收 build_pnf_data() 的返回, 其余交互内置。
     """
 
-    def __init__(self, parent=None, font_size=11):
+    def __init__(self, parent=None, font_size=12):
         super().__init__(parent)
         self._font_size = int(font_size)
         self._cols = []
@@ -599,17 +607,56 @@ class PnfWidget(pg.GraphicsLayoutWidget):
         if ht:
             self._pin(ht.strip(), theme.C_MUTED, 0.92, bold=True, size=self._fs(1))
 
-        # 顶部信息条 (固定视口, 不压格子): 当前区间/威科夫横向计数 + 历史段摘要
+        # 顶部信息条 (固定视口, 不压格子): 当前区间/POC/三档目标概率/历史段摘要
         if targets:
             zone_label, zone_note = self._zone_meta(targets)
             tr_top = float(targets.get("tr_top", 0))
             tr_bottom = float(targets.get("tr_bottom", 0))
+            poc = targets.get("poc")
             _cn = int(targets.get("columns", 0))
             _ca = float(targets.get("cause", 0))
-            line = (f"当前区间: {zone_label} {tr_bottom:.2f}~{tr_top:.2f}"
-                    f"  |  威科夫横向计数: {_cn}列×格×反转(因{_ca:.2f})"
-                    f" → 目标 {float(targets.get('横向计数上方目标', 0)):.2f}"
-                    f" / {float(targets.get('横向计数下方目标', 0)):.2f}"
+            cause_ratio = _ca / (tr_top - tr_bottom) if (tr_top - tr_bottom) > 0 else 0
+            tr_pos = targets.get("tr_position%")
+            # 方向优先概率/空间: 向上→取保守档上方概率, 向下→保守档下方概率
+            if targets.get("direction") == "up":
+                p = targets.get("上方概率_保守")
+                s = targets.get("上方空间_保守%")
+                t = targets.get("横向计数上方目标_保守")
+                if p is not None and s is not None and t is not None:
+                    sign = "+" if s > 0 else ""
+                    ps = f"保守目标 {t:.2f}{sign}{s:.1f}% 概率{int(p*100)}%"
+                else:
+                    ps = "目标待确认"
+            elif targets.get("direction") == "down":
+                p = targets.get("下方概率_保守")
+                s = targets.get("下方空间_保守%")
+                t = targets.get("横向计数下方目标_保守")
+                if p is not None and s is not None and t is not None:
+                    sign = "+" if s > 0 else ""
+                    ps = f"保守目标 {t:.2f}{sign}{s:.1f}% 概率{int(p*100)}%"
+                else:
+                    ps = "目标待确认"
+            else:
+                up_p = targets.get("上方概率_保守")
+                up_s = targets.get("上方空间_保守%")
+                up_t = targets.get("横向计数上方目标_保守")
+                dn_p = targets.get("下方概率_保守")
+                dn_s = targets.get("下方空间_保守%")
+                dn_t = targets.get("横向计数下方目标_保守")
+                parts = []
+                if up_t is not None and up_s is not None and up_p is not None:
+                    sign = "+" if up_s > 0 else ""
+                    parts.append(f"上{up_t:.2f}{sign}{up_s:.1f}%{int(up_p*100)}%")
+                if dn_t is not None and dn_s is not None and dn_p is not None:
+                    sign = "+" if dn_s > 0 else ""
+                    parts.append(f"下{dn_t:.2f}{sign}{dn_s:.1f}%{int(dn_p*100)}%")
+                ps = " / ".join(parts) if parts else "目标待确认"
+            poc_s = f" · POC {float(poc):.2f}" if poc else ""
+            pos_s = f" · TR位{tr_pos:.0f}%" if tr_pos is not None else ""
+            ratio_s = f" · 因/TR={cause_ratio:.2f}" if cause_ratio > 0 else ""
+            line = (f"{zone_label} {tr_bottom:.2f}~{tr_top:.2f}{pos_s}{poc_s}"
+                    f"  |  威科夫横向计数: {_cn}列×格×反转 因{_ca:.2f}{ratio_s}"
+                    f"  |  {ps}"
                     f"  |  {zone_note}")
             _, t_edge = self._zone_colors(targets)
             self._pin(line, t_edge, 0.018, bold=True, size=self._fs(1))
@@ -756,6 +803,34 @@ class PnfWidget(pg.GraphicsLayoutWidget):
         box = self._box
         _, t_edge = self._zone_colors(targets)
 
+        # ── POC / 价值区 ──
+        poc = targets.get("poc")
+        vah = targets.get("vah")
+        val_ = targets.get("val")
+        if poc and vah and val_ and val_ < vah:
+            # 价值区色带 (POC ± 35% TR 宽): 浅琥珀, 半透明
+            from pyqtgraph import LinearRegionItem
+            vr = LinearRegionItem(
+                [val_, vah], orientation='horizontal',
+                brush=_brush_alpha(theme.C_AMBER, 0.12),
+                pen=_pen(theme.C_AMBER, 0.8, Qt.PenStyle.NoPen))
+            plot.addItem(vr)
+            # POC 虚线 (控制点, 更强锚点)
+            plot.addItem(pg.InfiniteLine(
+                pos=float(poc), angle=0,
+                pen=_pen(theme.C_AMBER, 1.2, Qt.PenStyle.DashLine, 0.9)))
+            _fill, _border = self._chip()
+            # POC 文字标签 (只在 POC 不贴 TR 边界时画, 避免与 TR 线重叠)
+            if abs(float(poc) - tr_top) > box * 1.5 and abs(float(poc) - tr_bottom) > box * 1.5:
+                tr_pos = targets.get("tr_position%", 50)
+                # TR 位<50%: POC 偏上方写; TR 位>50%: 偏下方写
+                poc_y = float(poc) + (box * 1.2 if tr_pos < 50 else -box * 1.2)
+                poc_anchor = (0, 0) if tr_pos < 50 else (0, 1)
+                self._text(plot, c1 + 0.2, poc_y,
+                           f"POC {float(poc):.2f} (价值中枢)", theme.C_AMBER,
+                           anchor=poc_anchor, bold=True, delta=0,
+                           fill=_fill, border=_border)
+
         # TR 上下沿 (虚线)
         plot.addItem(pg.InfiniteLine(
             pos=tr_top, angle=0,
@@ -774,71 +849,123 @@ class PnfWidget(pg.GraphicsLayoutWidget):
                     pos=(xc, yp), angle=ang, tailLen=0, headLen=8, headWidth=8,
                     pen=_pen("#495057"), brush=pg.mkBrush("#495057")))
 
-        # 上涨目标 (累积突破后计数): 从 TR 上沿投影
-        if "横向计数上方目标" in targets:
-            up = float(targets["横向计数上方目标"])
-            active = direction in ("up", "range")
-            a = 0.95 if active else 0.45
-            plot.addItem(pg.InfiniteLine(
-                pos=up, angle=0,
-                pen=_pen("#2f9e44", 1.2, Qt.PenStyle.DashLine, a)))
-            plot.addItem(pg.PlotCurveItem(
-                [cend, cend], [tr_top, up], pen=_pen("#2f9e44", 1.4, None, a)))
-            plot.addItem(pg.ArrowItem(
-                pos=(cend, up), angle=-90, tailLen=0, headLen=9, headWidth=9,
-                pen=_pen("#2f9e44", 1.0, None, a),
-                brush=pg.mkBrush("#2f9e44")))
-            self._text(plot, cend + 0.4, up, f"▲ 上涨目标位 {up:.2f}",
-                       "#2f9e44", anchor=(0, 0.5), bold=True, delta=0,
-                       fill=_fill, border=_border, alpha=a)
-            self._text(plot, cend + 0.4, (tr_top + up) / 2,
-                       f"+因 {float(targets.get('cause', 0)):.2f}"
-                       f" ({int(targets.get('columns', 0))}列×格×反转)", "#2f9e44",
-                       anchor=(0, 0.5), delta=0, alpha=0.8,
-                       fill=_fill, border=_border)
-            near = targets.get("近端上方目标")
-            if isinstance(near, (int, float)) and abs(float(near) - up) > box:
+        # ── 三档目标绘制: 保守(粗线/高概率色)/中/激进(细线/淡) ──
+        # 保守档: 从区间极值投影 (最易到达, 粗实线)
+        # 中档: 从 POC 投影 (次易到达, 虚线)
+        # 激进档: 从 count_line 投影 (最难到达, 细点线)
+        cause = float(targets.get("cause", 0))
+        cols_count = int(targets.get("columns", 0))
+        cause_s = f"+因{cause:.2f}({cols_count}列×格×反转)"
+        cause_s_dn = f"-因{cause:.2f}({cols_count}列×格×反转)"
+        active_up = direction in ("up", "range")
+        active_dn = direction in ("down", "range")
+
+        # ── 上涨方向三档 ──
+        up_tiers = [
+            # (目标key, 概率key, 空间key, 线宽, 样式, 透明度, 标签前缀)
+            ("横向计数上方目标_保守", "上方概率_保守", "上方空间_保守%", 1.6, None, 0.95 if active_up else 0.4, "保"),
+            ("横向计数上方目标_中",    "上方概率_中",    "上方空间_中%",    1.1, Qt.PenStyle.DashLine, 0.80 if active_up else 0.35, "中"),
+            ("横向计数上方目标",        "上方概率_激进",  "上方空间_激进%",  0.9, Qt.PenStyle.DotLine,  0.65 if active_up else 0.3,  "激"),
+        ]
+        label_x = cend + 0.4
+        label_dy = box * 1.6  # 三档标签垂直间距
+        for idx, (tk, pk, sk, lw, style, a, label) in enumerate(up_tiers):
+            if tk not in targets:
+                continue
+            t = float(targets[tk])
+            prob = targets.get(pk)
+            sp = targets.get(sk)
+            # 颜色: 按概率分级 (高→深绿, 低→浅绿)
+            if prob is not None and prob >= 0.7:
+                col = "#166534"
+            elif prob is not None and prob >= 0.5:
+                col = "#2f9e44"
+            else:
+                col = "#8ce99a"
+            plot.addItem(pg.InfiniteLine(pos=t, angle=0, pen=_pen(col, lw, style, a)))
+            # 只在最外档 (激进) 画箭头和因箭头
+            if tk == "横向计数上方目标":
+                plot.addItem(pg.PlotCurveItem(
+                    [cend, cend], [tr_top, t], pen=_pen(col, 1.4, None, a)))
+                plot.addItem(pg.ArrowItem(
+                    pos=(cend, t), angle=-90, tailLen=0, headLen=9, headWidth=9,
+                    pen=_pen(col, 1.0, None, a), brush=pg.mkBrush(col)))
+            # 标签: 保/中/激 + 价格 + 空间% + 概率%
+            p_pct = f"{int(prob*100)}%" if prob is not None else ""
+            sign = "+" if (sp or 0) > 0 else ""
+            sp_s = f"{sign}{sp:.1f}%" if sp is not None else ""
+            lbl = f"{label}{t:.2f}{sp_s}{p_pct}"
+            # 三档标签按概率高低上下错开, 避免重叠
+            y_off = (idx - 1) * label_dy  # 保守-1, 中0, 激+1
+            if direction == "up":
+                y_off = idx * label_dy  # 向上时: 保守最下(在箭头旁), 中/激在上方
+            self._text(plot, label_x, t + y_off, lbl, col, anchor=(0, 0.5),
+                       bold=(idx == 0), delta=0, alpha=a, fill=_fill, border=_border)
+
+        # 近端参考目标 (可到达口径)
+        near = targets.get("近端上方目标")
+        if isinstance(near, (int, float)):
+            far_up = targets.get("横向计数上方目标")
+            if far_up is None or abs(float(near) - float(far_up)) > box:
+                a = 0.85 if active_up else 0.4
                 plot.addItem(pg.InfiniteLine(
                     pos=float(near), angle=0,
                     pen=_pen("#82c91e", 1.0, Qt.PenStyle.DotLine, a)))
-                self._text(plot, cend + 0.4, float(near),
-                           f"近端参考 {float(near):.2f}", "#82c91e",
-                           anchor=(0, 0.5), delta=0,
-                           alpha=0.85 if active else 0.4,
+                sp = targets.get("上方空间_近端%")
+                sign = "+" if (sp or 0) > 0 else ""
+                lbl = f"近{float(near):.2f}{sign}{sp:.1f}%" if sp is not None else f"近端{float(near):.2f}"
+                self._text(plot, label_x, float(near) - label_dy, lbl, "#82c91e",
+                           anchor=(0, 0.5), delta=0, alpha=a,
                            fill=_fill, border=_border)
 
-        # 下跌目标 (派发破位后计数): 从 TR 下沿投影
-        if "横向计数下方目标" in targets:
-            dn = float(targets["横向计数下方目标"])
-            active = direction in ("down", "range")
-            a = 0.95 if active else 0.45
-            plot.addItem(pg.InfiniteLine(
-                pos=dn, angle=0,
-                pen=_pen("#e03131", 1.2, Qt.PenStyle.DashLine, a)))
-            plot.addItem(pg.PlotCurveItem(
-                [cend, cend], [tr_bottom, dn],
-                pen=_pen("#e03131", 1.4, None, a)))
-            plot.addItem(pg.ArrowItem(
-                pos=(cend, dn), angle=90, tailLen=0, headLen=9, headWidth=9,
-                pen=_pen("#e03131", 1.0, None, a),
-                brush=pg.mkBrush("#e03131")))
-            self._text(plot, cend + 0.4, dn, f"▼ 下跌目标位 {dn:.2f}",
-                       "#e03131", anchor=(0, 0.5), bold=True, delta=0,
-                       alpha=a, fill=_fill, border=_border)
-            self._text(plot, cend + 0.4, (tr_bottom + dn) / 2,
-                       f"-因 {float(targets.get('cause', 0)):.2f}"
-                       f" ({int(targets.get('columns', 0))}列×格×反转)", "#e03131",
-                       anchor=(0, 0.5), delta=0, alpha=0.8,
-                       fill=_fill, border=_border)
-            near = targets.get("近端下方目标")
-            if isinstance(near, (int, float)) and abs(float(near) - dn) > box:
+        # ── 下跌方向三档 ──
+        dn_tiers = [
+            ("横向计数下方目标_保守", "下方概率_保守", "下方空间_保守%", 1.6, None, 0.95 if active_dn else 0.4, "保"),
+            ("横向计数下方目标_中",    "下方概率_中",    "下方空间_中%",    1.1, Qt.PenStyle.DashLine, 0.80 if active_dn else 0.35, "中"),
+            ("横向计数下方目标",        "下方概率_激进",  "下方空间_激进%",  0.9, Qt.PenStyle.DotLine,  0.65 if active_dn else 0.3,  "激"),
+        ]
+        for idx, (tk, pk, sk, lw, style, a, label) in enumerate(dn_tiers):
+            if tk not in targets:
+                continue
+            t = float(targets[tk])
+            prob = targets.get(pk)
+            sp = targets.get(sk)
+            if prob is not None and prob >= 0.7:
+                col = "#8a1a1a"
+            elif prob is not None and prob >= 0.5:
+                col = "#e03131"
+            else:
+                col = "#ffa8a8"
+            plot.addItem(pg.InfiniteLine(pos=t, angle=0, pen=_pen(col, lw, style, a)))
+            if tk == "横向计数下方目标":
+                plot.addItem(pg.PlotCurveItem(
+                    [cend, cend], [tr_bottom, t], pen=_pen(col, 1.4, None, a)))
+                plot.addItem(pg.ArrowItem(
+                    pos=(cend, t), angle=90, tailLen=0, headLen=9, headWidth=9,
+                    pen=_pen(col, 1.0, None, a), brush=pg.mkBrush(col)))
+            p_pct = f"{int(prob*100)}%" if prob is not None else ""
+            sign = "+" if (sp or 0) > 0 else ""
+            sp_s = f"{sign}{sp:.1f}%" if sp is not None else ""
+            lbl = f"{label}{t:.2f}{sp_s}{p_pct}"
+            # 向下时: 保守档最高(在箭头旁), 中/激叠在下方
+            y_off = (1 - idx) * label_dy if direction == "down" else (idx - 1) * label_dy
+            self._text(plot, label_x, t + y_off, lbl, col, anchor=(0, 0.5),
+                       bold=(idx == 0), delta=0, alpha=a, fill=_fill, border=_border)
+
+        # 下跌近端参考
+        near = targets.get("近端下方目标")
+        if isinstance(near, (int, float)):
+            far_dn = targets.get("横向计数下方目标")
+            if far_dn is None or abs(float(near) - float(far_dn)) > box:
+                a = 0.85 if active_dn else 0.4
                 plot.addItem(pg.InfiniteLine(
                     pos=float(near), angle=0,
                     pen=_pen("#f08c00", 1.0, Qt.PenStyle.DotLine, a)))
-                self._text(plot, cend + 0.4, float(near),
-                           f"近端参考 {float(near):.2f}", "#f08c00",
-                           anchor=(0, 0.5), delta=0,
-                           alpha=0.85 if active else 0.4,
+                sp = targets.get("下方空间_近端%")
+                sign = "+" if (sp or 0) > 0 else ""
+                lbl = f"近{float(near):.2f}{sign}{sp:.1f}%" if sp is not None else f"近端{float(near):.2f}"
+                self._text(plot, label_x, float(near) + label_dy, lbl, "#f08c00",
+                           anchor=(0, 0.5), delta=0, alpha=a,
                            fill=_fill, border=_border)
 
     # ── 视图 / 交互 ──

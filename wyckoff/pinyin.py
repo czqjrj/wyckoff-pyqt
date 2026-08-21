@@ -10,9 +10,8 @@ import os
 import time
 from threading import Lock
 
-import requests
 
-from ._shared import atomic_write_json
+from ._shared import atomic_write_json, http_session
 from ._log import log_exc
 from .paths import ALL_STOCKS_FILE, STOCK_NAMES_FILE
 from .utils import normalize_symbol
@@ -160,7 +159,7 @@ def _fetch_market_stock_list_from(url) -> list:
         params = dict(_EM_CLIST_PARAMS)
         params["pn"] = str(pn)
         params["pz"] = str(_EM_PAGE_SIZE)
-        r = requests.get(url, params=params, headers=_EM_HEADERS, timeout=5)
+        r = http_session().get(url, params=params, headers=_EM_HEADERS, timeout=5)
         diff = (r.json().get("data") or {}).get("diff") or []
         if not diff:
             break
@@ -380,7 +379,7 @@ def search_stock(query: str, limit: int = 10) -> list:
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
             "Referer": "https://www.eastmoney.com/"
         }
-        r = requests.get(url, params=params, headers=headers, timeout=5)
+        r = http_session().get(url, params=params, headers=headers, timeout=5)
         data = r.json()
 
         results = []

@@ -139,7 +139,8 @@ def load_signals():
 
 def save_signals(records):
     try:
-        atomic_write_json(SIGNAL_ACCURACY_FILE, records)
+        # 记录集可达数 MB, 紧凑序列化 (indent=None) 体积 -40%, 落盘更快
+        atomic_write_json(SIGNAL_ACCURACY_FILE, records, indent=None)
         invalidate_win_rate_cache()
     except Exception as e:
         from ._log import log_exc
@@ -217,9 +218,13 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
                          datalen=datalen, kind="vsa", type=s.get("label", "?"),
                          idx=s.get("idx"), date=str(s.get("date")),
                          conf=0, price=0.0, created_ts=time.time(),
-                         last_eval_ts=0, status="pending", eval_fails=0, results={}))
+                         last_eval_ts=0, status="pending", eval_fails=0, results={},
+                         features=s.get("features")))
     if not recs:
         return 0
+    # 单次事务: 去重合并 + 立即评估 + 落盘都在一把锁内完成。
+    # (旧版双读双写 3.9MB JSON: 每次分析 ~16MB 文件 IO; 合并后减半,
+    # 且消除"评估期间他线程落盘被本线程旧视图覆盖"的窗口。)
     with _LOCK:
         records = load_signals()
         existing = {_key(r): r for r in records}
@@ -241,23 +246,21 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
                     continue
             existing[key] = rec
             n_new += 1
-        out = list(existing.values())
-        save_signals(out)
-    # 立即评估 (无需等 cron): 历史信号在当次 df 内已有未来行情
-    for rec in recs:
-        idx = _locate(df, rec["date"])
-        if idx is not None:
-            _eval_against(df, idx, rec)
-    with _LOCK:
-        cur = load_signals()
+        # 立即评估 (无需等 cron): 历史信号在当次 df 内已有未来行情
         for rec in recs:
-            key = _key(rec)
-            for c in cur:
-                if _key(c) == key:
-                    c["results"] = rec["results"]
-                    c["status"] = rec["status"]
-                    break
-        save_signals(cur)
+            idx = _locate(df, rec["date"])
+            if idx is not None:
+                _eval_against(df, idx, rec)
+        # 把评估结果同步回存储记录:
+        # - 新建/替换的记录与 rec 是同一对象, 评估已就地生效;
+        # - 同键保留的旧记录 (已有结果被跳过的) 用新评估刷新 (口径与数据更新)。
+        for rec in recs:
+            target = existing.get(_key(rec))
+            if target is not None and target is not rec and rec.get("results"):
+                target["results"] = rec["results"]
+                target["status"] = rec["status"]
+                target["waiting"] = rec.get("waiting", False)
+        save_signals(list(existing.values()))
     invalidate_win_rate_cache()
     return n_new
 
@@ -303,7 +306,10 @@ def run_auto_signal_eval(force=False):
 
 
 # ── 汇总 ──
+# 胜率表缓存: GUI 线程 (fusion/结论) 与扫描线程 (record_signals 失效) 并发访问,
+# 必须持锁; 独立于 _LOCK 避免与落盘锁互相嵌套。
 _WINRATE_CACHE = None
+_WINRATE_LOCK = threading.Lock()
 
 # L1 贝叶斯收缩: 把样本胜率向市场整体基线回归, 替代"n<10 一刀切"的硬门槛。
 #   小样本的类型胜率不可靠 (SOS n=77 是 50.6%, n=9 的 PSY 却可能 100%),
@@ -348,51 +354,52 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
     → ret<0 记命中 (下跌才对)。
     """
     global _WINRATE_CACHE
-    if not isinstance(_WINRATE_CACHE, dict):
-        _WINRATE_CACHE = {}
-    cached = _WINRATE_CACHE.get(horizon)
-    if cached is not None and not force:
-        return cached
-    records = load_signals()
-    out = {}
-    for r in records:
-        kind = r.get("kind", "event")
-        type_ = r.get("type", "?")
-        res = (r.get("results") or {}).get(str(horizon))
-        if not res or res.get("ret") is None:
-            continue
-        key = _winrate_key(kind, type_)
-        s = out.setdefault(key, {"n": 0, "rets": []})
-        s["n"] += 1
-        s["rets"].append(res["ret"])
-    # 方向化命中: 标称多头/中性信号 → 上涨记命中; 标称空头信号 → 下跌记命中。
-    # (空头信号如 UTAD/LPSY/SUP 用"上涨占比"口径会把人家的"对"记成"错"。)
-    def _hit(kind, type_, v):
-        if kind == "event":
-            d = event_dir(type_)
-        else:
-            d = vsa_dir(type_)
-        return v < 0 if d < 0 else v >= 0
-    # 全池基线 (方向化命中占比), 钳制防极端
-    pool_wins = sum(1 for key in out for v in out[key]["rets"]
-                    if _hit(key[0], key[1], v))
-    pool_n = sum(s["n"] for s in out.values())
-    p0 = (pool_wins / pool_n) if pool_n else 0.5
-    p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
-    result = {}
-    for key, s in out.items():
-        if not s["rets"] or s["n"] < MIN_SHRUNK_N:
-            continue
-        wins = sum(1 for v in s["rets"] if _hit(key[0], key[1], v))
-        win = wins / s["n"]
-        ci_lo, ci_hi = _wilson_ci(s["n"], wins)
-        result[key] = {"n": s["n"], "win": round(win, 4),
-                       "shrunk": round(_bayes_shrink(wins, s["n"], p0), 4),
-                       "ci_lo": round(ci_lo, 4), "ci_hi": round(ci_hi, 4),
-                       "mean": round(statistics.mean(s["rets"]), 6),
-                       "p0": round(p0, 4), "alpha0": PRIOR_ALPHA0}
-    _WINRATE_CACHE[horizon] = result
-    return result
+    with _WINRATE_LOCK:
+        if not isinstance(_WINRATE_CACHE, dict):
+            _WINRATE_CACHE = {}
+        cached = _WINRATE_CACHE.get(horizon)
+        if cached is not None and not force:
+            return cached
+        records = load_signals()
+        out = {}
+        for r in records:
+            kind = r.get("kind", "event")
+            type_ = r.get("type", "?")
+            res = (r.get("results") or {}).get(str(horizon))
+            if not res or res.get("ret") is None:
+                continue
+            key = _winrate_key(kind, type_)
+            s = out.setdefault(key, {"n": 0, "rets": []})
+            s["n"] += 1
+            s["rets"].append(res["ret"])
+        # 方向化命中: 标称多头/中性信号 → 上涨记命中; 标称空头信号 → 下跌记命中。
+        # (空头信号如 UTAD/LPSY/SUP 用"上涨占比"口径会把人家的"对"记成"错"。)
+        def _hit(kind, type_, v):
+            if kind == "event":
+                d = event_dir(type_)
+            else:
+                d = vsa_dir(type_)
+            return v < 0 if d < 0 else v >= 0
+        # 全池基线 (方向化命中占比), 钳制防极端
+        pool_wins = sum(1 for key in out for v in out[key]["rets"]
+                        if _hit(key[0], key[1], v))
+        pool_n = sum(s["n"] for s in out.values())
+        p0 = (pool_wins / pool_n) if pool_n else 0.5
+        p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
+        result = {}
+        for key, s in out.items():
+            if not s["rets"] or s["n"] < MIN_SHRUNK_N:
+                continue
+            wins = sum(1 for v in s["rets"] if _hit(key[0], key[1], v))
+            win = wins / s["n"]
+            ci_lo, ci_hi = _wilson_ci(s["n"], wins)
+            result[key] = {"n": s["n"], "win": round(win, 4),
+                           "shrunk": round(_bayes_shrink(wins, s["n"], p0), 4),
+                           "ci_lo": round(ci_lo, 4), "ci_hi": round(ci_hi, 4),
+                           "mean": round(statistics.mean(s["rets"]), 6),
+                           "p0": round(p0, 4), "alpha0": PRIOR_ALPHA0}
+        _WINRATE_CACHE[horizon] = result
+        return result
 
 
 def win_rate_of(kind: str, type_: str, horizon: int = 20,
@@ -413,7 +420,8 @@ def win_rate_of(kind: str, type_: str, horizon: int = 20,
 def invalidate_win_rate_cache():
     """记录变更后使胜率缓存失效 (下次 load 时重新计算)。"""
     global _WINRATE_CACHE
-    _WINRATE_CACHE = {}
+    with _WINRATE_LOCK:
+        _WINRATE_CACHE = {}
 
 
 def win_rate_profile(kind: str, type_: str, min_n: int = 3):

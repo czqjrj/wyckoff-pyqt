@@ -123,11 +123,13 @@ def test_ticker_set_clear_and_current():
     tk.setFixedWidth(300)
     tk.set_messages([("甲(600104) Spring 实测命中82%", "#d62728", "600104"),
                      ("乙(600519) ST 实测命中71%", "#d62728", "600519")])
+    tk.flush_now()  # debounce 立即刷新, 确保消息落到 _msgs
     app.processEvents()
     assert tk.current_code() == "600104"
     tk._advance()
     assert tk.current_code() == "600519"
     tk.clear()
+    tk.flush_now()
     app.processEvents()
     assert tk.current_code() == ""
     assert tk.text() == ""
@@ -139,9 +141,11 @@ def test_ticker_add_messages_merge_and_cap():
     tk = _StatusTicker()
     tk.set_messages([("甲(600104) Spring 实测命中82%", "#d62728", "600104"),
                      ("乙(600519) ST 实测命中71%", "#d62728", "600519")])
+    tk.flush_now()
     # 合并去重 (文本相同视为重复): 新消息在前, 旧重复项被剔除
     tk.add_messages([("乙(600519) ST 实测命中71%", "#d62728", "600519"),
                      ("丙(000858) SOW 实测命中66%", "#2f9e44", "000858")])
+    tk.flush_now()
     texts = [m[0] for m in tk._msgs]
     assert texts == [("乙(600519) ST 实测命中71%", "#d62728", "600519")[0],
                      ("丙(000858) SOW 实测命中66%", "#2f9e44", "000858")[0],
@@ -151,8 +155,10 @@ def test_ticker_add_messages_merge_and_cap():
     many = [(f"股{i}(6001{i:02d}) Spring 实测命中82%", "#d62728", f"6001{i:02d}")
             for i in range(TICKER_MAX_ITEMS + 10)]
     tk.set_messages(many)
+    tk.flush_now()
     assert len(tk._msgs) <= TICKER_MAX_ITEMS, len(tk._msgs)
     tk.add_messages(many)
+    tk.flush_now()
     assert len(tk._msgs) <= TICKER_MAX_ITEMS, len(tk._msgs)
 
 
@@ -222,6 +228,7 @@ def test_watch_scan_no_hit_placeholder():
         rich = {i: {"name": f"股{i}", "code": f"6001{i}", "events": [], "vsa": []}
                 for i in "12"}
         w._on_watch_scan((True, {}, rich))
+        w.status_ticker.flush_now()  # debounce 立即触发
         app.processEvents()
         assert w.status_ticker._msgs, "应有占位消息"
         text, color, code = w.status_ticker._msgs[0]
@@ -237,6 +244,17 @@ def test_watch_scan_no_hit_placeholder():
         app.processEvents()
         mw.load_settings = orig_load
         mw.load_watchlist = orig_watch
+
+
+def _wait_thread(th, app, timeout_ms=3000):
+    """等待 QThread 完成, 中间持续 processEvents 防止死锁。"""
+    from PyQt6.QtCore import QElapsedTimer
+    t = QElapsedTimer()
+    t.start()
+    while th.isRunning() and t.elapsed() < timeout_ms:
+        app.processEvents()
+        th.msleep(10)
+    return not th.isRunning()
 
 
 def test_push_analysis_ticker_recent_hits(monkeypatch):
@@ -286,7 +304,6 @@ def test_push_analysis_ticker_recent_hits(monkeypatch):
         w.resize(1600, 900)
         w.show()
         app.processEvents()
-        n0 = len(w.status_ticker._msgs) if w.status_ticker._msgs else 0
         idx = pd.date_range("2026-07-01", periods=30, freq="D")
         df = pd.DataFrame({"high": np.full(30, 12.0), "low": np.full(30, 10.0),
                            "open": np.full(30, 11.0), "close": np.full(30, 11.0),
@@ -295,11 +312,17 @@ def test_push_analysis_ticker_recent_hits(monkeypatch):
         r = {"code": "sh600104", "name": "上汽集团", "df": df,
              "summary": {}, "sections": []}
         w._push_analysis_ticker(r)
+        # 等后台分析 ticker 线程跑完
+        th = getattr(w, "_analysis_ticker_th", None)
+        assert th is not None, "_AnalysisTickerThread 未启动"
+        assert _wait_thread(th, app), "分析 ticker 线程超时未完成"
         app.processEvents()
+        w.status_ticker.flush_now()
         codes = [m[2] for m in w.status_ticker._msgs]
-        assert "600104" in codes, codes
-        assert any(m[2] == "600104" and "Spring" in m[0] for m in w.status_ticker._msgs)
+        assert any(c == "sh600104" for c in codes), codes
+        assert any(m[2] == "sh600104" and "Spring" in m[0] for m in w.status_ticker._msgs)
         w.status_ticker.set_messages([])
+        w.status_ticker.flush_now()
         assert w.status_ticker._msgs == []
     finally:
         try:
@@ -340,6 +363,7 @@ def test_startup_ticker_scan_placeholder():
         app.processEvents()
         w._auto_scan_watchlist = lambda: started.append(True)
         w._startup_ticker_scan()
+        w.status_ticker.flush_now()  # debounce 立即刷新
         app.processEvents()
         assert started, "_startup_ticker_scan 应触发一次扫描"
         assert w.status_ticker._msgs

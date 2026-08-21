@@ -14,9 +14,8 @@ import json
 from threading import Lock, Semaphore
 
 import pandas as pd
-import requests
 
-from ._shared import atomic_write_json
+from ._shared import atomic_write_json, http_session
 from .paths import ALL_STOCKS_FILE, BOARD_MAP_FILE
 
 _FUND_CACHE = {}
@@ -127,7 +126,7 @@ def _get(url, params, headers, timeout=4, retries=1, cache_fail=True):
     last = None
     for i in range(retries + 1):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=timeout)
+            r = http_session().get(url, params=params, headers=headers, timeout=timeout)
             if r.status_code == 200:
                 return r
             last = r.status_code

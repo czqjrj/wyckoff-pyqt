@@ -273,14 +273,15 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False):
              + dims[2]["score"] * W_VSA + dims[3]["score"] * W_PNF)
     score = max(-100.0, min(100.0, score))
 
-    bias = "看多" if score > 15 else "看空" if score < -15 else "中性"
+    # bias 阈值 ±8 (与 phase_tone 对齐, 减少 fusion_bias 过度中性化)
+    bias = "看多" if score > 8 else "看空" if score < -8 else "中性"
     strong_bull = sum(1 for d in dims if d["bias"] == "看多")
     strong_bear = sum(1 for d in dims if d["bias"] == "看空")
     if score > 40 and strong_bear == 0:
         confidence = "高"
     elif score < -40 and strong_bull == 0:
         confidence = "高"
-    elif (score > 15 or score < -15) and max(strong_bull, strong_bear) >= 2:
+    elif (score > 8 or score < -8) and max(strong_bull, strong_bear) >= 2:
         confidence = "中"
     else:
         confidence = "低"

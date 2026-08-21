@@ -35,6 +35,7 @@ ACC_POSITIVE = {
 # 派发假设下的反面(吸筹倾向)事件加分表
 DIS_COUNTER = {
     "Spring": (25, "派发区弹簧 → 需求进场迹象"),
+    "Shakeout": (25, "放量假破位收复 → 震仓, 派发假设动摇"),
     "SOS": (20, "派发区 SOS → 强势信号不弱"),
     "JOC": (30, "派发区 JOC 突破 → 假突破风险"),
     "BC_BREAK": (30, "价格收盘突破 BC 高点 → 派发假设动摇"),
@@ -140,7 +141,7 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
     else:  # 派发
         counter = DIS_COUNTER
         for t, (delta, desc) in counter.items():
-            if t in ("Spring", "SOS", "JOC") and t in types:
+            if t in ("Spring", "Shakeout", "SOS", "JOC") and t in types:
                 fired.append((t, delta, desc))
         bcs = [e for e in recent if e["type"] == "BC"]
         if bcs and last_close > bcs[-1]["price"]:

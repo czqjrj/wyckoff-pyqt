@@ -4,7 +4,7 @@ import pandas as pd
 
 from .config import EVENT_CN, W_RECENT, ER_BULL, ER_BEAR, VSA_CN, vsa_dir
 from .vsa_explain import VSA_EXPLAIN, meaning_pure, LONG_ONLY_NOTE
-from .phases import judge_phase
+from .phases import judge_phase, flow_confirmed
 from .counterevidence import ce_lines
 from .ninetests import nt_lines
 from .filters import build_filter_sections, filter_summary_cards
@@ -109,12 +109,15 @@ def build_signal_summary(df, pivots, events, structure=None, pnf_t=None,
                 rs_tone, rs_tag = "neutral", "短线弱/长线强(分歧)"
             out.append({"label": "相对", "value": f"{rs_tag} ({rl})", "tone": rs_tone})
 
-    # 吸筹/派发结构进度
+    # 吸筹/派发/下跌结构进度
     if structure:
         letter = structure[0]
         tone = {"A": "neutral", "B": "neutral", "C": "bullish", "D": "bullish",
                 "E": "bullish"}.get(letter, "neutral")
         if "Distribution" in (structure[2] or ""):
+            tone = {"A": "neutral", "B": "bearish", "C": "bearish",
+                    "D": "bearish", "E": "bearish"}.get(letter, "neutral")
+        elif "Markdown" in (structure[2] or ""):
             tone = {"A": "neutral", "B": "bearish", "C": "bearish",
                     "D": "bearish", "E": "bearish"}.get(letter, "neutral")
         out.append({"label": "结构", "value": f"{structure[2].splitlines()[0]} Phase {letter}",
@@ -175,15 +178,33 @@ def build_signal_summary(df, pivots, events, structure=None, pnf_t=None,
             out.append({"label": "区间", "value": f"{pnf_t['tr_bottom']:.2f} ~ {pnf_t['tr_top']:.2f}",
                         "tone": "neutral"})
 
-    # 阶段
+    # 阶段 (附 资金确认/背离 徽标: 仅K线量价资金口径, 离线可用)
     phase, _ = judge_phase(df, pivots, events)
     tone = {"底部整固": "bullish", "上升趋势": "bullish", "区间整理": "neutral",
             "顶部构筑": "bearish", "下跌趋势": "bearish"}.get(
         phase.split(" ")[0], "neutral")
+    try:
+        _fc = flow_confirmed(df)
+        _base = phase.split(" ")[0]
+        if _base in ("底部整固", "上升趋势"):
+            _badge = "·资金确认" if _fc else "·资金背离"
+            if not _fc:
+                tone = "caution"
+        elif _base in ("下跌趋势", "顶部构筑"):
+            _badge = "·资金回流" if _fc else "·资金确认"
+        else:
+            _badge = ""
+    except Exception:
+        _badge = ""
+    _badge_tip = {"·资金确认": "近5日量价资金净流入, 与阶段方向一致",
+                  "·资金背离": "阶段偏多但近5日量价资金净流出 → 谨慎, 防诱多/中继",
+                  "·资金回流": "阶段偏空但近5日量价资金净流入 → 关注止跌/反抽"}.get(_badge, "")
     # 置信修饰覆盖色调: 需谨慎 → 琥珀 (即使基础阶段偏多/偏空, 也要降级提醒)
     if phase_label and "需谨慎" in phase_label:
         tone = "caution"
-    out.append({"label": "阶段", "value": phase_label or phase, "tone": tone})
+    out.append({"label": "阶段",
+                "value": f"{phase_label or phase}{_badge}", "tone": tone,
+                "tooltip": _badge_tip})
 
     # 波浪位置 (增强波浪计数: 当前浪位 + 方向)
     if wave_data and wave_data.get("position"):

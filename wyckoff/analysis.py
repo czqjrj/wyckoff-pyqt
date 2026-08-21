@@ -11,7 +11,7 @@ from .indicators import add_indicators, find_pivots, pivot_order
 from .events import detect_all
 from .phases import judge_phase, phase_segments
 from .waves import calc_targets, enhanced_wave_analysis
-from .pnf import build_pnf, pnf_targets, pnf_history_targets, plot_pnf
+from .pnf import build_pnf, pnf_targets, pnf_history_targets, plot_pnf, pnf_volume
 from .vsa import vsa_classify
 from .fusion import fuse_signals
 from .structure import structure_progress
@@ -68,7 +68,8 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     spring = "Spring" in rtypes
     utad = "UTAD" in rtypes
     lpsy = "LPSY" in rtypes
-    dist = "Distribution" in (structure[2] if structure else "")
+    dist = "Distribution" in (structure[2] if structure else "") \
+        or "Markdown" in (structure[2] if structure else "")
 
     # 提取基础阶段 (去除"高置信"/"需谨慎"修饰)
     base_phase = phase.replace("高置信 ", "").replace(" (需谨慎)", "").split(" ")[0]
@@ -322,7 +323,8 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
         if cached_t:
             _ANALYSIS_CACHE[cache_key] = (cached_t[0], cached_t[1], vsa_signals)
     pnf_cols, box = build_pnf(df, box_mode=pnf_box_mode, atr_factor=pnf_atr_factor)
-    pnf_t = pnf_targets(df, pnf_cols, box)
+    pnf_vol = pnf_volume(df, pnf_cols, box)
+    pnf_t = pnf_targets(df, pnf_cols, box, volumes=pnf_vol)
     structure = structure_progress(events, df, phase=phase)
     tr = find_trading_range(df, pivots)
     profile = volume_profile(df)

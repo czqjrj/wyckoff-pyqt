@@ -81,7 +81,7 @@ def test_fetch_realtime_index_and_stock_same_code_coexist(monkeypatch):
         r.text = text
         return r
 
-    monkeypatch.setattr(datasource.requests, "get", fake_get)
+    monkeypatch.setattr(datasource.http_session(), "get", fake_get)
     out = datasource.fetch_realtime(["000001", "sh000001"])
     assert out["sz000001"]["name"] == "平安银行"
     assert out["sh000001"]["name"] == "上证指数"

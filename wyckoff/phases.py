@@ -12,6 +12,97 @@ from .config import (
 )
 
 
+def _bottom_turning(df, pivots, events, rtypes, low_win=60, min_rec=0.04,
+                    ma_win=120):
+    """下跌末段是否已现"低点防守 + 回升"的筑底迹象。
+
+    三项判断:
+    - 回升: 收盘自近期 (low_win) 低点回升 ≥ min_rec;
+    - 低点防守: 收盘守住最近枢轴低点 (高于其 2%);
+    - 确认: 吸筹事件 (Spring/ST/SOS/JOC/SC) 或 站上 MA20 或 MA20 斜率向上。
+    后两项至少满足其一, 防止只凭一根反抽就过早抄底。"""
+    n = len(df)
+    if n < 30:
+        return False
+    close = df["close"].values
+    w = df.tail(low_win)
+    recent_lo = float(w["low"].min())
+    if recent_lo <= 0 or close[-1] <= recent_lo * (1 + min_rec):
+        return False
+    lows = [p for p in pivots if p["type"] == "low" and p["idx"] >= n - ma_win]
+    held_low = False
+    if lows:
+        last_low = lows[-1]["price"]
+        if last_low > 0 and close[-1] > last_low * 1.02:
+            held_low = True
+    acc_ev = bool(rtypes & {"Spring", "ST", "SOS", "JOC", "SC"})
+    ma20 = df["price_ma20"].values
+    ma20_up = np.isfinite(ma20[-1]) and np.isfinite(ma20[-8]) \
+        and ma20[-1] > ma20[-8]
+    above_ma20 = np.isfinite(ma20[-1]) and close[-1] > ma20[-1]
+    confirm = acc_ev or above_ma20 or ma20_up
+    return (held_low or above_ma20) and confirm
+
+
+def flow_confirmed(df, back=5):
+    """近 back 根量价资金净流入占比 > 0 才确认资金承接。
+
+    口径: Σ(body×vol) / Σ(|body|×vol) ∈ [-1,1], 无量纲跨股票可比 (含
+    放量/缩量、红绿K方向)。仅靠K线推导, 全历史可回测; 若东财主力资金流
+    可用 (run_analysis 层), 另行加权叠加, 此处为纯量价口径。
+    校准: 偏多阶段判定后 20 根上涨, net5>0 组 56.8% vs net5<=0 组 45.7% ——
+    近期无资金流入的"底部/上升"多为下跌中继或诱多, 应降为观望。
+    """
+    close = df["close"].values
+    o = df["open"].values
+    vol = df["volume"].values
+    b = close[-back:] - o[-back:]
+    v = vol[-back:]
+    num = float(np.sum(b * v))
+    den = float(np.sum(np.abs(b) * v)) or 1.0
+    return num / den > 0.0
+
+
+def _bull_confirmed(df, back=8):
+    """多头价格确认: 收盘站上 MA20 或 MA20 斜率向上 (回调末段至少初显企稳)。
+    用于收紧"底部整固"判定 —— 结构低点 + 事件, 若价格仍深陷下跌 (价在 MA20
+    下方且均线向下), 过早标多只是抄底赌博。"""
+    ma20 = df["price_ma20"].values
+    close = df["close"].values
+    if not np.isfinite(ma20[-1]):
+        return False
+    if close[-1] > ma20[-1]:
+        return True
+    if len(ma20) > back and np.isfinite(ma20[-1 - back]) \
+            and ma20[-1] > ma20[-1 - back]:
+        return True
+    return False
+
+
+def _top_turning(df, events, rtypes, hi_win=60, min_dn=0.04, ma_win=120):
+    """上升趋势末段是否已现"冲高回落 + 破位"的见顶迹象。
+
+    - 回落: 收盘自近期 (hi_win) 高点回落 ≥ min_dn;
+    - 破位: 收盘跌破 MA20;
+    - 确认: 派发事件 (UTAD/BC/LPSY/SOW) 或 MA20 斜率向下。
+    回落 + (破位 + 确认至少其一) 才判顶, 避免强趋势中正常回调误判。"""
+    n = len(df)
+    if n < 30:
+        return False
+    close = df["close"].values
+    w = df.tail(hi_win)
+    recent_hi = float(w["high"].max())
+    if recent_hi <= 0 or close[-1] >= recent_hi * (1 - min_dn):
+        return False
+    ma20 = df["price_ma20"].values
+    if not (np.isfinite(ma20[-1]) and close[-1] < ma20[-1]):
+        return False
+    dist_ev = bool(rtypes & {"UTAD", "BC", "LPSY", "SOW"})
+    ma20_dn = np.isfinite(ma20[-1]) and np.isfinite(ma20[-8]) \
+        and ma20[-1] < ma20[-8]
+    return dist_ev or ma20_dn
+
+
 def judge_phase(df: pd.DataFrame, pivots, events):
     recent_lows = [p for p in pivots[-6:] if p["type"] == "low"]
     recent_highs = [p for p in pivots[-6:] if p["type"] == "high"]
@@ -37,9 +128,29 @@ def judge_phase(df: pd.DataFrame, pivots, events):
         ctx_lo = float(ctx["low"].min())
         pos = (close[-1] - ctx_lo) / (ctx_hi - ctx_lo) if ctx_hi > ctx_lo else 0.5
         if hh_down and ll_down:
-            phase, detail = "下跌趋势 (Markdown)", "高、低点同步下移 → 派发/再派发"
+            # 下跌趋势末段: 若近期已现"低点防守 + 回升"的筑底迹象, 不直接标下跌
+            # (校准: 标"下跌"后 20 根上涨占 74%, 多数实为底部, 需在回升确认后
+            # 尽快转多)。筑底要求: 自近期低点回升 ≥4% 且守住最近枢轴低点,
+            # 并辅以吸筹事件/站上MA20之一确认。
+            if _bottom_turning(df, pivots, events, rtypes):
+                phase = "底部整固 (Accumulation)"
+                detail = "高、低点此前同步下移, 但近期低点防守 + 回升确认 → 收敛筑底迹象"
+            else:
+                phase, detail = "下跌趋势 (Markdown)", "高、低点同步下移 → 派发/再派发"
         elif hh_up and ll_up:
-            phase, detail = "上升趋势 (Markup)", "高、低点同步上移 → 积累后拉升"
+            # 上升趋势末段: 若近期已现"冲高回落 + 跌破MA20"的见顶迹象, 不直接
+            # 标上升 (校准: 标"拉升"后 20 根下跌占 71%, 多数实为顶部派发)。
+            if _top_turning(df, events, rtypes):
+                phase = "顶部构筑 (Distribution)"
+                detail = "高、低点此前同步上移, 但近期冲高回落 + 破位确认 → 见顶派发迹象"
+            elif np.isfinite(ma20[-1]) and np.isfinite(ma20[-8]) \
+                    and close[-1] < ma20[-1] and ma20[-1] < ma20[-8]:
+                # 高点低点仍上移但价格跌破 MA20 且 MA20 已拐头向下: 上升结构被
+                # 回调动摇, 方向待定 (校准: 跌破MA20时仍标"上升趋势"后 20 根
+                # 上涨仅 35%, 转中性更诚实)。仅轻微回踩 (MA20 仍上行) 不降级。
+                phase, detail = "区间整理", "高、低点同步上移但价格跌破MA20且均线拐头 → 回调动摇上升结构, 待收复确认"
+            else:
+                phase, detail = "上升趋势 (Markup)", "高、低点同步上移 → 积累后拉升"
         elif ll_up and not hh_down:
             if pos >= 0.65:
                 # 低点上移 + 高位滞涨: 实测该形态后20根上涨占比≈基准 (非看空),
@@ -48,7 +159,14 @@ def judge_phase(df: pd.DataFrame, pivots, events):
                 # 有效跌破确认后再转空。
                 phase, detail = "区间整理", "低点上移+高位滞涨, 高点未破 → 方向待定, 不急于判顶"
             elif rtypes & {"Spring", "ST", "SOS", "JOC"}:
-                phase, detail = "底部整固 (Accumulation)", "低点上移 + 吸筹事件确认 → 吸筹迹象"
+                if _bull_confirmed(df) and flow_confirmed(df):
+                    phase, detail = "底部整固 (Accumulation)", "低点上移 + 吸筹事件确认 → 吸筹迹象"
+                else:
+                    # 吸筹事件出现但价格仍深陷 MA20 下方且均线向下, 或近期资金
+                    # 净流出 (net5<=0): 事件可能是下降中继的反弹, 过早标多危险
+                    # (校准: 底部整固标多命中率仅33%; net5<=0 组上涨仅45.7%),
+                    # 降为中性等待价格/资金确认。
+                    phase, detail = "区间整理", "低点上移 + 吸筹事件, 但价在MA20下方或无资金流入 → 待确认"
             else:
                 # 低点上移但无吸筹事件: 多为下降中继, 过早抄底危险 (校准: 底部整固
                 # 标多命中率仅33%, 多数其后继续下跌)。
@@ -58,7 +176,13 @@ def judge_phase(df: pd.DataFrame, pivots, events):
                 # 价处区间低位: 下跌末段收敛, 需吸筹事件 (Spring/ST/SOS/JOC) 确认,
                 # 否则多数仍是下跌中继, 直接标"底部整固"会给出过早抄底建议。
                 if rtypes & {"Spring", "ST", "SOS", "JOC"}:
-                    phase, detail = "底部整固 (Accumulation)", "高点下移+低点有支撑, 价处区间低位 → 收敛筑底(有吸筹事件确认)"
+                    if _bull_confirmed(df) and flow_confirmed(df):
+                        phase, detail = "底部整固 (Accumulation)", "高点下移+低点有支撑, 价处区间低位 → 收敛筑底(有吸筹事件确认)"
+                    else:
+                        # 吸筹事件但价仍在MA20下方且均线向下, 或近期资金净流出:
+                        # 多为下跌中继的反弹 (校准: 底部整固标多命中率仅33%,
+                        # net5<=0 组上涨仅45.7%), 降为中性等待价格/资金收复。
+                        phase, detail = "区间整理", "高点下移+低位收敛+吸筹事件, 但价在MA20下方或无资金流入 → 待确认"
                 else:
                     phase, detail = "区间整理", "高点下移+低位收敛, 但无吸筹事件确认 → 待 Spring/ST/突破确认"
             else:
@@ -258,6 +382,7 @@ def _validate_phase(df, s, e, k, look=120, break_pct=0.05):
       (>3% 下移 → 下跌), 低点抬升且净涨 → 上行结构; 且高点向前突破
       (带后 look 根内有效突破带高且不回撤 → 续涨, 非派发)。
     - 净变动超出 ±10% 一律改写为趋势段。
+    - 带宽 >50% 的吸筹/派发段视为过宽 (含多段趋势), 改写为趋势段。
     """
     if k not in ("accumulation", "distribution"):
         return k
@@ -273,6 +398,11 @@ def _validate_phase(df, s, e, k, look=120, break_pct=0.05):
     hi2 = hi[mid + 1:e + 1]
     if abs(net) > 0.10:
         return "markup" if net > 0 else "markdown"
+    # 带宽过宽 (含多段趋势) → 改写为趋势段
+    band_hi = float(hi[s:e + 1].max())
+    band_lo = float(lo[s:e + 1].min())
+    if band_hi / band_lo - 1 > 0.50:
+        return "markup" if net >= 0 else "markdown"
     if k == "accumulation":
         # 吸筹要求低点防守: 后段低点跌破前段低点 >3% → 已跌破支撑, 非吸筹
         if lo2.size and lo2.min() < lo1 * 0.97:
@@ -438,17 +568,39 @@ def _has_accum_evidence(events, a, b):
     return any(a <= e["idx"] <= b and e["type"] in ACC_RANGE_EV for e in events)
 
 
-def _mark_bottoms(df, phases, events=None, min_bars=None, jmin_bars=None,
-                  rec_lo=None, rec_hi=None, look=None, head=None):
+def _bottom_structure_ok(df, pivots, m, e):
+    """末段筑底的结构确认 (无事件时用): 守住最近枢轴低点, 且收盘站上 MA20
+    或 MA20 斜率向上。用于"回升未达 8%"的早期筑底, 避免把下跌中继当底。"""
+    close = df["close"].values
+    n = len(df)
+    lows = [p for p in pivots if p["type"] == "low" and m <= p["idx"] <= n]
+    if lows:
+        last_low = lows[-1]["price"]
+        if last_low > 0 and close[e] <= last_low * 1.01:
+            return False
+    ma20 = df["price_ma20"].values
+    if np.isfinite(ma20[e]) and close[e] > ma20[e]:
+        return True
+    if e >= 8 and np.isfinite(ma20[e]) and np.isfinite(ma20[e - 8]) \
+            and ma20[e] > ma20[e - 8]:
+        return True
+    return False
+
+
+def _mark_bottoms(df, phases, events=None, pivots=None, min_bars=None,
+                  jmin_bars=None, rec_lo=None, rec_hi=None, look=None,
+                  head=None):
     """把"低点防守 + 回升"的威科夫 Phase A 底部标为吸筹带。
 
     两种情形:
-    - 情形A (末段): 最后一段下跌在段内自底回升 → 整段后半 [m,e] 标吸筹;
-    - 情形B (拐点): 下跌段在段末触底, 回升发生在紧随的拉升段
-      (markdown→markup) → 从底部 m 到回升 8% 处标吸筹, 其余部分保留。
-    这些底已由"无新低 + 回升8~30%"确认。当调用方提供事件表 (events 非空) 时,
-    还要求拐点窗口内存在吸筹事件证据 (SC/ST/Spring/SOS/PSY/LPS/BU) 才标吸筹,
-    否则不加事件证据的仅靠价格形态的拐点不予标记 (由结构校验决定标签)。
+    - 情形A (段内筑底): 下跌段尾部自底回升 (无新低 + 回升) → 尾部 [m,e] 标吸筹;
+    - 情形B (跨段拐点): 下跌段在段末触底, 回升发生在紧随的吸筹/拉升段
+      (markdown→markup/accumulation) → 跨边界找底, 从底部到回升 8% 标吸筹。
+    校准: 标"下跌"后 20 根上涨占 74%; "markdown→accumulation/markup" 拐点
+    其后 20 根上涨占 66~84% —— 下跌带延伸到谷底才切换是最大误判源。
+    标准筑底要求 回升8~30% (情形A 需吸筹事件或价格结构确认, 情形B 依赖后续
+    段本身已是吸筹/拉升, 无需再等事件); 情形A 允许回升 4~8% 的早期筑底,
+    条件是守住枢轴低点且站上/走平 MA20。
     """
     min_bars = BOTTOM_MIN_BARS if min_bars is None else min_bars
     jmin_bars = BOTTOM_JMIN_BARS if jmin_bars is None else jmin_bars
@@ -468,17 +620,25 @@ def _mark_bottoms(df, phases, events=None, min_bars=None, jmin_bars=None,
             i += 1
             continue
         m = a + int(np.argmin(lo[a:e + 1]))
-        # 情形A要求先有真实下跌段 (底不能就在波段起点), 且回升段不长于下跌段2倍
-        if i == len(phases) - 1 and m - a >= min_bars \
+        # 情形A: 所有下跌段 (不限于末段) 尾部若现"低点防守 + 回升"即切出吸筹带。
+        # 校准: 标"下跌"后 20 根上涨占 74%; "markdown→accumulation" 与
+        # "markdown→markup" 两种拐点共 66 例正确率仅 16~34% —— 下跌带延伸到
+        # 谷底才切换, 把底部回升全算成"下跌"是最大误判源。要求先有真实下跌段
+        # (底不能就在波段起点), 且回升段不长于下跌段2倍。
+        if m - a >= min_bars \
                 and e - m + 1 >= min_bars \
                 and e - m + 1 <= (m - a) * 2 \
                 and lo[m + 1:e + 1].min() >= lo[m] * 0.995:
             rec = cl[e] / cl[m] - 1
-            if rec_lo <= rec <= rec_hi \
-                    and (not need_events or _has_accum_evidence(events, m, e)):
+            ev_ok = not need_events or _has_accum_evidence(events, m, e)
+            # 标准筑底: 回升 8~30% (需吸筹事件或结构确认);
+            # 早期筑底: 回升 4~8% 且守住枢轴低点 + 站上/走平 MA20。
+            if (rec_lo <= rec <= rec_hi and (ev_ok or _bottom_structure_ok(df, pivots, m, e))) \
+                    or (rec_lo * 0.5 <= rec < rec_lo
+                        and _bottom_structure_ok(df, pivots, m, e)):
                 z = None
                 for j in range(m + 1, e + 1):
-                    if cl[j] >= cl[m] * (1 + rec_lo):
+                    if cl[j] >= cl[m] * (1 + rec_lo * 0.5):
                         z = j
                         break
                 if m > a:
@@ -494,16 +654,18 @@ def _mark_bottoms(df, phases, events=None, min_bars=None, jmin_bars=None,
                 continue
         if i + 1 < len(phases):
             a2, e2, k2 = phases[i + 1]
-            if k2 == "markup":
+            if k2 in ("markup", "accumulation"):
                 w0 = max(a, e - head)
                 w1 = min(e2, e + look)
                 if w1 - w0 + 1 >= min_bars:
                     mb = w0 + int(np.argmin(lo[w0:w1 + 1]))
                     if mb < w1 and lo[mb + 1:w1 + 1].min() >= lo[mb] * 0.995:
                         rec = cl[w1] / cl[mb] - 1
-                        if rec_lo <= rec <= rec_hi \
-                                and (not need_events
-                                     or _has_accum_evidence(events, mb, w1)):
+                        # 拐点确认: 回升8~30% + 无新低即为确认 —— 后续段本身是
+                        # 吸筹/拉升 (价格已走出基底), 无需再等事件证据。
+                        # 校准: "markdown→accumulation/markup" 拐点其后 20 根上涨
+                        # 占 66~84%, 死等事件证据会漏掉绝大多数无事件的 V 型底。
+                        if rec_lo <= rec <= rec_hi:
                             z = None
                             for j in range(mb + 1, w1 + 1):
                                 if cl[j] >= cl[mb] * (1 + rec_lo):
@@ -554,7 +716,7 @@ def phase_segments(df: pd.DataFrame, pivots, events=None, order=6, smooth=9, min
     segs = _fix_breakout_type(df, segs)
     # 底部标吸筹: 所有下跌→拉升拐点 (受信任, 不再校验翻转; 提供事件表时需
     # 吸筹事件证据 (SC/ST/Spring/SOS 等) 才标记)
-    segs = _mark_bottoms(df, segs, events)
+    segs = _mark_bottoms(df, segs, events, pivots)
     # 末段近期急跌: 把"拉升/吸筹"带里最近的下跌尾巴切出来 (如冲高后崩落)
     segs = _mark_recent_decline(df, segs)
     merged = []

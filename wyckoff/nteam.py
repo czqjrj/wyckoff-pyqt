@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .datasource import fetch_realtime, fetch_kline
 from .fundamental import fetch_main_flow
+from ._shared import http_session
 from .indicators import add_indicators
 
 # 汇金/证金历史上公开使用过的宽基 ETF 买入载体
@@ -43,9 +44,8 @@ _ORDER = {"疑似买入": 0, "疑似买入(量价)": 0, "净流入": 1, "正常"
 
 def em_flow_available(timeout=3):
     """快速探针: 东财主力资金流接口是否可用 (避免断连时逐只卡12s×3重试)。"""
-    import requests
     try:
-        r = requests.get(
+        r = http_session().get(
             "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
             params={"secid": "1.510300", "fields1": "f1,f2,f3,f7",
                     "fields2": ("f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,"

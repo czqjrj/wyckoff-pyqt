@@ -14,6 +14,8 @@
 """
 import json
 import math
+import os
+import sys
 import time
 
 import numpy as np
@@ -60,8 +62,8 @@ def feature_vector(e) -> np.ndarray:
         v = f.get(name)
         if name == "boll_pct" and v is None:
             v = 0.5  # 布林带缺失 → 中性位置
-        elif v is None:
-            v = 0.0
+        elif v is None or (isinstance(v, float) and not math.isfinite(v)):
+            v = 0.0  # 缺失/NaN (如序列头部 pos60 未满窗) → 安全值填充
         if name == "dir" and v == 0:
             v = event_dir(e.get("type", ""))
         x[i] = float(v)
@@ -299,3 +301,91 @@ def _spearman(a, b):
     if ra.std() < 1e-12 or rb.std() < 1e-12:
         return 0.0
     return float(np.corrcoef(ra, rb)[0, 1])
+
+
+# ── 自动重训 / 定时任务 (与 accuracy.py / pnf_accuracy.py 同一套模式) ──
+
+def run_auto_model_retrain():
+    """无头重训入口: 供 accuracy --eval 链式调用 / cron / CLI。
+    返回模型状态 dict; 无新标签时 train_model 本身就是全量重训, 幂等安全。"""
+    return train_model()
+
+
+def _sched_command():
+    """生成供 cron / Windows 计划任务执行的重训命令。"""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" --model-train'
+    proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return f'cd "{proj}" && "{sys.executable}" -m wyckoff.online_model --train --quiet'
+
+
+def install_cron(hour=None, minute=11):
+    """Linux: 在 crontab 安装/移除每日重训任务 (默认每日 15:11, 紧随 15:01 评估)。
+    hour=None 时移除。"""
+    import subprocess
+    try:
+        cur = subprocess.check_output(["crontab", "-l"], stderr=subprocess.STDOUT,
+                                      text=True)
+    except subprocess.CalledProcessError:
+        cur = ""
+    lines = [l for l in cur.splitlines() if "wyckoff.online_model" not in l]
+    if hour is not None:
+        hour = max(0, min(23, int(hour)))
+        minute = max(0, min(59, int(minute)))
+        lines.append(f"{minute} {hour} * * * {_sched_command()} >> /dev/null 2>&1")
+    new = "\n".join(lines).strip() + "\n"
+    subprocess.run(["crontab", "-"], input=new, text=True, check=True)
+    return hour is not None
+
+
+def install_task(hour="15:11", remove=False):
+    """Windows: 创建/移除"威科夫模型重训"计划任务。"""
+    import subprocess
+    if os.name != "nt":
+        print("install_task 仅支持 Windows; Linux 请用 --install-cron")
+        return
+    if remove:
+        subprocess.run(["schtasks", "/Delete", "/TN", "WyckoffModelTrain", "/F"])
+        return
+    from .paths import DATA_DIR
+    bat = os.path.join(DATA_DIR, "wx_model_train_daily.bat")
+    with open(bat, "w", encoding="utf-8") as f:
+        f.write(f"@echo off\n{_sched_command()}\n")
+    subprocess.run(["schtasks", "/Create", "/TN", "WyckoffModelTrain",
+                    "/SC", "DAILY", "/ST", hour, "/TR", bat, "/F"], check=True)
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _quiet = "--quiet" in _sys.argv
+    if "--train" in _sys.argv or "--model-train" in _sys.argv:
+        st = run_auto_model_retrain()
+        if not _quiet:
+            print(json.dumps(model_status(), ensure_ascii=False, indent=2))
+            print(f"\n重训完成: 标签 {st.get('n_labels', 0)} 条 "
+                  f"(训练 {st.get('n_train', 0)} / 样本外 {st.get('n_oos', 0)}), "
+                  f"AUC={st.get('auc_oos')}, 接管conf={'是' if st.get('ready') else '否'}")
+    elif "--status" in _sys.argv:
+        print(json.dumps(model_status(), ensure_ascii=False, indent=2))
+    elif "--install-cron" in _sys.argv:
+        i = _sys.argv.index("--install-cron")
+        arg = _sys.argv[i + 1] if len(_sys.argv) > i + 1 and ":" in _sys.argv[i + 1] \
+            else "15:11"
+        hh, mm = (int(v) for v in arg.split(":", 1))
+        install_cron(hh, mm)
+        print(f"已安装每日 {hh:02d}:{mm:02d} 的模型自动重训任务 (紧随 15:01 数据评估)")
+    elif "--uninstall-cron" in _sys.argv:
+        install_cron(None)
+        print("已移除模型自动重训任务")
+    elif "--install-task" in _sys.argv:
+        i = _sys.argv.index("--install-task")
+        hour = _sys.argv[i + 1] if len(_sys.argv) > i + 1 else "15:11"
+        install_task(hour)
+        print(f"已安装每日 {hour} 的模型重训计划任务")
+    elif "--uninstall-task" in _sys.argv:
+        install_task(remove=True)
+        print("已移除模型重训计划任务")
+    else:
+        print("用法: python -m wyckoff.online_model --train [--quiet] / "
+              "--status / --install-cron [HH:MM] / --uninstall-cron / "
+              "--install-task [HH:MM] / --uninstall-task")

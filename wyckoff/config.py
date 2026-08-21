@@ -141,16 +141,17 @@ EVENT_COLORS = {
     "LPSY": "#c0532a",  # 最后供应点 (派发 Phase D 卖点, 与 LPS 对称)
     "UT": "#e07b00",    # 上冲测试 (派发 Phase B, 测试前高失败)
     "SOW": "#b00020",   # 弱势信号 (破位确认, 派发 Phase D→E 衔接)
+    "Shakeout": "#12b886",  # 震仓/诱空 (放量假破位, 实为吸筹方买点)
 }
 
 EVENT_CN = {
     "PSY": "初步支撑", "SC": "卖出高潮", "BC": "买入高潮", "AR": "自动反弹",
     "ST": "二次测试", "Spring": "弹簧", "UTAD": "上冲派发", "SOS": "强势信号",
     "JOC": "跨越小溪", "LPS": "最后支撑点", "BU": "回撤", "LPSY": "最后供应点",
-    "UT": "上冲测试", "SOW": "弱势信号",
+    "UT": "上冲测试", "SOW": "弱势信号", "Shakeout": "震仓/诱空",
 }
 
-BULL_EVENTS = ("SOS", "JOC", "Spring", "LPS", "ST", "BU")
+BULL_EVENTS = ("SOS", "JOC", "Spring", "LPS", "ST", "BU", "Shakeout")
 BEAR_EVENTS = ("UTAD", "LPSY", "UT", "SOW")
 NEUTRAL_EVENTS = ("SC", "BC", "AR")
 
@@ -220,7 +221,7 @@ TICKER_SCROLL_MS = 40       # 横幅逐帧步进间隔 (毫秒)
 TICKER_SCROLL_SPEED = 1.2   # 每帧位移像素
 TICKER_ROT_MS = 5000        # 多条消息单条停留时长
 # 威科夫事件方向 (着色用; A股红=多头/看涨, 绿=空头/看跌)
-EVENT_BULL = {"PSY", "SC", "AR", "ST", "Spring", "SOS", "LPS", "BU", "JOC"}
+EVENT_BULL = {"PSY", "SC", "AR", "ST", "Spring", "SOS", "LPS", "BU", "JOC", "Shakeout"}
 EVENT_BEAR = {"BC", "UTAD", "LPSY", "UT", "SOW"}
 # VSA 标签方向 (着色 + 胜率方向化共用; 语义核对 vsa._DESC / VSA_CN, 与 fusion 同源)
 VSA_BULL = {"SC", "SV", "SPR", "DEM", "TRD", "ETR", "NS", "TEST"}
@@ -288,7 +289,7 @@ RANGE_EVENT_WEIGHT = 0.65  # 区间类型: 事件证据权重 (进入方向先�
 
 # 区间类型事件证据权重 (区间内事件加权; AR 吸筹/派发两端通用故不计入)
 ACC_RANGE_EV = {"SC": 1.0, "ST": 0.8, "Spring": 1.0, "PSY": 0.6,
-                "SOS": 0.7, "LPS": 0.5, "BU": 0.5, "JOC": 0.8}
+                "SOS": 0.7, "LPS": 0.5, "BU": 0.5, "JOC": 0.8, "Shakeout": 0.9}
 DIST_RANGE_EV = {"BC": 1.0, "UT": 0.6, "UTAD": 1.0, "LPSY": 0.8, "SOW": 0.8}
 
 # 拐点底部标记参数 (phase_segments 内部, 开放便于统一口径)

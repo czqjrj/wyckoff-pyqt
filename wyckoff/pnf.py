@@ -195,26 +195,31 @@ def pnf_volume(df: pd.DataFrame, cols, box: float, reversal: int = 3,
     }
 
 
-def pnf_targets(df: pd.DataFrame, cols, box: float, reversal: int = 3) -> dict:
+def pnf_targets(df: pd.DataFrame, cols, box: float, reversal: int = 3,
+                volumes: dict = None) -> dict:
     """威科夫计数目标价 (P&F), 在最后 (最新) 一列处计算。
 
     横向计数: TR(交易区间)宽度 = 区间上沿 - 区间下沿, 从突破边界投影;
     纵向计数: 主升/主跌列高度投影。
     TR 取当前横向盘整带: 最近一根大幅趋势列之后的列群。
-    返回含 tr 区间与方向信息, 供 plot_pnf 标注。
+    volumes: 可选 pnf_volume() 返回值, 用于 POC/价值区量加权计算。
+    返回含 tr 区间、POC、三档目标、到达概率、空间百分比等, 供 plot_pnf 标注。
     """
     last_price = float(df["close"].iloc[-1])
+    row_vols = volumes.get("row_vols") if volumes else None
     return _pnf_targets_at(cols, box, reversal, end_col=len(cols) - 1,
-                           last_price=last_price)
+                           last_price=last_price, row_vols=row_vols)
 
 
 def _pnf_targets_at(cols, box: float, reversal: int = 3,
-                    end_col: int = None, last_price: float = None) -> dict:
+                    end_col: int = None, last_price: float = None,
+                    row_vols: dict = None) -> dict:
     """在指定列 end_col (视为"当前"最后一列) 处计算威科夫计数目标。
 
     pnf_targets 与 pnf_history_targets 共用此核心, 保证历史回溯与最新测算
     口径完全一致。end_col=None 默认最后一列; last_price 用于 TR 合理性
     (宽度不超过当时价格的 1.5 倍) 校验, 缺省用该列中位价。
+    row_vols: 可选 VAP 行成交量字典 {行号: 累计量}, 用于 POC(控制点)计算。
     """
     if not cols or len(cols) < 8:
         return {}
@@ -228,11 +233,13 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     if last_price <= 0:
         return {}
 
-    # 识别最近盘整带: 在最近12列中找最大趋势列(单列跨度最大), 其后为 TR。
+    # 识别最近盘整带: 在最近 max(12, len//4) 列中找最大趋势列(单列跨度最大), 其后为 TR。
     # TR 上下轨用"中部价格带" (25%~75% 分位数 ± 1格), 避免被 TR 列群中的
     # 大趋势列极值拉宽 (校准: 688981 下跌中继被误标成 149~176 派发区间, 横向
     # 目标失真到 +84%; 中位带剔除了趋势列贡献的头部/尾部, 区间收窄到真实盘整带)。
-    window = view[-12:]
+    # 动态窗口: 列数较少时用12, 列数较多时扩展到 len//4, 避免漏掉早期趋势列。
+    win_size = max(12, min(len(view) // 4, 30))
+    window = view[-win_size:]
     biggest_idx = max(range(len(window)), key=lambda k: window[k]["count"])
     if biggest_idx != len(window) - 1 and window[biggest_idx]["count"] >= reversal * 2:
         start_idx = biggest_idx + 1
@@ -242,8 +249,7 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     if not tr_cols:
         return {}
 
-    # TR 列群全部价格点 (每列 rows×box, 兼容 rows 为空的测试列则用 lo/hi),
-    # 取 25%~75% 分位数构成中部带。
+    # TR 列群全部价格点 (每列 rows×box, 兼容 rows 为空的测试列则用 lo/hi)
     prices = []
     for c in tr_cols:
         if c["rows"]:
@@ -261,16 +267,34 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     if tr_width <= box or tr_width > last_price * 1.5:
         return {}
 
+    # ── POC (控制点 / Point of Control): VAP 成交量最大的价格行 ──
+    # 有 VAP 数据时用量加权, 否则用价格频次 (与 count_line 类似但更关注"持续驻留")
+    poc_row = None
+    poc_val = None
+    if row_vols:
+        tr_row_set = set()
+        for c in tr_cols:
+            if c["rows"]:
+                tr_row_set.update(c["rows"])
+            else:
+                tr_row_set.update(range(round(c["lo"] / box), round(c["hi"] / box) + 1))
+        vol_pairs = [(r, row_vols.get(r, 0.0)) for r in tr_row_set if row_vols.get(r, 0) > 0]
+        if vol_pairs:
+            poc_row, _ = max(vol_pairs, key=lambda x: x[1])
+            poc_val = poc_row * box
+    if poc_val is None:
+        # 无 VAP 时退化为 TR 价格中位数 (更稳健的中枢)
+        poc_val = prices[len(prices) // 2]
+    val_area_half = tr_width * 0.35  # 价值区 = POC ± 35% TR 宽 (标准市场轮廓口径)
+    vah = poc_val + val_area_half
+    val = poc_val - val_area_half
+
     # 记录 TR 在整图中的列序号范围 (用于绘图标注计数起止)。
-    # base = window 首列在整图 cols 中的序号 (= end_col+1-len(window)),
-    # 此前误用 len(cols)-len(view) 把 TR 画到窗口左移 (len(view)-12) 列处,
-    # 导致吸筹/派发色带错位到与数据无关的旧列。
     base = end_col + 1 - len(window)
     tr_start_col = base + start_idx
     tr_end_col = base + len(window) - 1
 
-    # 方向: 最后一列相对"前序区间"(不含最后一列)是否突破。
-    # 若 TR 含最后一列, tr_top>=lastc.hi 恒成立, 方向永远判不出突破。
+    # 方向: 最后一列相对"前序区间"(不含最后一列)是否突破
     prev_tr = tr_cols[:-1] if len(tr_cols) > 1 and tr_cols[-1] is view[-1] else tr_cols
     p_top = max(c["hi"] for c in prev_tr)
     p_bottom = min(c["lo"] for c in prev_tr)
@@ -280,8 +304,7 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
         direction = "up"
     elif lastc["type"] == "O" and lastc["lo"] < p_bottom:
         direction = "down"
-    # 突破时 TR 边界也用中部价格带 (prev_tr 的最值会被大趋势列极值拉宽,
-    # 导致"派发区间"误含下跌中继大列 — 校准: 688981 段6 TR[149~176])。
+    # 突破时 TR 边界用中部价格带 (剔除趋势列极值拉宽)
     if direction != "range" and prev_tr:
         p_prices = []
         for c in prev_tr:
@@ -303,17 +326,15 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
         "tr_start_col": tr_start_col,
         "tr_end_col": tr_end_col,
         "direction": direction,
+        "poc": round(poc_val, 2),
+        "vah": round(vah, 2),
+        "val": round(val, 2),
     }
-    # TR 全区间最值: 供威科夫"三档目标"中的保守档 (教科书: 从区间最低点投影)。
-    # tr_top/tr_bottom 是中位价格带 (25%~75% 分位数), 区间极值才是真正的 TR 底/顶。
+    # TR 全区间最值 (保守档投影锚点)
     tr_low = min((c["lo"] for c in tr_cols), default=tr_bottom)
     tr_high = max((c["hi"] for c in tr_cols), default=tr_top)
 
-    # 威科夫横向计数 (Law of Cause and Effect), 口径同官方 Count Guide:
-    #   1) count line 取 TR 内横向重叠最多的一行 (横盘最宽的带, 即威科夫计数线);
-    #   2) 因(cause) = count line 上经过的列数 × 格值 × 反转格数;
-    #   3) 果(effect) = 三档目标: count line 投影(最大) / 区间极值投影(保守) /
-    #      两者中点(中档)。计数即"横盘持续的时间(列数)", 而非价格高度。
+    # 威科夫横向计数 (Law of Cause and Effect)
     def _crossing(row):
         out = 0
         for c in tr_cols:
@@ -339,22 +360,37 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     targets["columns"] = columns
     targets["count_line"] = round(count_line, 2)
     targets["cause"] = round(cause, 2)
-    targets["横向计数上方目标"] = round(count_line + cause, 2)
-    targets["横向计数下方目标"] = round(count_line - cause, 2)
-    targets["横向计数上方目标_保守"] = round(tr_low + cause, 2)
-    targets["横向计数下方目标_保守"] = round(tr_high - cause, 2)
-    targets["横向计数上方目标_中"] = round((count_line + tr_low) / 2 + cause, 2)
-    targets["横向计数下方目标_中"] = round((count_line + tr_high) / 2 - cause, 2)
-    # 近端参考目标 (项目自创的可到达口径, 非威科夫概念): 区间边界外推 0.2×因,
-    # 并相对现价 ±4% 封顶。威科夫目标本就是"stop-look-listen"位置, 不承诺必到;
-    # 封顶使历史命中核对落到可到达区间 (校准: 满宽目标在 10/20 根窗口几乎不可达)。
+
+    # 三档候选: 三个锚点分别投影 (TR极值 / POC / count_line)
+    # 注意: 锚点相对现价的距离顺序不确定, 下面按"目标距现价远近"重排为保守/中/激进
+    up_cands = []
+    dn_cands = []
+    for label, anchor_up, anchor_dn in (
+        ("tr_ext",  tr_low,  tr_high),            # 教科书极值
+        ("poc",     poc_val, poc_val),            # 价值中枢
+        ("cntline", count_line, count_line),      # 威科夫原教旨
+    ):
+        up_t = round(anchor_up + cause, 2)
+        dn_t = round(anchor_dn - cause, 2)
+        up_cands.append((up_t, label))
+        dn_cands.append((dn_t, label))
+
+    # 按距现价的**绝对值距离从小到大**重排 → 保守(最近) / 中 / 激进(最远)
+    up_cands.sort(key=lambda x: abs(x[0] - last_price))
+    dn_cands.sort(key=lambda x: abs(x[0] - last_price))
+    targets["横向计数上方目标_保守"] = up_cands[0][0]
+    targets["横向计数上方目标_中"]    = up_cands[1][0]
+    targets["横向计数上方目标"]       = up_cands[2][0]  # 激进 = 最远 = 默认值
+    targets["横向计数下方目标_保守"] = dn_cands[0][0]
+    targets["横向计数下方目标_中"]    = dn_cands[1][0]
+    targets["横向计数下方目标"]       = dn_cands[2][0]  # 激进 = 最远 = 默认值
+
+    # 近端参考目标: 区间边界外推 0.2×cause, 相对现价 ±4% 封顶 (可到达口径)
     NEAR_CAP = 0.04
     targets["近端上方目标"] = round(min(tr_top + cause * 0.2, last_price * (1 + NEAR_CAP)), 2)
     targets["近端下方目标"] = round(max(tr_bottom - cause * 0.2, last_price * (1 - NEAR_CAP)), 2)
-    # 纵向计数: 主升/主跌列高度 — 标准口径 (StockCharts): 目标 = 列底(顶) + count×格值。
-    # 旧版误从列顶加, 高估约一个列高, 已修正为从列底投影。
-    # 只取最近 window 内最大趋势列, 不用全历史 — 全历史最大列可能来自数年前
-    # 主升段, 对当前结构投影会失真 (如下跌股却给出天价目标)。
+
+    # 纵向计数: 主升/主跌列高度 (window 内最大趋势列, 避免全历史远期列失真)
     x_cols = [c for c in window if c["type"] == "X"]
     o_cols = [c for c in window if c["type"] == "O"]
     if x_cols:
@@ -363,6 +399,74 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     if o_cols:
         best_o = max(o_cols, key=lambda c: c["count"])
         targets["纵向计数下方目标"] = round(best_o["hi"] - best_o["count"] * box, 2)
+
+    # ── 距现价空间 (百分比) & 到达概率 ──
+    # 空间 = (目标 - 现价) / 现价 * 100, 上涨为正, 下跌为负
+    def _pct(tgt):
+        return round((tgt - last_price) / last_price * 100, 1) if last_price > 0 else 0.0
+
+    # 到达概率估算: 基于评估结果 (530段历史) 校准的连续函数
+    #   空间: 用分段线性从历史到达率反推, 避免三档台阶造成分布挤堆
+    #   cause_ratio: 因果强度 (cause/TR宽) 越高 → 置信加分
+    #   POC同向: 现价在POC上方做多看涨, 下方做空看跌 → 小幅加分
+    cause_ratio = cause / tr_width if tr_width > 0 else 0.0
+
+    def _prob(space_pct, direction_flag):
+        a = abs(float(space_pct))
+        # ── 空间衰减 (从评估数据校准): 空间越小到达率越高, 连续单调降 ──
+        if a <= 5:
+            # 0~5%: 历史到达率 90%+
+            s_base = 0.90 - (a / 5) * 0.08  # 90% → 82%
+        elif a <= 10:
+            # 5~10%: 历史 82% → 68%
+            s_base = 0.82 - ((a - 5) / 5) * 0.14
+        elif a <= 20:
+            # 10~20%: 历史 68% → 48%
+            s_base = 0.68 - ((a - 10) / 10) * 0.20
+        elif a <= 35:
+            # 20~35%: 历史 48% → 34%
+            s_base = 0.48 - ((a - 20) / 15) * 0.14
+        else:
+            # >35%: 历史 ~30%, 继续缓慢衰减到 20% 下限
+            s_base = max(0.20, 0.34 - ((a - 35) / 30) * 0.14)
+        # ── 因果强度: cause_ratio 0~1.5 线性加分 0~+0.08 ──
+        cr_add = min(0.08, max(0.0, cause_ratio) / 1.5 * 0.08)
+        # ── POC方向支持: 同向 +0.04 ──
+        poc_add = 0.0
+        poc_above = last_price > poc_val
+        if direction_flag == "up" and poc_above:
+            poc_add = 0.04
+        elif direction_flag == "down" and not poc_above:
+            poc_add = 0.04
+        p = s_base + cr_add + poc_add
+        return max(0.15, min(0.95, round(p, 2)))
+
+    up_t_near = targets.get("近端上方目标", 0)
+    dn_t_near = targets.get("近端下方目标", 0)
+    up_t_cons = targets.get("横向计数上方目标_保守", 0)
+    dn_t_cons = targets.get("横向计数下方目标_保守", 0)
+    up_t_mid = targets.get("横向计数上方目标_中", 0)
+    dn_t_mid = targets.get("横向计数下方目标_中", 0)
+    up_t_agg = targets.get("横向计数上方目标", 0)
+    dn_t_agg = targets.get("横向计数下方目标", 0)
+    targets["上方空间_近端%"] = _pct(up_t_near)
+    targets["下方空间_近端%"] = _pct(dn_t_near)
+    targets["上方空间_保守%"] = _pct(up_t_cons)
+    targets["下方空间_保守%"] = _pct(dn_t_cons)
+    targets["上方空间_中%"] = _pct(up_t_mid)
+    targets["下方空间_中%"] = _pct(dn_t_mid)
+    targets["上方空间_激进%"] = _pct(up_t_agg)
+    targets["下方空间_激进%"] = _pct(dn_t_agg)
+    targets["上方概率_保守"] = _prob(targets["上方空间_保守%"], "up")
+    targets["下方概率_保守"] = _prob(targets["下方空间_保守%"], "down")
+    targets["上方概率_中"] = _prob(targets["上方空间_中%"], "up")
+    targets["下方概率_中"] = _prob(targets["下方空间_中%"], "down")
+    targets["上方概率_激进"] = _prob(targets["上方空间_激进%"], "up")
+    targets["下方概率_激进"] = _prob(targets["下方空间_激进%"], "down")
+    # TR 内位置: 现价相对 TR 高低的百分位 (0~100)
+    tr_range = tr_top - tr_bottom
+    targets["tr_position%"] = round(max(0, min(100,
+        (last_price - tr_bottom) / tr_range * 100 if tr_range > 0 else 50)), 1)
     return targets
 
 
@@ -405,8 +509,11 @@ def pnf_history_targets(cols, box: float, reversal: int = 3,
       seq         段序号 (返回子集内从 1 起)
       tr_top/tr_bottom/tr_width 突破前的 TR 区间
       tr_start_col/tr_end_col    TR 的列范围 (绘图用)
-      up_target/down_target      突破方向的目标价
-      up_hit/down_hit            突破后价格是否到达对应目标
+      up_target/down_target      突破方向的目标价 (近端口径, 供图标注)
+      up_hit/down_hit            突破后价格是否到达对应目标 (近端口径)
+      上方目标_保守/中/激进 / 下方目标_保守/中/激进  三档目标价
+      上方hit_保守/中/激进  /  下方hit_保守/中/激进   三档是否到达
+      上方概率_保守/中/激进 / 下方概率_保守/中/激进  模型估算到达概率 (0~1)
     同一 TR 的连续同向突破只记第一条 (相邻段间距 < min_gap 视为同一趋势延续,
     避免同一波下跌在图上堆叠多条近重复测算), 每段目标与最新测算
     (_pnf_targets_at) 同口径, 供"点数图历史测算"绘图与准确度核对。
@@ -450,11 +557,43 @@ def pnf_history_targets(cols, box: float, reversal: int = 3,
             # 到位容差: 目标价 ±1格 视为"基本到位" (威科夫计数给出的是目标位
             # 而非精确点, 价格差一格内到达即算有效, 避免"差0.3就判未到"的误判)
             tol = max(box, t.get("tr_width", 0) * 0.05)
+
+            # ── 三档目标 + 概率 分别记录并核对 hit (供准确率评估) ──
+            tier_map = {
+                "保守": ("横向计数上方目标_保守", "横向计数下方目标_保守",
+                         "上方概率_保守", "下方概率_保守"),
+                "中":   ("横向计数上方目标_中", "横向计数下方目标_中",
+                         "上方概率_中", "下方概率_中"),
+                "激进": ("横向计数上方目标", "横向计数下方目标",
+                         "上方概率_激进", "下方概率_激进"),
+            }
+            for tier, (up_k, dn_k, up_p_k, dn_p_k) in tier_map.items():
+                t_up = t.get(up_k)
+                t_dn = t.get(dn_k)
+                t[f"上方目标_{tier}"] = t_up
+                t[f"下方目标_{tier}"] = t_dn
+                t[f"上方概率_{tier}"] = t.get(up_p_k)
+                t[f"下方概率_{tier}"] = t.get(dn_p_k)
+                t[f"上方hit_{tier}"] = False
+                t[f"下方hit_{tier}"] = False
+                if isinstance(t_up, (int, float)):
+                    t[f"上方空间_{tier}%"] = t.get(f"上方空间_{tier}%")
+                if isinstance(t_dn, (int, float)):
+                    t[f"下方空间_{tier}%"] = t.get(f"下方空间_{tier}%")
+
             for c in cols[i + 1:]:
                 if up is not None and c["hi"] >= up - tol:
                     t["up_hit"] = True
                 if dn is not None and c["lo"] <= dn + tol:
                     t["down_hit"] = True
+                # 三档分别核对
+                for tier in tier_map:
+                    up_t = t.get(f"上方目标_{tier}")
+                    dn_t = t.get(f"下方目标_{tier}")
+                    if isinstance(up_t, (int, float)) and c["hi"] >= up_t - tol:
+                        t[f"上方hit_{tier}"] = True
+                    if isinstance(dn_t, (int, float)) and c["lo"] <= dn_t + tol:
+                        t[f"下方hit_{tier}"] = True
             # 威科夫语义: 按突破后的走势结果划分吸筹/派发区间。
             # 向上突破并延续 → 吸筹; 向下破位并延续 → 派发;
             # 快速反向打回 → 向上失败(UTAD→派发) / 向下失败(Spring→吸筹)。
@@ -530,40 +669,86 @@ def pnf_hist_title(history) -> str:
 
 
 def pnf_cap(targets, cols):
-    """点数图底部解读行 (文字, 颜色)。plot_pnf 与 pyqtgraph PnfWidget 共用。"""
-    if targets:
-        direction = targets.get("direction", "range")
-        tr_top = targets.get("tr_top")
-        tr_bottom = targets.get("tr_bottom")
-        up_t = targets.get("横向计数上方目标")
-        dn_t = targets.get("横向计数下方目标")
+    """点数图底部解读行 (文字, 颜色)。plot_pnf 与 pyqtgraph PnfWidget 共用。
 
-        def _count_s():
-            c = targets.get("columns", 0)
-            ca = targets.get("cause", 0)
-            return f"({c}列×格×反转, 因{ca:.2f})" if c else ""
-
-        if direction == "up":
-            cap = (f"已突破TR上沿({tr_top:.2f})向上 → "
-                   f"威科夫横向计数目标 {up_t:.2f}{_count_s()}"
-                   if up_t else
-                   f"已突破TR上沿({tr_top:.2f})向上 → 目标待确认")
-            cap_color = "#16a34a"
-        elif direction == "down":
-            cap = (f"已跌破TR下沿({tr_bottom:.2f})向下 → "
-                   f"威科夫横向计数目标 {dn_t:.2f}{_count_s()}"
-                   if dn_t else
-                   f"已跌破TR下沿({tr_bottom:.2f})向下 → 目标待确认")
-            cap_color = "#dc2626"
-        else:
-            cap = (f"仍处TR区间 {tr_bottom:.2f}~{tr_top:.2f} 内整理 → 等待突破; "
-                   f"上方目标 {up_t:.2f} / 下方目标 {dn_t:.2f} (威科夫横向计数)"
-                   if up_t and dn_t else
-                   f"仍处TR区间 {tr_bottom:.2f}~{tr_top:.2f} 内整理 → 等待突破")
-            cap_color = "#d97706"
-    else:
+    内容丰富: 突破状态、TR、POC价值区、三档目标+空间%+概率、计数因。
+    """
+    if not targets:
         cap = "列数不足, 无法形成TR计数 → 暂观望"
         cap_color = "#64748b"
+        return cap, cap_color
+
+    direction = targets.get("direction", "range")
+    tr_top = targets.get("tr_top")
+    tr_bottom = targets.get("tr_bottom")
+    poc = targets.get("poc")
+    vah = targets.get("vah")
+    val_ = targets.get("val")
+    c = targets.get("columns", 0)
+    ca = targets.get("cause", 0)
+    count_s = f"{c}列×格×反转 · 因{ca:.2f}" if c else ""
+    poc_s = f" · POC{poc:.2f} 价值区{val_:.2f}~{vah:.2f}" if poc else ""
+
+    def _tier(targets_dict, direction_suffix):
+        """三档目标汇总: 保守(概率) / 中(概率) / 激进(概率)  + 空间%。"""
+        tiers = []
+        # 保守 / 中 / 激进
+        for tier_key, label in (("保守", "保"), ("中", "中"), ("激进", "激")):
+            t_up = targets_dict.get(f"横向计数上方目标{'_' + tier_key if tier_key != '激进' else ''}")
+            t_dn = targets_dict.get(f"横向计数下方目标{'_' + tier_key if tier_key != '激进' else ''}")
+            sp_up = targets_dict.get(f"上方空间_{tier_key}%")
+            sp_dn = targets_dict.get(f"下方空间_{tier_key}%")
+            prob_up = targets_dict.get(f"上方概率_{tier_key}")
+            prob_dn = targets_dict.get(f"下方概率_{tier_key}")
+            t = t_up if direction_suffix == "up" else t_dn
+            sp = sp_up if direction_suffix == "up" else sp_dn
+            prob = prob_up if direction_suffix == "up" else prob_dn
+            if t and sp is not None:
+                sign = "+" if sp > 0 else ""
+                p = f"{int(prob*100)}%" if prob is not None else ""
+                tiers.append(f"{label}{t:.2f}{sign}{sp:.1f}%{p}")
+        return " / ".join(tiers) if tiers else ""
+
+    tr_range = tr_top - tr_bottom if tr_top and tr_bottom else 0
+    tr_pos = targets.get("tr_position%")
+    pos_s = f" · TR位{tr_pos:.0f}%" if tr_pos is not None and tr_range > 0 else ""
+
+    if direction == "up":
+        tier_s = _tier(targets, "up")
+        near_t = targets.get("近端上方目标")
+        near_sp = targets.get("上方空间_近端%")
+        near_s = ""
+        if near_t and near_sp is not None:
+            sign = "+" if near_sp > 0 else ""
+            near_s = f" · 近端{near_t:.2f}{sign}{near_sp:.1f}%"
+        cap = (f"↑已突破TR上沿{tr_top:.2f}向上{pos_s}{poc_s}{near_s}"
+               f" · 三档 [{tier_s}] · {count_s}")
+        cap_color = "#16a34a"
+    elif direction == "down":
+        tier_s = _tier(targets, "down")
+        near_t = targets.get("近端下方目标")
+        near_sp = targets.get("下方空间_近端%")
+        near_s = ""
+        if near_t and near_sp is not None:
+            sign = "+" if near_sp > 0 else ""
+            near_s = f" · 近端{near_t:.2f}{sign}{near_sp:.1f}%"
+        cap = (f"↓已跌破TR下沿{tr_bottom:.2f}向下{pos_s}{poc_s}{near_s}"
+               f" · 三档 [{tier_s}] · {count_s}")
+        cap_color = "#dc2626"
+    else:
+        up_t_cons = targets.get("横向计数上方目标_保守")
+        up_sp_cons = targets.get("上方空间_保守%")
+        dn_t_cons = targets.get("横向计数下方目标_保守")
+        dn_sp_cons = targets.get("下方空间_保守%")
+        sign_u = "+" if (up_sp_cons or 0) > 0 else ""
+        sign_d = "+" if (dn_sp_cons or 0) > 0 else ""
+        tier_s = ""
+        if up_t_cons and up_sp_cons is not None and dn_t_cons and dn_sp_cons is not None:
+            tier_s = (f"  上{up_t_cons:.2f}{sign_u}{up_sp_cons:.1f}%"
+                      f" / 下{dn_t_cons:.2f}{sign_d}{dn_sp_cons:.1f}%")
+        cap = (f"⇄TR区间{tr_bottom:.2f}~{tr_top:.2f}内整理{pos_s}{poc_s}"
+               f" · 等待突破{tier_s} · {count_s}")
+        cap_color = "#d97706"
     return cap, cap_color
 
 

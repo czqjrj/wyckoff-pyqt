@@ -57,15 +57,17 @@ def test_tr_column_range_near_break():
     df = _df_with_trends()
     cols, box = build_pnf(df)
     hist = pnf_history_targets(cols, box)
+    # 动态窗口: win_size = max(12, min(len//4, 30))
+    win_size = max(12, min(len(cols) // 4, 30))
     for h in hist:
         assert h["break_col"] < len(cols)
-        # TR 来自突破列前 12 列窗口, 起点不得早于突破列前 11 列
-        assert h["tr_start_col"] >= h["break_col"] - 11, h
+        # TR 来自突破列前 win_size 列窗口, 起点不得早于突破列前 (win_size-1) 列
+        assert h["tr_start_col"] >= h["break_col"] - (win_size - 1), h
         assert h["tr_end_col"] <= h["break_col"], h
     cur = pnf_targets(df, cols, box)
     if cur:
         assert cur["tr_end_col"] == len(cols) - 1
-        assert cur["tr_start_col"] >= len(cols) - 12
+        assert cur["tr_start_col"] >= len(cols) - win_size
 
 
 def _cols_from_rows(seq):

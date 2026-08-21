@@ -174,6 +174,64 @@ def test_sow_not_generated_no_break():
     assert not [e for e in ev if e["type"] == "SOW"]
 
 
+def test_shakeout_when_breakdown_recovers():
+    """破位后未续跌 → Shakeout 震仓 (非 SOW)。
+
+    放量跌破前低支撑后, 若 confirm_bars 根内无更低低点, 应归为
+    震仓/诱空 (看多), 而不是 SOW 弱势信号 (看空)。
+    """
+    df = _mkdf_dist(_PTS)
+    # SOW 处放量破位后快速收复 (逐根回升, 不再创出新低)
+    df.loc[_PTS["sow"] + 1:, "close"] = np.linspace(9.2, 9.6, len(df) - _PTS["sow"] - 1)
+    df["open"] = np.roll(df["close"], 1); df.loc[0, "open"] = df["close"].iloc[0]
+    df["high"] = np.maximum(df["open"], df["close"]) * 1.01
+    df["low"] = np.minimum(df["open"], df["close"]) * 0.995
+    df = add_indicators(df, symbol="600104")
+    base = [{"type": "UTAD", "idx": _PTS["utad"],
+             "price": float(df["high"].iloc[_PTS["utad"]])},
+            {"type": "LPSY", "idx": _PTS["lpsy"],
+             "price": float(df["high"].iloc[_PTS["lpsy"]])},
+            {"type": "BC", "idx": _PTS["bc"],
+             "price": float(df["high"].iloc[_PTS["bc"]])}]
+    ev = E.detect_sow(df, _fake_pivots(df, _PTS), base)
+    assert not [e for e in ev if e["type"] == "SOW"], "未续跌不应归为 SOW"
+    shakes = [e for e in ev if e["type"] == "Shakeout"]
+    assert shakes, "放量破位但未续跌应归为 Shakeout 震仓"
+    assert shakes[0]["idx"] == _PTS["sow"]
+
+
+def test_shakeout_when_new_low_but_fast_rebound():
+    """破位后创新低但快速反弹回支撑上方 → Shakeout (非 SOW)。
+
+    放量跌破前低支撑后, 即使 confirm_bars 根内创出新低,
+    若收盘快速反弹回支撑上方, 仍应归为震仓/诱空 (看多),
+    而非 SOW 弱势信号 (看空)。
+    """
+    df = _mkdf_dist(_PTS)
+    # SOW 后: 先创新低(2根), 再 10 根内快速反弹回支撑(floor≈10.3)上方
+    n_post = df.shape[0] - _PTS["sow"] - 1
+    closes_post = np.concatenate([
+        np.linspace(8.8, 8.6, 2),          # 先创新低 (满足 new_low)
+        np.linspace(8.6, 11.5, 10),         # 10根内反弹回 floor 上方
+        np.full(n_post - 12, 11.5)          # 剩余维持高位
+    ])
+    df.loc[_PTS["sow"] + 1:, "close"] = closes_post
+    df["open"] = np.roll(df["close"], 1); df.loc[0, "open"] = df["close"].iloc[0]
+    df["high"] = np.maximum(df["open"], df["close"]) * 1.01
+    df["low"] = np.minimum(df["open"], df["close"]) * 0.995
+    df = add_indicators(df, symbol="600104")
+    base = [{"type": "UTAD", "idx": _PTS["utad"],
+             "price": float(df["high"].iloc[_PTS["utad"]])},
+            {"type": "LPSY", "idx": _PTS["lpsy"],
+             "price": float(df["high"].iloc[_PTS["lpsy"]])},
+            {"type": "BC", "idx": _PTS["bc"],
+             "price": float(df["high"].iloc[_PTS["bc"]])}]
+    ev = E.detect_sow(df, _fake_pivots(df, _PTS), base)
+    assert not [e for e in ev if e["type"] == "SOW"], "创新低但快速反弹回支撑上方不应归为 SOW"
+    shakes = [e for e in ev if e["type"] == "Shakeout"]
+    assert shakes, "破位+创新低+快速反弹应归为 Shakeout 震仓"
+
+
 # ───────────────── 4. 完整链推进结构进度 ─────────────────
 
 def test_full_distribution_chain_reaches_phase_d():

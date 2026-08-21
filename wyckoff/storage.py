@@ -4,6 +4,7 @@ import json
 import os
 import re
 
+from ._log import log_exc
 from ._shared import atomic_write_json
 from .config import DEFAULT_SETTINGS
 from .paths import (WATCHLIST_FILE, SETTINGS_FILE, FEEDBACK_FILE,
@@ -25,8 +26,8 @@ def load_watchlist():
 def save_watchlist(codes):
     try:
         atomic_write_json(WATCHLIST_FILE, codes)
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("保存自选股失败", e)
 
 
 def load_candidates():
@@ -42,8 +43,8 @@ def load_candidates():
 def save_candidates(records):
     try:
         atomic_write_json(CANDIDATES_FILE, records)
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("保存待观察清单失败", e)
 
 
 # ── 持仓簿 (个人持仓) ──
@@ -60,8 +61,8 @@ def load_portfolio():
 def save_portfolio(records):
     try:
         atomic_write_json(PORTFOLIO_FILE, records)
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("保存持仓簿失败", e)
 
 
 # ── 自选股备注/笔记 ──
@@ -78,8 +79,8 @@ def load_notes():
 def save_notes(notes):
     try:
         atomic_write_json(NOTES_FILE, notes)
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("保存笔记失败", e)
 
 
 def _dedupe_api_key(key):
@@ -116,8 +117,8 @@ def save_settings(s):
         s["ai_api_key"] = _dedupe_api_key(s["ai_api_key"])
     try:
         atomic_write_json(SETTINGS_FILE, s)
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("保存设置失败", e)
 
 
 def feedback_key(symbol, scale, start_dt, end_dt):
@@ -141,8 +142,8 @@ def load_feedback():
 def save_feedback(records):
     try:
         atomic_write_json(FEEDBACK_FILE, records)
-    except Exception:
-        pass
+    except Exception as e:
+        log_exc("保存阶段带反馈失败", e)
 
 
 # L5 阶段可信度: 按阶段类型统计标注判定正确率 (L1 收缩向全阶段基线回归)。

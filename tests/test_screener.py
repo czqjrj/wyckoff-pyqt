@@ -429,3 +429,69 @@ def test_screen_stocks_min_score(monkeypatch):
     results = screen_stocks(["H", "M", "L"], {"min_score": 50})
     assert "L" not in [r["code"] for r in results]
     assert len(results) == 2
+
+
+# ── 实证有效信号: 综合选股只认实测胜率>60%的信号 ──
+
+def test_empirical_signal_rates_direction_split(monkeypatch):
+    """多头/空头/中性按方向与阈值分桶; 非事件类型忽略。"""
+    from wyckoff.screener import empirical_signal_rates
+    fake = {
+        ("event", "Spring"): {"shrunk": 0.85, "mean": 0.099, "n": 284},
+        ("event", "ST"): {"shrunk": 0.72, "mean": 0.061, "n": 76},
+        ("event", "SOS"): {"shrunk": 0.48, "mean": 0.012, "n": 258},   # ≤阈值 → 剔除
+        ("event", "UTAD"): {"shrunk": 0.78, "mean": -0.059, "n": 254}, # 空头有效
+        ("event", "SC"): {"shrunk": 0.64, "mean": 0.036, "n": 121},    # 中性+均收益>0 → long
+        ("event", "BC"): {"shrunk": 0.50, "mean": 0.029, "n": 130},    # 中性但≤阈值
+        ("vsa", "CHOC"): {"shrunk": 0.90, "mean": 0.01, "n": 290},     # 非事件 → 忽略
+    }
+    monkeypatch.setattr("wyckoff.signal_accuracy.load_win_rates",
+                        lambda horizon=20: fake)
+    out = empirical_signal_rates()
+    assert set(out["long"]) == {"Spring", "ST", "SC"}
+    assert set(out["bear"]) == {"UTAD"}
+
+
+def test_empirical_signal_rates_empty(monkeypatch):
+    from wyckoff.screener import empirical_signal_rates
+    monkeypatch.setattr("wyckoff.signal_accuracy.load_win_rates",
+                        lambda horizon=20: {})
+    assert empirical_signal_rates() == {}
+
+
+def test_signal_points_only_counts_valid():
+    from wyckoff.screener import _signal_points
+    emp = {"long": {"Spring": 0.85, "SC": 0.64},
+           "bear": {"UTAD": 0.78}}
+    # Spring 命中 → (0.85-0.5)*100/2 = +17.5 → 18; SOS 不计分
+    assert _signal_points(["Spring", "SOS"], emp) == 18
+    # SC 边际小 → +7; 空头 UTAD → -(0.78-0.5)*100/2 = -14
+    assert _signal_points(["SC"], emp) == 7
+    assert _signal_points(["UTAD"], emp) == -14
+    assert _signal_points([], emp) == 0
+    # 无实证数据 → None (调用方回退静态表)
+    assert _signal_points(["Spring"], {}) is None
+
+
+def test_apply_filters_prefers_signals_valid():
+    """信号筛选只对 signals_valid 生效; 缺字段时回退 signals。"""
+    from wyckoff.screener import _apply_filters
+    r = {"phase_base": "", "sector": None,
+         "signals": ["Spring", "SOS"],       # 检测到 SOS 但实测无效
+         "signals_valid": ["Spring"],        # 有效集只有 Spring
+         "total_score": 40}
+    # 勾选 SOS: 因 SOS 不在实测有效集 → 硬过滤不通过
+    assert not _apply_filters(r, {"signals": ["SOS"]})
+    # 勾选 Spring: 通过
+    assert _apply_filters(r, {"signals": ["Spring"]})
+    # 无实证数据 (无 signals_valid 字段) → 回退旧行为
+    r2 = {"phase_base": "", "sector": None, "signals": ["SOS"], "total_score": 40}
+    assert _apply_filters(r2, {"signals": ["SOS"]})
+
+
+def test_preset_uses_valid_signals_only():
+    """预设策略的信号白名单不得包含实测胜率≤60%的类型。"""
+    from wyckoff.screener import PRESET_STRATEGIES
+    sigs = PRESET_STRATEGIES["value_accumulation"]["filters"]["signals"]
+    assert "PSY" not in sigs and "SOS" not in sigs
+    assert set(sigs) <= {"Spring", "Shakeout", "SC", "ST", "LPS"}

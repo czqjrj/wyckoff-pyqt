@@ -4,9 +4,9 @@
 数据由 AnalysisThread 在 worker 线程通过 chart.build_ind_data() 收集 (指标计算
 仍在 wyckoff 包内完成), 主线程调用 set_data() 渲染 — pyqtgraph 非线程安全。
 
-排版与原版 matplotlib plot_indicators 完全一致 (4×2 网格, 高度比 2.0:1.3:1.3:1.5):
-  第一行: 价格 · 布林带 (20,2) · 大盘对比 (跨两列, 最宽)
-  第二行: 量能 (万手) | MACD (12,26,9)
+排版 (4×2 网格, 高度比 2.0:1.3:1.3:1.5):
+  第一行: MACD (12,26,9) (跨两列, 最宽)
+  第二行: 量能 (万手) | 价格 · 布林带 (20,2) · 大盘对比
   第三行: KDJ (9,3,3)  | RSI (6,12,24)
   第四行: OBV 能量潮   | 量价分布 (Volume Profile)
 每个面板下方一行 "当前信号 → 预示" 解读 (颜色随信号红/绿/橙/灰, 与原版 set_xlabel 一致)。
@@ -26,13 +26,10 @@ from pyqtgraph.Qt import QtGui
 from pyqtgraph.Qt.QtCore import Qt
 from PyQt6.QtWidgets import QScrollArea
 
-from wyckoff.config import (C_UP, C_DOWN, FONT_CANDIDATES)
+from wyckoff.config import FONT_CANDIDATES
 
 from . import theme
 from .crosshair import Crosshair
-
-_UP = C_UP
-_DN = C_DOWN
 
 # 与原版 matplotlib figsize=(8.5, 13.5) 的宽高比一致: 宽度铺满可视区, 高度按此比例。
 _IND_ASPECT = 13.5 / 8.5
@@ -40,9 +37,9 @@ _IND_ASPECT = 13.5 / 8.5
 # 面板定义: (key, 初始标题, 所在行, 列, 跨列数, 行伸缩权重)
 # 行号/列号对应 GraphicsLayout, 0-based; 解读行占下一行。
 _PANEL_DEFS = [
-    ("price", "价格 · 布林带 (20,2) · 大盘对比", 0, 0, 2, 20),
+    ("macd", "MACD (12,26,9)", 0, 0, 2, 20),
     ("volume", "量能 (万手)", 2, 0, 1, 13),
-    ("macd", "MACD (12,26,9)", 2, 1, 1, 13),
+    ("price", "价格 · 布林带 (20,2) · 大盘对比", 2, 1, 1, 13),
     ("kdj", "KDJ (9,3,3)", 4, 0, 1, 13),
     ("rsi", "RSI (6,12,24)", 4, 1, 1, 13),
     ("obv", "OBV 能量潮", 6, 0, 1, 15),
@@ -395,11 +392,11 @@ class IndWidget(pg.GraphicsLayoutWidget):
                 pg.PlotCurveItem(x, bu, connect="finite"),
                 pg.PlotCurveItem(x, bd, connect="finite"),
                 brush=_brush_alpha("#2563eb", 0.06)))
-            up_line = plot.plot(x, bu, pen=_pen(_UP, 0.9,
+            up_line = plot.plot(x, bu, pen=_pen(theme.C_UP, 0.9,
                                                 Qt.PenStyle.DashLine,
                                                 alpha=0.85),
                                 connect="finite")
-            dn_line = plot.plot(x, bd, pen=_pen(_DN, 0.9,
+            dn_line = plot.plot(x, bd, pen=_pen(theme.C_DOWN, 0.9,
                                                 Qt.PenStyle.DashLine,
                                                 alpha=0.85),
                                 connect="finite")
@@ -430,7 +427,7 @@ class IndWidget(pg.GraphicsLayoutWidget):
                 up_mask = c >= o
             else:
                 up_mask = np.ones(len(xs), dtype=bool)
-            brushes = [pg.mkBrush(_UP if u else _DN) for u in up_mask]
+            brushes = [pg.mkBrush(theme.C_UP if u else theme.C_DOWN) for u in up_mask]
             plot.addItem(pg.BarGraphItem(x=xs, height=heights, width=0.6,
                                          brushes=brushes, pen=None))
         legend = plot.addLegend(offset=(12, 4))
@@ -460,12 +457,12 @@ class IndWidget(pg.GraphicsLayoutWidget):
                 xs = x[pos]
                 plot.addItem(pg.BarGraphItem(
                     x=xs, height=h[pos], width=0.6, pen=None,
-                    brushes=[pg.mkBrush(_UP)] * len(xs)))
+                    brushes=[pg.mkBrush(theme.C_UP)] * len(xs)))
             if (~pos).any():
                 xs = x[~pos]
                 plot.addItem(pg.BarGraphItem(
                     x=xs, height=h[~pos], width=0.6, pen=None,
-                    brushes=[pg.mkBrush(_DN)] * len(xs)))
+                    brushes=[pg.mkBrush(theme.C_DOWN)] * len(xs)))
         legend = plot.addLegend(offset=(12, 4))
         if dif is not None and len(dif):
             dl = plot.plot(x, np.asarray(dif, dtype=float),
@@ -505,7 +502,7 @@ class IndWidget(pg.GraphicsLayoutWidget):
 
     def _draw_rsi(self, x, r6, r12, r24):
         plot = self.plots["rsi"]
-        for yv, col in ((70, _UP), (30, _DN)):
+        for yv, col in ((70, theme.C_UP), (30, theme.C_DOWN)):
             plot.addItem(pg.InfiniteLine(pos=yv, angle=0,
                                          pen=_pen(col, 0.8,
                                                   Qt.PenStyle.DashLine,
@@ -549,7 +546,7 @@ class IndWidget(pg.GraphicsLayoutWidget):
             edges = np.asarray(vp["edges"], dtype=float)
             h = (edges[1] - edges[0]) * 0.9
             last = float(vp.get("last", mid[np.argmax(mid)]))
-            brushes = [pg.mkBrush(_UP if m >= last else _DN) for m in mid]
+            brushes = [pg.mkBrush(theme.C_UP if m >= last else theme.C_DOWN) for m in mid]
             plot.addItem(pg.BarGraphItem(x0=np.zeros(len(mid)), x1=vols,
                                          y=mid - h / 2, height=h,
                                          brushes=brushes, pen=None))
@@ -584,7 +581,7 @@ class IndWidget(pg.GraphicsLayoutWidget):
                                          pen=_pen(theme.C_MUTED, 0.9,
                                                   Qt.PenStyle.DotLine)))
             valid = np.isfinite(r)
-            color = _UP if np.nansum(r[valid]) >= 0 else _DN
+            color = theme.C_UP if np.nansum(r[valid]) >= 0 else theme.C_DOWN
             line = plot.plot(x, r, pen=_pen(color, 1.1), connect="finite")
             legend = plot.addLegend(offset=(12, 4))
             legend.addItem(line, "RS 20日 (%)")

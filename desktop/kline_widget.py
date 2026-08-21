@@ -233,7 +233,7 @@ class KlineWidget(pg.GraphicsLayoutWidget):
 
     labelClicked = QtCore.pyqtSignal(str, object)
 
-    def __init__(self, parent=None, font_size=11):
+    def __init__(self, parent=None, font_size=12):
         super().__init__(parent)
         self._font_size = int(font_size)
         self._days = []
@@ -287,7 +287,7 @@ class KlineWidget(pg.GraphicsLayoutWidget):
             plot.showAxis("bottom", False)
             plot.hideButtons()
             plot.getViewBox().setBackgroundColor(pg.mkColor(theme.C_PANEL))
-            plot.showGrid(x=True, y=True, alpha=0.35)
+            plot.showGrid(x=True, y=True, alpha=0.25)
             plot.getViewBox().setMouseEnabled(x=True, y=False)
             for ax_name in ("left", "bottom"):
                 axis = plot.getAxis(ax_name)
@@ -318,48 +318,53 @@ class KlineWidget(pg.GraphicsLayoutWidget):
                  segs=None, sector=None, vsa_signals=None, wave_cum=None,
                  wave_segs=None, up_mask=None, caption=None, symbol=None,
                  scale=240, **extra):
-        self._detach_crosshairs()
-        self.ci.clear()
-        self._days = []
-        self._n = 0
-        self._hist = []
-        self._hist_pos = -1
-        if df is None or len(df) == 0:
-            self._build_plots()
-            self.price_plot.setTitle(title or "暂无 K 线数据")
-            return
-        n = len(df)
-        self._n = n
-        self._days = df["day"].tolist()
-        self._fb_verdicts = _feedback_verdicts(df, segs or [], symbol, scale)
+        # 批量更新: 三栏图表构建期间禁用重绘 (减少中间状态闪烁)
+        self.setUpdatesEnabled(False)
         try:
-            self._is_minute = df["day"].dt.hour.nunique() > 1
-        except Exception:
-            self._is_minute = False
-        self._chart_lo = df["low"].values.astype(float)
-        self._chart_hi = df["high"].values.astype(float)
-        self._full_x = (0.0, float(n - 1))
-        ylo, yhi = float(df["low"].min()), float(df["high"].max())
-        pad = (yhi - ylo) * 0.06 if yhi > ylo else 1.0
-        self._full_y = (ylo - pad, yhi + pad)
-        vmax = float(np.nanmax(df["volume"].values)) / 1e4
-        self._full_vol = (0.0, max(vmax * 1.15, 1.0))
+            self._detach_crosshairs()
+            self.ci.clear()
+            self._days = []
+            self._n = 0
+            self._hist = []
+            self._hist_pos = -1
+            if df is None or len(df) == 0:
+                self._build_plots()
+                self.price_plot.setTitle(title or "暂无 K 线数据")
+                return
+            n = len(df)
+            self._n = n
+            self._days = df["day"].tolist()
+            self._fb_verdicts = _feedback_verdicts(df, segs or [], symbol, scale)
+            try:
+                self._is_minute = df["day"].dt.hour.nunique() > 1
+            except Exception:
+                self._is_minute = False
+            self._chart_lo = df["low"].values.astype(float)
+            self._chart_hi = df["high"].values.astype(float)
+            self._full_x = (0.0, float(n - 1))
+            ylo, yhi = float(df["low"].min()), float(df["high"].max())
+            pad = (yhi - ylo) * 0.06 if yhi > ylo else 1.0
+            self._full_y = (ylo - pad, yhi + pad)
+            vmax = float(np.nanmax(df["volume"].values)) / 1e4
+            self._full_vol = (0.0, max(vmax * 1.15, 1.0))
 
-        self._build_plots()
-        self._date_axis.set_days(self._days, self._is_minute)
-        self._build_price(df, title, pivots or [], events or [],
-                          [list(w) for w in (waves or [])],
-                          bool(draw_waves), locks or [], tr, profile,
-                          segs or [], sector, vsa_signals or [])
-        self._build_volume(df, wave_segs or [])
-        self._build_cum(df, wave_cum, wave_segs, caption)
+            self._build_plots()
+            self._date_axis.set_days(self._days, self._is_minute)
+            self._build_price(df, title, pivots or [], events or [],
+                              [list(w) for w in (waves or [])],
+                              bool(draw_waves), locks or [], tr, profile,
+                              segs or [], sector, vsa_signals or [])
+            self._build_volume(df, wave_segs or [])
+            self._build_cum(df, wave_cum, wave_segs, caption)
 
-        n_view = min(self._n, _DEFAULT_BARS)
-        self.apply_view(self._full_x[1] - (n_view - 1), self._full_x[1],
-                        push=False)
-        self._rescale_price_y(self._full_x[1] - (n_view - 1),
-                              self._full_x[1])
-        self._attach_crosshairs()
+            n_view = min(self._n, _DEFAULT_BARS)
+            self.apply_view(self._full_x[1] - (n_view - 1), self._full_x[1],
+                            push=False)
+            self._rescale_price_y(self._full_x[1] - (n_view - 1),
+                                  self._full_x[1])
+            self._attach_crosshairs()
+        finally:
+            self.setUpdatesEnabled(True)
 
     # ── 十字光标 ──
     def _detach_crosshairs(self):

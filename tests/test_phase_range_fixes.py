@@ -148,13 +148,15 @@ def test_events_equal_weight_keeps_prior():
 def test_weight_tables_in_config():
     # 事件权重表只含已知事件类型 (防拼写漂移)
     known = {"PSY", "SC", "AR", "ST", "Spring", "SOS", "LPS", "JOC", "BU",
-             "BC", "UT", "UTAD", "LPSY", "SOW"}
+             "BC", "UT", "UTAD", "LPSY", "SOW", "Shakeout"}
     assert set(ACC_RANGE_EV) & known == set(ACC_RANGE_EV)
     assert set(DIST_RANGE_EV) & known == set(DIST_RANGE_EV)
     assert 0 < RANGE_EVENT_WEIGHT < 1
 
 
-# ── 3. _mark_bottoms 需吸筹事件证据 ──
+# ── 3. _mark_bottoms 底部标记: 无事件 V 型底也按结构标吸筹 ──
+# 校准: 标"下跌"后 20 根上涨占 74%; "markdown→accumulation/markup" 拐点其后
+# 20 根上涨占 66~84%, 死等事件证据会漏掉绝大多数无事件的 V 型底。
 
 def _bottom_df():
     n = 80
@@ -187,11 +189,12 @@ def test_mark_bottoms_no_events_legacy_mark():
     assert "accumulation" in labels, out
 
 
-def test_mark_bottoms_empty_events_blocks_mark():
+def test_mark_bottoms_empty_events_still_marks_vbottom():
+    # 无任何事件, 但 V 型底 + 回升8~30% (结构确认) → 仍标吸筹
     df = _bottom_df()
     out = _mark_bottoms(df, _bottom_phases(), events=[])
     labels = [k for *_x, k in out]
-    assert "accumulation" not in labels, out
+    assert "accumulation" in labels, out
 
 
 def test_mark_bottoms_with_accum_event_marks():
@@ -202,11 +205,29 @@ def test_mark_bottoms_with_accum_event_marks():
     assert "accumulation" in labels, out
 
 
-def test_mark_bottoms_wrong_event_blocked():
+def test_mark_bottoms_wrong_event_still_marks_vbottom():
+    # 拐点窗口内无吸筹事件, 但底部结构清晰 → 仍标吸筹 (价格结构即确认)
     df = _bottom_df()
-    # 拐点窗口外/派发事件不构成吸筹证据
     ev = [{"idx": 75, "type": "BC"}, {"idx": 10, "type": "SC"}]
     out = _mark_bottoms(df, _bottom_phases(), events=ev)
+    labels = [k for *_x, k in out]
+    assert "accumulation" in labels, out
+
+
+def test_mark_bottoms_no_recovery_keeps_markdown():
+    # 底部后继续下跌 (无回升) → 不标吸筹
+    n = 80
+    closes = np.linspace(100.0, 60.0, 40).tolist() \
+        + np.linspace(60.0, 54.0, 40).tolist()
+    df = pd.DataFrame({
+        "day": pd.date_range("2024-01-01", periods=n),
+        "open": closes,
+        "close": closes,
+        "high": [c * 1.01 for c in closes],
+        "low": [c * 0.99 for c in closes],
+        "volume": np.full(n, 1e6),
+    })
+    out = _mark_bottoms(df, [(0, 39, "markdown"), (40, 79, "markdown")])
     labels = [k for *_x, k in out]
     assert "accumulation" not in labels, out
 
