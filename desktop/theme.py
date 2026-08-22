@@ -465,10 +465,10 @@ QPushButton#ttsBtn {{
     padding: 2px 10px;
     font-size: 10pt;
     color: {C_TEXT};
+    outline: none;  /* 点击获得焦点后不再绘制蓝色焦点外框 */
 }}
 QPushButton#ttsBtn:hover {{
     background: {C["btn_hover"]};
-    border-color: {C_ACCENT};
 }}
 QPushButton#ttsBtn.playing {{
     color: {C_UP};
