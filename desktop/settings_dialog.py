@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """设置对话框: 编辑与 wyckoff.config.DEFAULT_SETTINGS 同键的界面设置 dict。"""
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QSpinBox,
-    QTabWidget, QVBoxLayout, QWidget,
+    QFontComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from wyckoff.config import PERIOD_OPTIONS, SCALE_OPTIONS
@@ -130,6 +131,41 @@ class SettingsDialog(QDialog):
         self.sp_right_w.setValue(int(self._s.get("right_width", 560)))
         gf.addRow("右侧结论栏宽:", self.sp_right_w)
         f.addRow(g)
+
+        fg = QGroupBox("界面字体")
+        ff = QFormLayout(fg)
+        # 字体族候选: QFontComboBox 自带系统字体列表, 默认取 theme 挑选的中文友好字体
+        fams = [x for x in QFontDatabase.families() if x]
+        self.cb_font = QFontComboBox()
+        pref = str(self._s.get("font_family", "") or "")
+        if pref in fams:
+            self.cb_font.setCurrentText(pref)
+        else:
+            self.cb_font.setCurrentText(theme.ui_font_family())
+        self.cb_font.setToolTip("全局界面字体, 影响所有栏目/面板/对话框; 留为默认即自动挑选")
+        ff.addRow("界面字体:", self.cb_font)
+
+        self.sp_font = QSpinBox()
+        self.sp_font.setRange(8, 20)
+        self.sp_font.setValue(int(self._s.get("font_size", 12)))
+        self.sp_font.setSuffix(" pt")
+        self.sp_font.setToolTip("全局界面基准字号 (工具栏/表格/按钮/列表等)")
+        ff.addRow("界面字号:", self.sp_font)
+
+        self.sp_watch_font = QSpinBox()
+        self.sp_watch_font.setRange(8, 18)
+        self.sp_watch_font.setValue(int(self._s.get("watch_font_size", 12)))
+        self.sp_watch_font.setSuffix(" pt")
+        self.sp_watch_font.setToolTip("仅左侧自选股卡片列表的字号")
+        ff.addRow("自选股栏字号:", self.sp_watch_font)
+
+        self.sp_text_font = QSpinBox()
+        self.sp_text_font.setRange(7, 18)
+        self.sp_text_font.setValue(int(self._s.get("text_font_size", 11)))
+        self.sp_text_font.setSuffix(" pt")
+        self.sp_text_font.setToolTip("右侧分析结论 / AI 解读的文字字号 (与 A-/A+ 联动)")
+        ff.addRow("结论面板字号:", self.sp_text_font)
+        f.addRow(fg)
         return w
 
     # ── 图表 ──
@@ -138,21 +174,7 @@ class SettingsDialog(QDialog):
         f = QFormLayout(w)
         f.setContentsMargins(12, 12, 12, 12)
 
-        self.cb_font = QComboBox()
-        from PyQt6.QtGui import QFontDatabase
-        families = sorted(QFontDatabase.families())
-        cand = [x for x in families if x]
-        self.cb_font.addItems(cand)
-        pref = self._s.get("font_family", "")
-        if pref in cand:
-            self.cb_font.setCurrentText(pref)
-        f.addRow("界面字体:", self.cb_font)
-
-        self.sp_font = QSpinBox()
-        self.sp_font.setRange(8, 20)
-        self.sp_font.setValue(int(self._s.get("font_size", 11)))
-        f.addRow("界面字号:", self.sp_font)
-
+        # 界面字体/字号已移至「基本→界面字体」; 此处仅保留图表绘制字号
         self.sp_chart_font = QSpinBox()
         self.sp_chart_font.setRange(6, 18)
         self.sp_chart_font.setValue(int(self._s.get("chart_font_size", 11)))
@@ -333,6 +355,8 @@ class SettingsDialog(QDialog):
             "right_width": self.sp_right_w.value(),
             "font_family": self.cb_font.currentText(),
             "font_size": self.sp_font.value(),
+            "watch_font_size": self.sp_watch_font.value(),
+            "text_font_size": self.sp_text_font.value(),
             "chart_font_size": self.sp_chart_font.value(),
             "draw_waves": self.cb_waves.isChecked(),
             "draw_locks": self.cb_locks.isChecked(),

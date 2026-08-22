@@ -11,6 +11,11 @@ from wyckoff.config import THEMES, FONT_CANDIDATES, FONT_DISPLAY_CANDIDATES, MON
 C = THEMES["light"]
 _active = "light"
 
+# ── 运行时可调字体 (设置→基本→界面字体, set_ui_font 写入, _build_qss 消费) ──
+UI_FONT_FAMILY = ""      # 空 = 用 FONT_CANDIDATES[0]
+UI_FONT_SIZE = 12        # 全局基准字号 (pt), QSS * 选择器使用
+WATCH_FONT_SIZE = 12     # 自选股栏列表字号 (pt)
+
 C_UP = C["up"]
 C_DOWN = C["down"]
 C_AMBER = C["amber"]
@@ -71,6 +76,25 @@ def set_theme(name):
     QSS = _build_qss(C)
 
 
+def set_ui_font(family="", size=0, watch=0):
+    """设置全局界面字体/字号与自选股栏字号, 并重建 QSS (保存设置或切换主题后调用)。
+
+    family 为空 / size 或 watch 非 >0 时保留原值。"""
+    global UI_FONT_FAMILY, UI_FONT_SIZE, WATCH_FONT_SIZE
+    if family:
+        UI_FONT_FAMILY = family
+    if size and int(size) > 0:
+        UI_FONT_SIZE = int(size)
+    if watch and int(watch) > 0:
+        WATCH_FONT_SIZE = int(watch)
+    QSS = _build_qss(C)
+
+
+def ui_font_family():
+    """当前生效的界面字体族 (未自定义时回退系统候选)。"""
+    return UI_FONT_FAMILY or pick_font_family()
+
+
 def pick_font_family(preferred=""):
     """在系统可用字体中挑选 FONT_CANDIDATES 里第一个存在的 (参考 config._pick_font)。"""
     from PyQt6.QtGui import QFontDatabase
@@ -118,7 +142,7 @@ def pick_mono_font_family(preferred=""):
 
 def app_font(size=10, bold=False):
     f = QFont()
-    f.setFamily(FONT_CANDIDATES[0] if FONT_CANDIDATES else "sans-serif")
+    f.setFamily(ui_font_family())
     f.setPointSize(int(size))
     f.setBold(bold)
     return f
@@ -177,10 +201,14 @@ def _mono_family():
 def _build_qss(C):
     _df = _display_family()
     _mf = _mono_family()
+    _fam = ui_font_family()
     return f"""
 * {{
-    font-family: "{FONT_CANDIDATES[0]}";
-    font-size: 12pt;
+    font-family: "{_fam}";
+    font-size: {UI_FONT_SIZE}pt;
+}}
+QListWidget#watchList {{
+    font-size: {WATCH_FONT_SIZE}pt;
 }}
 QMainWindow, QDialog {{
     background: {C_BG};

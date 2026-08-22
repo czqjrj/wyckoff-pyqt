@@ -346,6 +346,21 @@ class _StatusTicker(QLabel):
             self.clicked_code.emit(code)
         super().mousePressEvent(_ev)
 
+    def enterEvent(self, ev):
+        """鼠标悬停 → 暂停横向滚动与轮播, 方便看清/点击。"""
+        self._timer.stop()
+        self._rot.stop()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        """鼠标移开 → 恢复滚动。"""
+        if self._msgs:
+            if not self._timer.isActive():
+                self._timer.start()
+            if len(self._msgs) > 1 and not self._rot.isActive():
+                self._rot.start(TICKER_ROT_MS)
+        super().leaveEvent(ev)
+
 
 def _signal_color(kind, sig_type, theme_module=None):
     """按信号方向取状态栏着色 (A股红涨绿跌; 中性用琥珀)。"""
@@ -562,7 +577,7 @@ def section_html(title, lines, font_size=11):
     sub_bg = theme.css_rgba(theme.C_ACCENT, 16)
     out = []
     out.append('<div style="font-family:\'%s\';font-size:%dpt;color:%s;">'
-               % (theme.FONT_CANDIDATES[0], font_size, theme.C_TEXT))
+               % (theme.ui_font_family(), font_size, theme.C_TEXT))
     for raw in lines:
         stripped = raw.strip()
         if not stripped:
@@ -656,6 +671,11 @@ class MainWindow(QMainWindow):
         self._analysis_cache = {}  # (code,scale,datalen) → analysis result dict
 
         theme.set_theme(str(self.settings.get("theme", "light") or "light"))
+        # 界面字体/字号 (设置→基本→界面字体), 需在 set_theme 后、setStyleSheet 前生效
+        theme.set_ui_font(
+            family=str(self.settings.get("font_family", "") or ""),
+            size=int(self.settings.get("font_size", 12) or 12),
+            watch=int(self.settings.get("watch_font_size", 12) or 12))
 
         self.setWindowTitle("Wyckoff 威科夫分析客户端")
         self.resize(1480, 900)
@@ -940,33 +960,22 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.on_refresh)
         lay.addWidget(btn_refresh)
 
-        btn_add = _button("加入自选")
-        btn_add.clicked.connect(self.add_current_to_watch)
-        lay.addWidget(btn_add)
-
-        btn_set = _button("设置")
-        btn_set.clicked.connect(self.open_settings)
-        lay.addWidget(btn_set)
-
-        lay.addWidget(self._vsep())
-
-        self.btn_toggle_watch = _button("左栏")
-        self.btn_toggle_watch.setCheckable(True)
-        self.btn_toggle_watch.setChecked(True)
-        self.btn_toggle_watch.setToolTip("显示/隐藏左栏自选股 (Ctrl+Shift+W)")
-        self.btn_toggle_watch.clicked.connect(
-            lambda on: self.toggle_panel("watch", bool(on)))
-        lay.addWidget(self.btn_toggle_watch)
-
-        self.btn_toggle_right = _button("右栏")
-        self.btn_toggle_right.setCheckable(True)
-        self.btn_toggle_right.setChecked(True)
-        self.btn_toggle_right.setToolTip("显示/隐藏右栏分析 (Ctrl+Shift+R)")
-        self.btn_toggle_right.clicked.connect(
-            lambda on: self.toggle_panel("right", bool(on)))
-        lay.addWidget(self.btn_toggle_right)
+        # 信号头条: 滚动播报自选股高胜率信号; 点击载入对应标的分析,
+        # 悬停暂停滚动 (原位于底部状态栏, 移至刷新按钮与股票信息之间)
+        lay.addSpacing(8)
+        self.status_ticker = _StatusTicker()
+        self.status_ticker.clicked_code.connect(self._load_code)
+        self.status_ticker.setFixedWidth(300)
+        lay.addWidget(self.status_ticker)
 
         lay.addStretch(1)
+
+        # 工具栏「设置/加入自选/左栏/右栏」按钮已移除:
+        # 设置走菜单 (文件→设置), 加入自选走菜单/右键, 左右栏开关走视图菜单;
+        # 属性保留为 None, 兼容 toggle_panel/_sync_panel_btns 里的旧引用。
+        self.btn_toggle_watch = None
+        self.btn_toggle_right = None
+
         lay.addWidget(self._vsep())
 
         self.tb_name = QLabel("")
@@ -1361,6 +1370,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(head)
 
         self.watch_list = QListWidget(self.watch_panel)
+        self.watch_list.setObjectName("watchList")  # QSS: 设置→自选股栏字号
         from .watch_card import WatchCardDelegate
         self.watch_list.setItemDelegate(WatchCardDelegate(self.watch_list))
         self.watch_list.setSpacing(2)
@@ -1388,9 +1398,7 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         self.stock_info = QLabel("")
         sb.addWidget(self.stock_info)
-        self.status_ticker = _StatusTicker(self)
-        self.status_ticker.clicked_code.connect(self._load_code)
-        sb.insertWidget(1, self.status_ticker, 1)
+        # 信号头条已移至主工具栏 (刷新按钮与股票信息之间), 状态栏不再放置
         sb.addPermanentWidget(QLabel("  "))
         self.status_label = QLabel("就绪")
         sb.addPermanentWidget(self.status_label)
@@ -3269,8 +3277,25 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
             self.cb_scale.setCurrentText(self.settings.get("default_scale", "日线"))
             self.cb_period.setCurrentText(self.settings.get("default_period", "近3年"))
             self._apply_theme()
+            self._apply_fonts()
             self._apply_chart_font()
             self._status("设置已保存", theme.C_DOWN)
+
+    def _apply_fonts(self):
+        """保存设置后即时刷新界面字体/字号、自选股栏字号与结论面板字号。"""
+        theme.set_ui_font(
+            family=str(self.settings.get("font_family", "") or ""),
+            size=int(self.settings.get("font_size", 12) or 12),
+            watch=int(self.settings.get("watch_font_size", 12) or 12))
+        self.setStyleSheet(theme.QSS)
+        # 结论面板文字字号 (与 A-/A+ 按钮共用 text_font_size)
+        try:
+            new_ts = int(self.settings.get("text_font_size", 11) or 11)
+        except (TypeError, ValueError):
+            new_ts = 11
+        if new_ts != self._text_font_size:
+            self._text_font_size = new_ts
+            self._apply_text_zoom()
 
     def toggle_theme(self):
         new = "light" if theme.active_theme() == "dark" else "dark"

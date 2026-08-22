@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
+from PyQt6.QtWidgets import QWidget
+
 from wyckoff.config import TICKER_MAX_ITEMS
 
 
@@ -185,11 +187,11 @@ def test_mainwindow_has_center_ticker():
         w.show()
         app.processEvents()
         assert hasattr(w, "status_ticker")
-        sb = w.statusBar()
-        assert w.status_ticker.parent() is sb
-        # 中间位置: 是状态栏的直接子部件 (在 stock_info 与永久部件之间)
+        # 头条已移至主工具栏: 刷新按钮与股票信息之间, 不再位于底部状态栏
         from desktop.main_window import _StatusTicker
-        assert any(isinstance(x, _StatusTicker) for x in sb.children())
+        assert w.status_ticker.parent() is not w.statusBar()
+        assert any(isinstance(x, _StatusTicker)
+                   for x in w._top_bar.findChildren(QWidget))
     finally:
         try:
             w.close()

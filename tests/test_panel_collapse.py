@@ -113,26 +113,28 @@ def test_apply_panel_state_restores(win):
 
 
 def test_toolbar_toggle_buttons_sync(win):
-    """工具栏「左栏/右栏」按钮随面板状态同步勾选, 折叠后仍可一键打开。"""
+    """面板折叠状态与视图菜单 action 同步; 工具栏按钮已移除 (属性为 None 兼容)。"""
     app, w = win
-    assert hasattr(w, "btn_toggle_watch")
-    assert hasattr(w, "btn_toggle_right")
-    assert w.btn_toggle_watch.isChecked()
-    assert w.btn_toggle_right.isChecked()
+    # 工具栏按钮已移除: 属性保留 None, 不再渲染真实 QPushButton
+    assert w.btn_toggle_watch is None
+    assert w.btn_toggle_right is None
+    assert w.act_toggle_watch.isChecked()
+    assert w.act_toggle_right.isChecked()
     w.toggle_panel("watch", False)
     app.processEvents()
-    assert not w.btn_toggle_watch.isChecked()
+    assert not w.act_toggle_watch.isChecked()
     assert not w.watch_panel.isVisible()
-    # 工具栏按钮永远可见 → 直接点击即可重新打开
-    w.btn_toggle_watch.click()
+    # 视图菜单 action 点击即可重新打开
+    w.act_toggle_watch.setChecked(True)
+    w.toggle_panel("watch", True)
     app.processEvents()
-    assert w.btn_toggle_watch.isChecked()
+    assert w.act_toggle_watch.isChecked()
     assert w.watch_panel.isVisible()
     w.toggle_panel("right", False)
     app.processEvents()
-    assert not w.btn_toggle_right.isChecked()
+    assert not w.act_toggle_right.isChecked()
     assert not w.right_panel.isVisible()
-    w.btn_toggle_right.click()
+    w.toggle_panel("right", True)
     app.processEvents()
     assert w.right_panel.isVisible()
 
