@@ -4,7 +4,7 @@
 数据由 AnalysisThread 在 worker 线程通过 chart.build_ind_data() 收集 (指标计算
 仍在 wyckoff 包内完成), 主线程调用 set_data() 渲染 — pyqtgraph 非线程安全。
 
-排版 (4×2 网格, 高度比 2.0:1.3:1.3:1.5):
+排版 (4×2 网格, 高度比 1.3:1.3:1.3:1.5):
   第一行: MACD (12,26,9) (跨两列, 最宽)
   第二行: 量能 (万手) | 价格 · 布林带 (20,2) · 大盘对比
   第三行: KDJ (9,3,3)  | RSI (6,12,24)
@@ -12,11 +12,12 @@
 每个面板下方一行 "当前信号 → 预示" 解读 (颜色随信号红/绿/橙/灰, 与原版 set_xlabel 一致)。
 默认显示全幅 (与原版一致, 无初始缩放)。
 
-交互 (与原版一致):
+交互 (由 desktop.base_plot.BasePlotWidget 基类统一提供):
   - 滚轮    以光标为锚点缩放 X 轴 (各面板 Y 为全量数据固定范围)
-  - 左键拖拽 平移
+  - 左键拖拽 平移 (范围限制在数据全幅内)
   - 双击    复位到全幅
-  - 键盘    + / - 缩放, 左/右箭头平移, Home/r 复位, Backspace/f 视图历史
+  - 键盘    上箭头 / + 放大, 下箭头 / - 缩小 (以视图中心为锚点),
+            左/右箭头平移, Home/r 复位, Backspace/f 视图历史
 """
 import datetime as _dt
 
@@ -29,6 +30,7 @@ from PyQt6.QtWidgets import QScrollArea
 from wyckoff.config import FONT_CANDIDATES
 
 from . import theme
+from .base_plot import BasePlotWidget
 from .crosshair import Crosshair
 
 # 与原版 matplotlib figsize=(8.5, 13.5) 的宽高比一致: 宽度铺满可视区, 高度按此比例。
@@ -37,7 +39,7 @@ _IND_ASPECT = 13.5 / 8.5
 # 面板定义: (key, 初始标题, 所在行, 列, 跨列数, 行伸缩权重)
 # 行号/列号对应 GraphicsLayout, 0-based; 解读行占下一行。
 _PANEL_DEFS = [
-    ("macd", "MACD (12,26,9)", 0, 0, 2, 20),
+    ("macd", "MACD (12,26,9)", 0, 0, 2, 13),
     ("volume", "量能 (万手)", 2, 0, 1, 13),
     ("price", "价格 · 布林带 (20,2) · 大盘对比", 2, 1, 1, 13),
     ("kdj", "KDJ (9,3,3)", 4, 0, 1, 13),
@@ -127,26 +129,6 @@ class _DateAxis(pg.AxisItem):
         return out
 
 
-class _IndViewBox(pg.ViewBox):
-    """指标面板 ViewBox: 滚轮只缩放 X, 双击复位。"""
-
-    def __init__(self, host, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._host = host
-
-    def wheelEvent(self, ev, axis=None):
-        pos = self.mapSceneToView(ev.scenePos())
-        self._host.zoom_x_about(pos.x(), 0.8 if ev.delta() > 0 else 1.25)
-        ev.accept()
-
-    def mouseClickEvent(self, ev):
-        if ev.button() == Qt.MouseButton.LeftButton and ev.double():
-            self._host.reset_view()
-            ev.accept()
-            return
-        super().mouseClickEvent(ev)
-
-
 class IndScroll(QScrollArea):
     """技术指标滚动容器: 宽度铺满可视区, 高度按 13.5:8.5 比例放大 (与原版一致)。
 
@@ -175,8 +157,11 @@ class IndScroll(QScrollArea):
         self.widget().setMinimumWidth(w)
 
 
-class IndWidget(pg.GraphicsLayoutWidget):
-    """pyqtgraph 技术指标: 4×2 网格 (与原版 matplotlib 排版一致), X 轴联动。"""
+class IndWidget(BasePlotWidget):
+    """pyqtgraph 技术指标: 4×2 网格 (与原版 matplotlib 排版一致), X 联动。
+
+    继承 BasePlotWidget 获得统一交互 (滚轮/键盘/拖拽边界/双击复位/视图历史)。
+    """
 
     def __init__(self, parent=None, font_size=11):
         super().__init__(parent)
@@ -185,17 +170,10 @@ class IndWidget(pg.GraphicsLayoutWidget):
         self._days = []
         self._is_minute = False
         self._full_x = (0.0, 1.0)
-        self._hist = []
-        self._hist_pos = -1
         self._date_axes = {}
         self.plots = {}
         self.cap_labels = {}
         self._yranges = {}
-        self._crosshairs = []
-
-        self.setBackground(pg.mkColor(theme.C_PANEL))
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self._sync_lock = False
         self._build_plots()
         self.plots["price"].setTitle(
             "输入 A 股代码 (如 600104 / sh600104 / 000001), 点击\"开始分析\""
@@ -211,9 +189,7 @@ class IndWidget(pg.GraphicsLayoutWidget):
         self._date_axes = {}
         for key, title, row, col, colspan, stretch in _PANEL_DEFS:
             self._date_axes[key] = _DateAxis("bottom")
-            vb = _IndViewBox(self, enableMenu=True)
-            plot = pg.PlotItem(viewBox=vb,
-                               axisItems={"bottom": self._date_axes[key]})
+            plot = pg.PlotItem(axisItems={"bottom": self._date_axes[key]})
             plot.setTitle(title, color=theme.C_TEXT, size=f"{self._fs(2)}pt")
             plot.hideButtons()
             plot.getViewBox().setBackgroundColor(pg.mkColor(theme.C_PANEL))
@@ -230,7 +206,9 @@ class IndWidget(pg.GraphicsLayoutWidget):
                                    size=f"{self._fs(1)}pt")
             cap.setFont(self._font(1))
             self.cap_labels[key] = cap
-            plot.getViewBox().sigXRangeChanged.connect(self._on_x_range_changed)
+            # vp (量价分布) X 轴是成交量 (万手), 不随日期联动
+            self.register_plot(plot, sync=(key != "vp"),
+                               primary=(key == "price"))
             self.plots[key] = plot
 
     # ── 主题 ──
@@ -253,23 +231,24 @@ class IndWidget(pg.GraphicsLayoutWidget):
                  macd_dea=None, kdj_k=None, kdj_d=None, kdj_j=None,
                  rsi_6=None, rsi_12=None, rsi_24=None, obv=None, obv_ma=None,
                  vp=None, rs_series=None, **extra):
-        self._detach_crosshairs()
-        self.ci.clear()
+        self.clear_plots()
         self._n = 0
         self._days = []
-        self._hist = []
-        self._hist_pos = -1
         if not n or not close:
             self._build_plots()
             self.plots["price"].setTitle("暂无技术指标数据")
             return
         self._n = int(n)
+        self._has_data = True
         self._days = [_parse_day(d) for d in (day or [])]
         self._is_minute = bool(is_minute)
         x = np.arange(self._n) if x is None else np.asarray(x, dtype=float)
         self._full_x = (float(x[0]), float(x[-1]))
 
         self._build_plots()
+        for key, plot in self.plots.items():
+            if key != "vp":
+                self.set_full_x(plot, self._full_x)
         for axis in self._date_axes.values():
             axis.set_days(self._days, self._is_minute)
         self._yranges = self._compute_yranges(
@@ -290,11 +269,6 @@ class IndWidget(pg.GraphicsLayoutWidget):
         self._attach_crosshairs()
 
     # ── 十字光标 ──
-    def _detach_crosshairs(self):
-        for ch in self._crosshairs:
-            ch.detach()
-        self._crosshairs = []
-
     def _fmt_x(self):
         days = self._days
         minute = self._is_minute
@@ -315,7 +289,7 @@ class IndWidget(pg.GraphicsLayoutWidget):
         return fmt
 
     def _attach_crosshairs(self):
-        self._detach_crosshairs()
+        self.detach_crosshairs()
         if self._n <= 0:
             return
         fmt_x = self._fmt_x()
@@ -625,109 +599,8 @@ class IndWidget(pg.GraphicsLayoutWidget):
         return ti
 
     def zoom_x_about(self, cx, factor):
-        if self._n == 0:
-            return
-        x0, x1 = self.plots["price"].getViewBox().viewRange()[0]
-        full0, full1 = self._full_x
-        span = x1 - x0
-        full_span = full1 - full0
-        new_span = min(max(span * factor, 15.0), full_span)
-        if new_span >= full_span - 0.5:
-            self.apply_view(full0, full1)
-            return
-        t = min(max((cx - x0) / span, 0.0), 1.0) if span > 0 else 0.5
-        nx0 = cx - new_span * t
-        nx1 = nx0 + new_span
-        if nx0 < full0:
-            nx0, nx1 = full0, full0 + new_span
-        if nx1 > full1:
-            nx1, nx0 = full1, full1 - new_span
-        self.apply_view(nx0, nx1)
-
-    def apply_view(self, x0, x1, push=True):
-        if self._n == 0:
-            return None
-        x0 = max(float(x0), self._full_x[0])
-        x1 = min(float(x1), self._full_x[1])
-        if x1 - x0 < 2:
-            return None
-        self.plots["price"].getViewBox().setXRange(x0, x1, padding=0)
-        if push:
-            self._push_view(x0, x1)
-        return (x0, x1)
-
-    def reset_view(self):
-        if self._n:
-            self.apply_view(*self._full_x)
-
-    def pan_by(self, frac):
-        if self._n == 0:
-            return
-        x0, x1 = self.plots["price"].getViewBox().viewRange()[0]
-        full0, full1 = self._full_x
-        full_span = full1 - full0
-        span = x1 - x0
-        if full_span <= 0 or span <= 0:
-            return
-        if span >= full_span - 0.5:
-            self.apply_view(full0, full1)
-            return
-        nx0 = min(max(x0 + span * frac, full0), full1 - span)
-        self.apply_view(nx0, nx0 + span)
-
-    def _push_view(self, x0, x1):
-        key = (float(x0), float(x1))
-        if self._hist and self._hist[self._hist_pos] == key:
-            return
-        self._hist = self._hist[:self._hist_pos + 1]
-        self._hist.append(key)
-        self._hist_pos = len(self._hist) - 1
-
-    def nav_hist(self, step):
-        if not self._hist:
-            return
-        pos = self._hist_pos + step
-        if 0 <= pos < len(self._hist):
-            self._hist_pos = pos
-            x0, x1 = self._hist[pos]
-            self.plots["price"].getViewBox().setXRange(x0, x1, padding=0)
-
-    def _on_x_range_changed(self, vb, xrange):
-        if self._n == 0 or self._sync_lock:
-            return
-        self._sync_lock = True
-        try:
-            x0, x1 = float(xrange[0]), float(xrange[1])
-            for key, plot in self.plots.items():
-                if key == "vp":
-                    continue  # 量价分布 X 轴是成交量 (万手), 不随日期联动
-                pvb = plot.getViewBox()
-                if pvb is not vb:
-                    pvb.setXRange(x0, x1, padding=0)
-        finally:
-            self._sync_lock = False
-
-    def keyPressEvent(self, ev):
-        if self._n == 0:
-            return super().keyPressEvent(ev)
-        key = ev.key()
-        x0, x1 = self.plots["price"].getViewBox().viewRange()[0]
-        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self.zoom_x_about((x0 + x1) / 2, 0.8)
-        elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
-            self.zoom_x_about((x0 + x1) / 2, 1.25)
-        elif key == Qt.Key.Key_Left:
-            self.pan_by(-0.2)
-        elif key == Qt.Key.Key_Right:
-            self.pan_by(0.2)
-        elif key in (Qt.Key.Key_Home, Qt.Key.Key_R):
-            self.reset_view()
-        elif key == Qt.Key.Key_Backspace:
-            self.nav_hist(-1)
-        elif key in (Qt.Key.Key_F, Qt.Key.Key_End):
-            self.nav_hist(1)
-        else:
-            super().keyPressEvent(ev)
+        """兼容旧接口: 以数据坐标 cx 为锚点缩放 X (基类实现)。"""
+        self.zoom_about(cx, factor)
 
     def grab_pixmap(self):
         """整图快照 (供导出 PNG)。"""

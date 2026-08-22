@@ -14,11 +14,13 @@ import threading
 import time
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFontMetrics, QPalette
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QProgressBar,
-    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QAbstractSpinBox, QComboBox, QDialog, QDoubleSpinBox,
+    QFrame, QHBoxLayout, QHeaderView, QItemDelegate, QLabel, QLineEdit,
+    QMessageBox, QProgressBar, QPushButton, QSpinBox, QStyledItemDelegate,
+    QTableWidget, QTableWidgetItem, QTextEdit, QToolButton, QVBoxLayout,
+    QWidget,
 )
 
 from wyckoff.paths import DATA_DIR
@@ -81,6 +83,160 @@ def _table(select_rows=True):
     return t
 
 
+def _vline():
+    """竖向 hairline 分隔, 替代 "│" 文本字符。"""
+    f = QFrame()
+    f.setFrameShape(QFrame.Shape.VLine)
+    f.setFixedHeight(22)
+    f.setStyleSheet(f"color:{theme.C_BORDER};")
+    return f
+
+
+def _panel_head(text):
+    """筛选卡片面板标题: accent 色条 + 衬线标题, 统一全站签名样式。"""
+    box = QWidget()
+    h = QHBoxLayout(box)
+    h.setContentsMargins(2, 2, 2, 4)
+    h.setSpacing(8)
+    strip = QFrame()
+    strip.setFixedSize(4, 15)
+    strip.setAutoFillBackground(True)
+    p = strip.palette()
+    p.setColor(QPalette.ColorRole.Window, QColor(theme.C_ACCENT))
+    strip.setPalette(p)
+    h.addWidget(strip)
+    lab = QLabel(text)
+    lab.setObjectName("panelHead")
+    h.addWidget(lab)
+    h.addStretch(1)
+    return box
+
+
+def _flabel(text):
+    """筛选字段标签: 小号加粗 muted, 与控件基线对齐, 弱化标签强化数据。"""
+    lab = QLabel(text)
+    lab.setStyleSheet(f"color:{theme.C_MUTED};font-weight:bold;font-size:10pt;")
+    return lab
+
+
+def _chip(text):
+    """胶囊筛选 chip: 可勾选圆角按钮, 勾选后反色高亮 (替代朴素 QCheckBox)。"""
+    b = QToolButton()
+    b.setText(text)
+    b.setCheckable(True)
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    b.setStyleSheet(
+        f"QToolButton{{background:transparent;color:{theme.C_MUTED};"
+        f"border:1px solid {theme.C_BORDER};border-radius:11px;"
+        f"padding:3px 14px;}}"
+        f"QToolButton:hover{{color:{theme.C_ACCENT};"
+        f"border-color:{theme.C_ACCENT};}}"
+        f"QToolButton:checked{{background:{theme.C['sel']};"
+        f"color:{theme.C_ACCENT};border-color:{theme.C_ACCENT};"
+        f"font-weight:bold;}}")
+    return b
+
+
+def _ghost_btn(text):
+    """次级操作按钮: 面板底色 + hairline 边框, hover 提亮 (底部工具行统一用)。"""
+    b = QPushButton(text)
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    b.setStyleSheet(
+        f"QPushButton{{background:{theme.C_PANEL};color:{theme.C_TEXT};"
+        f"padding:5px 14px;border-radius:5px;border:1px solid {theme.C_BORDER};}}"
+        f"QPushButton:hover{{background:{theme.C['btn_hover']};"
+        f"border-color:{theme.C_ACCENT};}}"
+        f"QPushButton:pressed{{background:{theme.C['sel']};}}")
+    return b
+
+
+def _num_spin(lo, hi, decimals, special=""):
+    """区间数值框: 数字居中; 去掉箭头按钮节省宽度, 宽度稍后统一 (见 _unify_spin_widths)。"""
+    s = QDoubleSpinBox()
+    s.setRange(lo, hi)
+    s.setDecimals(decimals)
+    if special:
+        s.setSpecialValueText(special)
+    s.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    s.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+    return s
+
+
+def _unify_spin_widths(spins_samples):
+    """同一组数值框按渲染字体实测取最大需求, 全部设为同一固定宽度。
+
+    注意: 该方法在控件挂载前调用, 此时 QSS 字体 (12pt) 尚未生效,
+    `s.fontMetrics()` 仍为 9pt 默认字体, 直接实测会偏窄导致文本截断
+    ("不限" / 数值被裁)。故统一用 theme.app_font(12) (与 QSS font-size
+    一致) 实测, 并计入 specialValueText 与样式表内边距/border。"""
+    fm = QFontMetrics(theme.app_font(12))
+    pad = 32  # padding 6px*2 + border 1px*2 + 文本余量 (高 DPI 屏留足余量防截断)
+    width = max(max(fm.horizontalAdvance(t),
+                    fm.horizontalAdvance(s.specialValueText())
+                    if s.specialValueText() else 0) + pad
+                for s, t in spins_samples)
+    for s, _t in spins_samples:
+        s.setFixedWidth(width)
+    return width
+
+
+class _ScoreBarDelegate(QStyledItemDelegate):
+    """总分列评分条: 轨道 + accent 填充 + 居中数字, 一眼看出排名强弱。
+
+    取 index.data(UserRole) 作为 0-100 数值; 无值则退化为默认文本渲染。
+    """
+
+    def sizeHint(self, option, index):
+        from PyQt6.QtCore import QSize
+        base = super().sizeHint(option, index)
+        return QSize(base.width(), max(base.height(), 30))
+
+    def paint(self, painter, option, index):
+        from PyQt6.QtWidgets import QStyle
+        val = index.data(Qt.ItemDataRole.UserRole)
+        try:
+            score = float(val) if val is not None else None
+        except (TypeError, ValueError):
+            score = None
+        if score is None:
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        r = option.rect
+        # 选中/悬停底色沿用默认 (保持与其它单元格一致)
+        style = option.widget.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter,
+                          option.widget)
+        pad_x, pad_y = 6, 7
+        track = r.adjusted(pad_x, pad_y, -pad_x, -pad_y)
+        track_h = track.height()
+        # 轨道 (淡底 + hairline)
+        painter.setBrush(QColor(theme.C["btn_hover"]))
+        painter.setPen(QColor(theme.C_BORDER))
+        painter.drawRoundedRect(track, 3, 3)
+        # 填充: 评分越高 accent 越满; 弱分 (<40) 用 muted, 中(40-70) accent, 强(>70) up
+        if score >= 70:
+            fill_c = QColor(theme.C_UP)
+        elif score >= 40:
+            fill_c = QColor(theme.C_ACCENT)
+        else:
+            fill_c = QColor(theme.C_MUTED)
+        fill_w = int(track.width() * max(0.0, min(score, 100.0)) / 100.0)
+        if fill_w > 0:
+            painter.setBrush(fill_c)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(track.x(), track.y(), fill_w, track_h, 3, 3)
+        # 居中数字 (等宽 tabular)
+        from PyQt6.QtGui import QFont
+        f = QFont(theme.MONO_FONT or "monospace")
+        f.setStyleHint(QFont.StyleHint.Monospace)
+        f.setBold(True)
+        painter.setFont(f)
+        painter.setPen(QColor(theme.C_TEXT))
+        painter.drawText(r, Qt.AlignmentFlag.AlignCenter, f"{score:.0f}")
+        painter.restore()
+
+
 _NUM_COLS = {"total_score", "tech_score", "flow_score", "fund_score",
              "pe", "pb", "mcap_yi", "last", "score", "flow20", "sector20"}
 
@@ -101,6 +257,8 @@ def _fill(table, cols, rows, color_cols=()):
                     if c in ("pe",):
                         txt = f"{val:.1f}"
                     elif c in ("pb",):
+                        txt = f"{val:.2f}"
+                    elif c == "last":
                         txt = f"{val:.2f}"
                     elif c in ("mcap_yi", "flow20", "sector20"):
                         txt = f"{val:.0f}"
@@ -2324,14 +2482,15 @@ class ScreenerWidget(QWidget):
             f"border:1px solid {theme.C_BORDER};border-radius:8px;}}")
         filter_box.setObjectName("filterBox")
         filter_lay = QVBoxLayout(filter_box)
-        filter_lay.setContentsMargins(14, 10, 14, 10)
-        filter_lay.setSpacing(8)
+        filter_lay.setContentsMargins(14, 10, 14, 12)
+        filter_lay.setSpacing(7)
+        filter_lay.addWidget(_panel_head("筛选条件"))
 
-        # 第一行: 预设 + 数值筛选 + 排序
+        # 第一行: 预设 (+ 描述) | 排序
         row1 = QHBoxLayout()
         row1.setSpacing(8)
 
-        row1.addWidget(QLabel("预设:"))
+        row1.addWidget(_flabel("预设"))
         self.cb_preset = QComboBox()
         self.cb_preset.setMinimumWidth(100)
         from wyckoff.screener import list_presets
@@ -2341,63 +2500,12 @@ class ScreenerWidget(QWidget):
             self.cb_preset.addItem(p["name"], p["key"])
         self.cb_preset.currentIndexChanged.connect(self._on_preset_changed)
         row1.addWidget(self.cb_preset)
+        self.lbl_preset_desc = QLabel("")
+        self.lbl_preset_desc.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:10pt;")
+        row1.addWidget(self.lbl_preset_desc, 1)
 
-        sep = QLabel("│")
-        sep.setStyleSheet(f"color:{theme.C_BORDER};")
-        row1.addWidget(sep)
-
-        # 市值
-        row1.addWidget(QLabel("市值(亿):"))
-        self.sp_mcap_min = QDoubleSpinBox()
-        self.sp_mcap_min.setRange(0, 999999)
-        self.sp_mcap_min.setDecimals(0)
-        self.sp_mcap_min.setSpecialValueText("不限")
-        self.sp_mcap_min.setFixedWidth(70)
-        row1.addWidget(self.sp_mcap_min)
-        row1.addWidget(QLabel("~"))
-        self.sp_mcap_max = QDoubleSpinBox()
-        self.sp_mcap_max.setRange(0, 999999)
-        self.sp_mcap_max.setDecimals(0)
-        self.sp_mcap_max.setSpecialValueText("不限")
-        self.sp_mcap_max.setFixedWidth(70)
-        row1.addWidget(self.sp_mcap_max)
-
-        # PE
-        row1.addWidget(QLabel("PE:"))
-        self.sp_pe_min = QDoubleSpinBox()
-        self.sp_pe_min.setRange(-999, 9999)
-        self.sp_pe_min.setDecimals(0)
-        self.sp_pe_min.setSpecialValueText("不限")
-        self.sp_pe_min.setFixedWidth(70)
-        row1.addWidget(self.sp_pe_min)
-        row1.addWidget(QLabel("~"))
-        self.sp_pe_max = QDoubleSpinBox()
-        self.sp_pe_max.setRange(-999, 9999)
-        self.sp_pe_max.setDecimals(0)
-        self.sp_pe_max.setSpecialValueText("不限")
-        self.sp_pe_max.setFixedWidth(70)
-        row1.addWidget(self.sp_pe_max)
-
-        # PB
-        row1.addWidget(QLabel("PB:"))
-        self.sp_pb_min = QDoubleSpinBox()
-        self.sp_pb_min.setRange(0, 999)
-        self.sp_pb_min.setDecimals(1)
-        self.sp_pb_min.setSpecialValueText("不限")
-        self.sp_pb_min.setFixedWidth(70)
-        row1.addWidget(self.sp_pb_min)
-        row1.addWidget(QLabel("~"))
-        self.sp_pb_max = QDoubleSpinBox()
-        self.sp_pb_max.setRange(0, 999)
-        self.sp_pb_max.setDecimals(1)
-        self.sp_pb_max.setSpecialValueText("不限")
-        self.sp_pb_max.setFixedWidth(70)
-        row1.addWidget(self.sp_pb_max)
-
-        row1.addStretch(1)
-
-        # 排序
-        row1.addWidget(QLabel("排序:"))
+        row1.addWidget(_flabel("排序"))
         self.cb_sort = QComboBox()
         self.cb_sort.addItems(["综合评分", "技术面", "资金流", "基本面"])
         self.cb_sort.setMinimumWidth(90)
@@ -2405,71 +2513,115 @@ class ScreenerWidget(QWidget):
 
         filter_lay.addLayout(row1)
 
-        # 第二行: 阶段筛选
+        # 第二行: 数值筛选 (市值 / PE / PB) | 范围 / 结果数
         row2 = QHBoxLayout()
         row2.setSpacing(8)
-        row2.addWidget(QLabel("阶段:"))
-        self.chk_phase_acc = QCheckBox("吸筹")
-        self.chk_phase_acc.setChecked(True)
-        self.chk_phase_markup = QCheckBox("上升")
-        self.chk_phase_markup.setChecked(True)
-        self.chk_phase_dist = QCheckBox("派发")
-        self.chk_phase_dist.setChecked(False)
-        self.chk_phase_down = QCheckBox("下跌")
-        self.chk_phase_down.setChecked(False)
-        self.chk_phase_range = QCheckBox("区间")
-        self.chk_phase_range.setChecked(True)
-        for chk in (self.chk_phase_acc, self.chk_phase_markup,
-                    self.chk_phase_dist, self.chk_phase_down, self.chk_phase_range):
-            row2.addWidget(chk)
-        sep2 = QLabel("│")
-        sep2.setStyleSheet(f"color:{theme.C_BORDER};")
-        row2.addWidget(sep2)
-        # 信号筛选
-        row2.addWidget(QLabel("信号:"))
-        self.chk_sig_spring = QCheckBox("Spring")
-        self.chk_sig_sc = QCheckBox("SC")
-        self.chk_sig_st = QCheckBox("ST")
-        self.chk_sig_sos = QCheckBox("SOS")
-        self.chk_sig_psy = QCheckBox("PSY")
-        for chk in (self.chk_sig_spring, self.chk_sig_sc, self.chk_sig_st,
-                    self.chk_sig_sos, self.chk_sig_psy):
-            row2.addWidget(chk)
+        row2.addWidget(_flabel("市值(亿)"))
+        self.sp_mcap_min = _num_spin(0, 999999, 0, "不限")
+        row2.addWidget(self.sp_mcap_min)
+        row2.addWidget(QLabel("~"))
+        self.sp_mcap_max = _num_spin(0, 999999, 0, "不限")
+        row2.addWidget(self.sp_mcap_max)
+        row2.addSpacing(6)
+
+        row2.addWidget(_flabel("PE"))
+        self.sp_pe_min = _num_spin(-999, 9999, 0, "不限")
+        row2.addWidget(self.sp_pe_min)
+        row2.addWidget(QLabel("~"))
+        self.sp_pe_max = _num_spin(-999, 9999, 0, "不限")
+        row2.addWidget(self.sp_pe_max)
+        row2.addSpacing(6)
+
+        row2.addWidget(_flabel("PB"))
+        self.sp_pb_min = _num_spin(0, 999, 1, "不限")
+        row2.addWidget(self.sp_pb_min)
+        row2.addWidget(QLabel("~"))
+        self.sp_pb_max = _num_spin(0, 999, 1, "不限")
+        row2.addWidget(self.sp_pb_max)
+
         row2.addStretch(1)
+
         filter_lay.addLayout(row2)
 
-        # 第三行: 范围 / 最低总分 / 板块 / 结果数
+        # 第三行: 阶段 chips | 信号 chips
         row3 = QHBoxLayout()
         row3.setSpacing(8)
-        row3.addWidget(QLabel("范围:"))
+        row3.addWidget(_flabel("阶段"))
+        self.chk_phase_acc = _chip("吸筹")
+        self.chk_phase_acc.setChecked(True)
+        self.chk_phase_markup = _chip("上升")
+        self.chk_phase_markup.setChecked(True)
+        self.chk_phase_dist = _chip("派发")
+        self.chk_phase_dist.setChecked(False)
+        self.chk_phase_down = _chip("下跌")
+        self.chk_phase_down.setChecked(False)
+        self.chk_phase_range = _chip("区间")
+        self.chk_phase_range.setChecked(True)
+        for chk in (self.chk_phase_acc, self.chk_phase_markup,
+                    self.chk_phase_dist, self.chk_phase_down,
+                    self.chk_phase_range):
+            row3.addWidget(chk)
+        row3.addSpacing(12)
+        row3.addWidget(_vline())
+        row3.addSpacing(12)
+        row3.addWidget(_flabel("信号"))
+        self.chk_sig_spring = _chip("Spring")
+        self.chk_sig_sc = _chip("SC")
+        self.chk_sig_st = _chip("ST")
+        self.chk_sig_sos = _chip("SOS")
+        self.chk_sig_psy = _chip("PSY")
+        for chk in (self.chk_sig_spring, self.chk_sig_sc, self.chk_sig_st,
+                    self.chk_sig_sos, self.chk_sig_psy):
+            row3.addWidget(chk)
+        row3.addStretch(1)
+        filter_lay.addLayout(row3)
+
+        # 第四行: 最低总分 / 板块 / 范围 / 结果数
+        row4 = QHBoxLayout()
+        row4.setSpacing(8)
+        row4.addWidget(_flabel("最低总分"))
+        self.sp_min_score = QSpinBox()
+        self.sp_min_score.setRange(0, 100)
+        self.sp_min_score.setValue(0)
+        self.sp_min_score.setPrefix("≥")
+        self.sp_min_score.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 去掉上下箭头按钮, 避免按钮挤占文本宽度导致 "≥0"/"≥100" 截断
+        self.sp_min_score.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        _unify_spin_widths(((self.sp_min_score, "≥100"),))
+        row4.addWidget(self.sp_min_score)
+        row4.addSpacing(6)
+        row4.addWidget(_flabel("板块"))
+        self.ed_sector = QLineEdit()
+        self.ed_sector.setPlaceholderText("逗号分隔, 如 银行,半导体")
+        self.ed_sector.setClearButtonEnabled(True)
+        row4.addWidget(self.ed_sector, 1)
+        row4.addSpacing(6)
+        row4.addWidget(_flabel("范围"))
         self.cb_universe = QComboBox()
         self.cb_universe.addItem("活跃A股 Top100", 100)
         self.cb_universe.addItem("活跃A股 Top200", 200)
         self.cb_universe.addItem("活跃A股 Top300", 300)
         self.cb_universe.setMinimumWidth(110)
-        row3.addWidget(self.cb_universe)
-        sep3 = QLabel("│")
-        sep3.setStyleSheet(f"color:{theme.C_BORDER};")
-        row3.addWidget(sep3)
-        row3.addWidget(QLabel("最低总分:"))
-        self.sp_min_score = QSpinBox()
-        self.sp_min_score.setRange(0, 100)
-        self.sp_min_score.setValue(0)
-        self.sp_min_score.setPrefix("≥")
-        self.sp_min_score.setFixedWidth(76)
-        row3.addWidget(self.sp_min_score)
-        row3.addWidget(QLabel("板块:"))
-        self.ed_sector = QLineEdit()
-        self.ed_sector.setPlaceholderText("逗号分隔, 如 银行,半导体")
-        self.ed_sector.setClearButtonEnabled(True)
-        row3.addWidget(self.ed_sector, 1)
-        row3.addWidget(QLabel("结果数:"))
+        row4.addWidget(self.cb_universe)
+        row4.addSpacing(6)
+        row4.addWidget(_flabel("结果数"))
         self.sp_limit = QSpinBox()
         self.sp_limit.setRange(10, 200)
         self.sp_limit.setValue(50)
-        self.sp_limit.setFixedWidth(76)
-        row3.addWidget(self.sp_limit)
-        filter_lay.addLayout(row3)
+        self.sp_limit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row4.addWidget(self.sp_limit)
+        filter_lay.addLayout(row4)
+
+        # 数值框按指标分组等宽: 同一指标 min~max 等宽, 样本含"不限"防截断
+        _unify_spin_widths(((self.sp_mcap_min, "999999"), (self.sp_mcap_max, "999999"),
+                            (self.sp_mcap_min, "不限")))
+        _unify_spin_widths(((self.sp_pe_min, "-9999"), (self.sp_pe_max, "-9999"),
+                            (self.sp_pe_min, "不限")))
+        _unify_spin_widths(((self.sp_pb_min, "999.9"), (self.sp_pb_max, "999.9"),
+                            (self.sp_pb_min, "不限")))
+        # sp_min_score 宽度已按 "≥100" 实测字体设定 (见上方 _unify_spin_widths),
+        # 不再硬编码 80px 以免 "≥0"/"≥100" 被截断
+        self.sp_limit.setFixedWidth(80)
 
         root.addWidget(filter_box)
 
@@ -2477,49 +2629,78 @@ class ScreenerWidget(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         self.btn_start = QPushButton("开始选股")
+        self.btn_start.setObjectName("primaryBtn")
         self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start.setStyleSheet(
             f"QPushButton{{background:{theme.C_ACCENT};color:#fff;"
-            f"font-weight:bold;padding:6px 20px;border-radius:6px;"
+            f"font-weight:bold;padding:6px 24px;border-radius:6px;"
             f"border:none;}}"
-            f"QPushButton:hover{{background:{theme.C_ACCENT};opacity:0.9;}}"
+            f"QPushButton:hover{{background:{theme.C['accent_dark']};}}"
+            f"QPushButton:pressed{{background:{theme.C['accent_dark']};}} "
             f"QPushButton:disabled{{background:{theme.C_MUTED};color:#fff;}}")
         self.btn_start.clicked.connect(self._on_start)
         btn_row.addWidget(self.btn_start)
-        self.btn_cancel = QPushButton("取消")
-        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_cancel.setStyleSheet(
-            f"QPushButton{{background:{theme.C_PANEL};color:{theme.C_TEXT};"
-            f"padding:6px 16px;border-radius:6px;border:1px solid {theme.C_BORDER};}}"
-            f"QPushButton:hover{{background:{theme.C_BORDER};}}")
+        self.btn_cancel = _ghost_btn("取消")
         self.btn_cancel.hide()
         self.btn_cancel.clicked.connect(self._on_cancel)
         btn_row.addWidget(self.btn_cancel)
         self.prog = QLabel("")
         self.prog.setStyleSheet(
-            f"color:{theme.C_MUTED};font-size:11pt;padding:0 8px;")
+            f"color:{theme.C_MUTED};font-size:10pt;padding:0 8px;")
         btn_row.addWidget(self.prog, 1)
         root.addLayout(btn_row)
 
-        # ── 进度条 ──
+        # ── 进度条 (细条式) ──
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p%")
-        self.progress_bar.setFixedHeight(20)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(6)
         self.progress_bar.setStyleSheet(
-            f"QProgressBar{{border:1px solid {theme.C_BORDER};border-radius:6px;"
-            f"background:{theme.C_PANEL};text-align:center;color:{theme.C_TEXT};"
-            f"font-size:10pt;}}"
-            f"QProgressBar::chunk{{background:{theme.C_ACCENT};border-radius:4px;}}")
+            f"QProgressBar{{border:none;border-radius:3px;"
+            f"background:{theme.C['btn_hover']};}}"
+            f"QProgressBar::chunk{{background:{theme.C_ACCENT};"
+            f"border-radius:3px;}}")
         self.progress_bar.hide()
         root.addWidget(self.progress_bar)
 
-        # ── 结果表 ──
+        # ── 结果统计条: 入选数 / 最高总分 / 平均总分 (+ 放宽提示) ──
+        self.stats_bar = QWidget()
+        stats_lay = QHBoxLayout(self.stats_bar)
+        stats_lay.setContentsMargins(4, 2, 4, 2)
+        stats_lay.setSpacing(18)
+        self._stat_blocks = []
+        for cap in ("入选", "最高总分", "平均总分"):
+            cell = QWidget()
+            v = QVBoxLayout(cell)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(0)
+            val = QLabel("-")
+            val.setStyleSheet(
+                f"color:{theme.C_ACCENT};font-weight:bold;font-size:15pt;"
+                f"font-family:'{theme.mono_font().family()}';")
+            cap_lab = QLabel(cap)
+            cap_lab.setStyleSheet(
+                f"color:{theme.C_MUTED};font-size:9pt;")
+            v.addWidget(val)
+            v.addWidget(cap_lab)
+            stats_lay.addWidget(cell)
+            self._stat_blocks.append(val)
+        self.st_relax = QLabel("")
+        self.st_relax.setStyleSheet(
+            f"color:{theme.C_AMBER};font-weight:bold;font-size:10pt;"
+            f"padding:0 6px;")
+        self.st_relax.hide()
+        stats_lay.addWidget(self.st_relax)
+        stats_lay.addStretch(1)
+        self.stats_bar.hide()
+        root.addWidget(self.stats_bar)
+
+        # ── 结果表 (总分别评分条) ──
         self.table = _table()
         self.table.setSortingEnabled(True)
         self.table.itemDoubleClicked.connect(self._load_selected)
+        self.table.setItemDelegateForColumn(0, _ScoreBarDelegate(self.table))
         root.addWidget(self.table, 1)
 
         # ── 底部操作 ──
@@ -2527,16 +2708,13 @@ class ScreenerWidget(QWidget):
         hb.setSpacing(8)
         for text, cb in (("全选", self._select_all), ("加入自选股", self._add_watch),
                          ("存为待观察", self._save_candidates), ("导出CSV", self._export)):
-            b = QPushButton(text)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setStyleSheet(
-                f"QPushButton{{background:{theme.C_PANEL};color:{theme.C_TEXT};"
-                f"padding:5px 14px;border-radius:5px;"
-                f"border:1px solid {theme.C_BORDER};}}"
-                f"QPushButton:hover{{background:{theme.C_BORDER};}}")
+            b = _ghost_btn(text)
             b.clicked.connect(cb)
             hb.addWidget(b)
         hb.addStretch(1)
+        hint = QLabel("双击行加载 K 线分析")
+        hint.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        hb.addWidget(hint)
         root.addLayout(hb)
 
         self._results = []
@@ -2606,12 +2784,14 @@ class ScreenerWidget(QWidget):
     def _on_preset_changed(self, idx):
         """切换预设策略 → 填充筛选条件。"""
         if idx <= 0:
+            self.lbl_preset_desc.setText("")
             return
         key = self.cb_preset.currentData()
         from wyckoff.screener import get_preset
         preset = get_preset(key)
         if not preset:
             return
+        self.lbl_preset_desc.setText(preset.get("desc", ""))
         pf = preset["filters"]
         # 重置所有控件
         self.chk_phase_acc.setChecked(False)
@@ -2672,6 +2852,7 @@ class ScreenerWidget(QWidget):
         self.prog.setText("正在获取选股宇宙 ...")
         self.table.setRowCount(0)
         self._results = []
+        self.stats_bar.hide()
         self.progress_bar.setValue(0)
         self.progress_bar.show()
         QTimer.singleShot(50, self._run_screen)
@@ -2711,7 +2892,23 @@ class ScreenerWidget(QWidget):
         relax_note = " 已按放宽条件(放开阶段/信号)重扫" if relaxed and results else ""
         self.prog.setText(f"{prefix}分析完成 · {len(results)} 只入选 / {total} 只候选"
                           f" · {errors} 只跳过 · 耗时 {elapsed:.0f}s{relax_note}")
+        self._update_stats(relaxed and bool(results))
         self._fill_table()
+
+    def _update_stats(self, relaxed=False):
+        """刷新统计条: 入选数 / 最高总分 / 平均总分。"""
+        n = len(self._results)
+        if not n:
+            self.stats_bar.hide()
+            return
+        scores = [float(r.get("total_score", 0) or 0) for r in self._results]
+        hi, avg = max(scores), sum(scores) / len(scores)
+        self._stat_blocks[0].setText(str(n))
+        self._stat_blocks[1].setText(f"{hi:.0f}")
+        self._stat_blocks[2].setText(f"{avg:.1f}")
+        self.st_relax.setText("已放宽条件" if relaxed else "")
+        self.st_relax.setVisible(bool(relaxed))
+        self.stats_bar.show()
 
     def _on_done(self):
         self.btn_start.setEnabled(True)
@@ -2752,14 +2949,39 @@ class ScreenerWidget(QWidget):
                 "sector": r.get("sector") or "-",
             })
         _fill(self.table, cols, rows)
+        # 视觉分层: 名称加粗 / 数字等宽右对齐 / 阶段按多空着色 / 信号 accent
+        mono = theme.mono_font(10)
+        bold = theme.ui_font(10, True)
+        phase_color = {
+            "底部整固": theme.C_UP, "上升趋势": theme.C_UP,
+            "顶部构筑": theme.C_DOWN, "下跌趋势": theme.C_DOWN,
+        }
+        num_cols = {"last", "tech_score", "flow_score", "fund_score",
+                    "pe", "pb", "mcap_yi"}
+        for ri in range(self.table.rowCount()):
+            for ci, c in enumerate(cols):
+                it = self.table.item(ri, ci)
+                if it is None:
+                    continue
+                if c == "name":
+                    it.setFont(bold)
+                elif c == "phase":
+                    it.setForeground(QColor(
+                        phase_color.get(it.text(), theme.C_MUTED)))
+                elif c == "signals":
+                    it.setForeground(QColor(theme.C_ACCENT))
+                elif c in num_cols:
+                    it.setFont(mono)
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                        | Qt.AlignmentFlag.AlignVCenter)
         # 列宽: 关键列设置最小宽度 + 自适应内容, 板块列 Stretch 填充剩余空间
         header = self.table.horizontalHeader()
         # 最小宽度映射 (实测文字宽+padding16+排序图标20, 留余量)
         # 2字=24px→60, 3字=36px→75, 4字=48px→85, 市值(亿)=44px→85
-        min_widths = {"total_score": 60, "code": 75, "name": 95, "last": 70,
-                      "phase": 140, "signals": 160, "tech_score": 75,
+        min_widths = {"total_score": 72, "code": 75, "name": 95, "last": 70,
+                      "phase": 90, "signals": 160, "tech_score": 75,
                       "flow_score": 75, "fund_score": 85, "pe": 55,
-                      "pb": 55, "mcap_yi": 85, "sector": 110}
+                      "pb": 55, "mcap_yi": 96, "sector": 110}
         for c, w in min_widths.items():
             if c in cols:
                 idx = cols.index(c)

@@ -25,6 +25,26 @@ class _FakeResp:
         return self._payload
 
 
+class _FakeSession:
+    """替代 wyckoff._shared.http_session 的假会话。
+
+    resp 为 None 时任何 get 都直接失败 (断言本地命中不应请求网络);
+    否则返回预设响应。
+    """
+
+    def __init__(self, resp=None):
+        self._resp = resp
+
+    def get(self, *a, **k):
+        if self._resp is None:
+            pytest.fail("本地命中不应请求网络")
+        return self._resp
+
+
+def _patch_net(monkeypatch, resp=None):
+    monkeypatch.setattr(pinyin, "http_session", lambda: _FakeSession(resp))
+
+
 def _make_market(n=3200):
     """生成 n 只假 A 股 (代码+名称), 保证包含一只非自选股的知名股。"""
     stocks = [("601899", "紫金矿业")]
@@ -61,8 +81,7 @@ def test_build_full_market_index_covers_whole_market(pinyin_env, monkeypatch):
     assert os.path.exists(pinyin.ALL_STOCKS_FILE)
 
     # 代码搜索 (不依赖网络)
-    monkeypatch.setattr(pinyin.requests, "get",
-                        lambda *a, **k: pytest.fail("本地命中不应请求网络"))
+    _patch_net(monkeypatch)
     hit = pinyin.search_stock("601899", limit=5)
     assert any(h["code"] == "601899" for h in hit)
     # 名称搜索
@@ -84,8 +103,7 @@ def test_search_pinyin_not_limited_to_watchlist(pinyin_env, monkeypatch):
     }
     monkeypatch.setattr(pinyin, "_STOCK_PINYIN_CACHE", dict(full))
     monkeypatch.setattr(pinyin, "_FULL_MARKET_CODES", set(full))
-    monkeypatch.setattr(pinyin.requests, "get",
-                        lambda *a, **k: pytest.fail("本地命中不应请求网络"))
+    _patch_net(monkeypatch)
     hit = pinyin.search_stock("zjky", limit=10)
     assert any(h["code"] == "601899" for h in hit)
     hit = pinyin.search_stock("sqjt", limit=10)
@@ -101,8 +119,7 @@ def test_search_pinyin_without_full_market_uses_network(pinyin_env, monkeypatch)
     payload = {"QuotationCodeTable": {"Data": [
         {"Code": "601899", "Name": "紫金矿业", "SecurityTypeName": "沪A"},
     ]}}
-    monkeypatch.setattr(pinyin.requests, "get",
-                        lambda *a, **k: _FakeResp(payload))
+    _patch_net(monkeypatch, _FakeResp(payload))
     hit = pinyin.search_stock("zjky", limit=10)
     assert any(h["code"] == "601899" for h in hit), "未就绪时也要能搜到自选股之外"
     # 拼音查询的网络结果被校验过, 上汽集团 (sqjt 不匹配 zjky) 不应混入
@@ -125,8 +142,7 @@ def test_ensure_reloads_fresh_and_rebuilds_stale(pinyin_env, monkeypatch):
     with open(pinyin.ALL_STOCKS_FILE, "w", encoding="utf-8") as f:
         json.dump({"601899": {"name": "紫金矿业", "full": "zijinkuangye",
                               "init": "zjky"}}, f, ensure_ascii=False)
-    monkeypatch.setattr(pinyin.requests, "get",
-                        lambda *a, **k: pytest.fail("新鲜文件不应请求网络"))
+    _patch_net(monkeypatch)
     assert pinyin.ensure_full_market_index() is True
     assert "601899" in pinyin._FULL_MARKET_CODES
 

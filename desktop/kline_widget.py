@@ -4,11 +4,12 @@
 数据由 AnalysisThread 在 worker 线程通过 build_kline_data() 收集 (K线相关计算
 仍在 wyckoff 包内完成), 主线程调用 set_data() 渲染 — pyqtgraph 非线程安全。
 
-交互 (与原 matplotlib 版行为一致):
+交互 (由 desktop.base_plot.BasePlotWidget 基类统一提供):
   - 滚轮    以光标为锚点缩放 X 轴 (Y 随可见区间自动重算)
   - 左键拖拽 平移
   - 双击    复位到全幅
-  - 键盘    + / - 缩放, 左/右箭头平移, Home/r 复位, Backspace/f 视图历史
+  - 键盘    上箭头 / + 放大, 下箭头 / - 缩小 (以视图中心为锚点),
+            左/右箭头平移, Home/r 复位, Backspace/f 视图历史
   - 单击    事件/VSA 文本标签 → labelClicked 信号 (由主窗口弹窗解释)
 """
 import math
@@ -21,6 +22,7 @@ from pyqtgraph.Qt.QtCore import Qt
 from wyckoff.config import (FONT_CANDIDATES, W_RECENT, _PHASE_STYLE)
 
 from . import theme
+from .base_plot import BasePlotWidget
 from .crosshair import Crosshair
 
 # A股配色: 红涨绿跌 (运行时从 theme 动态取色, 支持主题切换)
@@ -200,16 +202,12 @@ class _DateAxis(pg.AxisItem):
 
 
 class _KlineViewBox(pg.ViewBox):
-    """价格/量能/累计量 ViewBox: 滚轮只缩放 X, 双击复位, 单击标签触发解释。"""
+    """价格/量能/累计量 ViewBox: 滚轮缩放由基类控件层接管, 此处只处理
+    双击复位与单击标签触发解释。"""
 
     def __init__(self, host, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._host = host
-
-    def wheelEvent(self, ev):
-        pos = self.mapSceneToView(ev.scenePos())
-        self._host.zoom_x_about(pos.x(), 0.8 if ev.delta() > 0 else 1.25)
-        ev.accept()
 
     def mouseClickEvent(self, ev):
         if ev.button() == Qt.MouseButton.LeftButton:
@@ -225,10 +223,11 @@ class _KlineViewBox(pg.ViewBox):
         super().mouseClickEvent(ev)
 
 
-class KlineWidget(pg.GraphicsLayoutWidget):
+class KlineWidget(BasePlotWidget):
     """pyqtgraph K线图: 价格 / 成交量 / 波段累计量 三栏, X 轴联动。
 
-    set_data(**kline_data) 接收 build_kline_data() 的返回, 其余交互内置。
+    继承 BasePlotWidget 获得统一交互 (滚轮/键盘/拖拽边界/双击复位/视图历史)。
+    set_data(**kline_data) 接收 build_kline_data() 的返回。
     """
 
     labelClicked = QtCore.pyqtSignal(str, object)
@@ -245,17 +244,10 @@ class KlineWidget(pg.GraphicsLayoutWidget):
         self._full_x = (0.0, 1.0)
         self._full_y = (0.0, 1.0)
         self._full_vol = (0.0, 1.0)
-        self._hist = []
-        self._hist_pos = -1
         self._date_axis = None
         self.price_plot = None
         self.vol_plot = None
         self.cum_plot = None
-        self._crosshairs = []
-
-        self.setBackground(pg.mkColor(theme.C_PANEL))
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self._sync_lock = False
         self._build_plots()
         self.price_plot.setTitle("输入 A 股代码 (如 600104 / sh600104 / 000001), "
                                  "点击\"开始分析\"加载 K 线图。")
@@ -295,8 +287,10 @@ class KlineWidget(pg.GraphicsLayoutWidget):
                 axis.setTextPen(_pen(theme.C_TEXT, 1))
         self.cum_plot.showAxis("bottom", True)
 
-        for plot in (self.price_plot, self.vol_plot, self.cum_plot):
-            plot.getViewBox().sigXRangeChanged.connect(self._on_x_range_changed)
+        # 基类注册: 三栏 X 联动, price 为主面板 (滚轮/键盘/历史作用对象)
+        for i, plot in enumerate(
+                (self.price_plot, self.vol_plot, self.cum_plot)):
+            self.register_plot(plot, sync=True, primary=(i == 0))
 
     # ── 主题 ──
     def apply_theme(self):
@@ -321,18 +315,16 @@ class KlineWidget(pg.GraphicsLayoutWidget):
         # 批量更新: 三栏图表构建期间禁用重绘 (减少中间状态闪烁)
         self.setUpdatesEnabled(False)
         try:
-            self._detach_crosshairs()
-            self.ci.clear()
+            self.clear_plots()
             self._days = []
             self._n = 0
-            self._hist = []
-            self._hist_pos = -1
             if df is None or len(df) == 0:
                 self._build_plots()
                 self.price_plot.setTitle(title or "暂无 K 线数据")
                 return
             n = len(df)
             self._n = n
+            self._has_data = True
             self._days = df["day"].tolist()
             self._fb_verdicts = _feedback_verdicts(df, segs or [], symbol, scale)
             try:
@@ -349,6 +341,8 @@ class KlineWidget(pg.GraphicsLayoutWidget):
             self._full_vol = (0.0, max(vmax * 1.15, 1.0))
 
             self._build_plots()
+            for plot in (self.price_plot, self.vol_plot, self.cum_plot):
+                self.set_full_x(plot, self._full_x)
             self._date_axis.set_days(self._days, self._is_minute)
             self._build_price(df, title, pivots or [], events or [],
                               [list(w) for w in (waves or [])],
@@ -367,11 +361,6 @@ class KlineWidget(pg.GraphicsLayoutWidget):
             self.setUpdatesEnabled(True)
 
     # ── 十字光标 ──
-    def _detach_crosshairs(self):
-        for ch in self._crosshairs:
-            ch.detach()
-        self._crosshairs = []
-
     def _fmt_x(self):
         days = self._days
         minute = self._is_minute
@@ -390,7 +379,7 @@ class KlineWidget(pg.GraphicsLayoutWidget):
         return fmt
 
     def _attach_crosshairs(self):
-        self._detach_crosshairs()
+        self.detach_crosshairs()
         if self._n <= 0:
             return
         fmt_x = self._fmt_x()
@@ -723,87 +712,13 @@ class KlineWidget(pg.GraphicsLayoutWidget):
         return None
 
     def zoom_x_about(self, cx, factor):
-        if self._n == 0:
-            return
-        x0, x1 = self.price_plot.getViewBox().viewRange()[0]
-        full0, full1 = self._full_x
-        span = x1 - x0
-        full_span = full1 - full0
-        new_span = min(max(span * factor, 15.0), full_span)
-        if new_span >= full_span - 0.5:
-            self.apply_view(full0, full1)
-            return
-        t = min(max((cx - x0) / span, 0.0), 1.0) if span > 0 else 0.5
-        nx0 = cx - new_span * t
-        nx1 = nx0 + new_span
-        if nx0 < full0:
-            nx0, nx1 = full0, full0 + new_span
-        if nx1 > full1:
-            nx1, nx0 = full1, full1 - new_span
-        self.apply_view(nx0, nx1)
+        """兼容旧接口: 以数据坐标 cx 为锚点缩放 X (基类实现)。"""
+        self.zoom_about(cx, factor)
 
-    def apply_view(self, x0, x1, push=True):
-        if self._n == 0:
-            return None
-        x0 = max(float(x0), self._full_x[0])
-        x1 = min(float(x1), self._full_x[1])
-        if x1 - x0 < 2:
-            return None
-        self.price_plot.getViewBox().setXRange(x0, x1, padding=0)
-        if push:
-            self._push_view(x0, x1)
-        return (x0, x1)
-
-    def reset_view(self):
+    def on_x_range_changed(self, x0, x1, source_vb=None):
+        """基类联动钩子: 价格面板 Y 随可见区间自适应。"""
         if self._n:
-            self.apply_view(*self._full_x)
-
-    def pan_by(self, frac):
-        if self._n == 0:
-            return
-        x0, x1 = self.price_plot.getViewBox().viewRange()[0]
-        full0, full1 = self._full_x
-        full_span = full1 - full0
-        span = x1 - x0
-        if full_span <= 0 or span <= 0:
-            return
-        if span >= full_span - 0.5:
-            self.apply_view(full0, full1)
-            return
-        nx0 = min(max(x0 + span * frac, full0), full1 - span)
-        self.apply_view(nx0, nx0 + span)
-
-    def _push_view(self, x0, x1):
-        key = (float(x0), float(x1))
-        if self._hist and self._hist[self._hist_pos] == key:
-            return
-        self._hist = self._hist[:self._hist_pos + 1]
-        self._hist.append(key)
-        self._hist_pos = len(self._hist) - 1
-
-    def nav_hist(self, step):
-        if not self._hist:
-            return
-        pos = self._hist_pos + step
-        if 0 <= pos < len(self._hist):
-            self._hist_pos = pos
-            x0, x1 = self._hist[pos]
-            self.price_plot.getViewBox().setXRange(x0, x1, padding=0)
-
-    def _on_x_range_changed(self, vb, xrange):
-        if self._n == 0 or self._sync_lock:
-            return
-        self._sync_lock = True
-        try:
-            x0, x1 = float(xrange[0]), float(xrange[1])
-            for p in (self.price_plot, self.vol_plot, self.cum_plot):
-                pvb = p.getViewBox()
-                if pvb is not vb:
-                    pvb.setXRange(x0, x1, padding=0)
-            if vb is self.price_plot.getViewBox():
-                self._rescale_price_y(x0, x1)
-        finally:
-            self._sync_lock = False
+            self._rescale_price_y(x0, x1)
 
     def _rescale_price_y(self, x0, x1):
         vb = self.price_plot.getViewBox()
@@ -825,28 +740,6 @@ class KlineWidget(pg.GraphicsLayoutWidget):
         y1 = min(self._full_y[1], hi + pad)
         if y1 - y0 > 1e-9:
             vb.setYRange(y0, y1, padding=0)
-
-    def keyPressEvent(self, ev):
-        if self._n == 0:
-            return super().keyPressEvent(ev)
-        key = ev.key()
-        x0, x1 = self.price_plot.getViewBox().viewRange()[0]
-        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self.zoom_x_about((x0 + x1) / 2, 0.8)
-        elif key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
-            self.zoom_x_about((x0 + x1) / 2, 1.25)
-        elif key == Qt.Key.Key_Left:
-            self.pan_by(-0.2)
-        elif key == Qt.Key.Key_Right:
-            self.pan_by(0.2)
-        elif key in (Qt.Key.Key_Home, Qt.Key.Key_R):
-            self.reset_view()
-        elif key == Qt.Key.Key_Backspace:
-            self.nav_hist(-1)
-        elif key in (Qt.Key.Key_F, Qt.Key.Key_End):
-            self.nav_hist(1)
-        else:
-            super().keyPressEvent(ev)
 
     def grab_pixmap(self):
         """整图快照 (供导出 PNG)。"""

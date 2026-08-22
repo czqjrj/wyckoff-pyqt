@@ -904,6 +904,19 @@ class MainWindow(QMainWindow):
 
         title = QLabel("威科夫分析")
         title.setObjectName("brandTitle")
+        # 签名: 品牌前一条 accent 竖标 (读盘笔尖), 呼应面板标题左侧色条。
+        # 用 QFrame + AutoFillBackground + 调色板, QLabel 背景在 X11 下不一定绘制。
+        from PyQt6.QtGui import QColor, QPalette
+        from PyQt6.QtWidgets import QFrame
+        nib = QFrame()
+        nib.setFixedWidth(4)
+        nib.setFixedHeight(22)
+        nib.setAutoFillBackground(True)
+        _np = nib.palette()
+        _np.setColor(QPalette.ColorRole.Window, QColor(theme.C_ACCENT))
+        nib.setPalette(_np)
+        lay.addWidget(nib)
+        lay.addSpacing(6)
         lay.addWidget(title)
         lay.addWidget(self._vsep())
 
@@ -1207,12 +1220,17 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(box)
         h.setContentsMargins(2, 4, 2, 2)
         h.setSpacing(6)
-        strip = QLabel()
+        from PyQt6.QtGui import QColor, QPalette
+        from PyQt6.QtWidgets import QFrame
+        strip = QFrame()
         strip.setFixedSize(5, 16)
-        strip.setStyleSheet(f"background:{theme.C_ACCENT};border-radius:2px;")
+        strip.setAutoFillBackground(True)
+        _sp = strip.palette()
+        _sp.setColor(QPalette.ColorRole.Window, QColor(theme.C_ACCENT))
+        strip.setPalette(_sp)
         h.addWidget(strip)
         lab = QLabel(text)
-        lab.setStyleSheet(f"color:{theme.C_TEXT};font-weight:bold;font-size:12pt;")
+        lab.setObjectName("panelHead")
         h.addWidget(lab)
         h.addStretch(1)
         return box
@@ -1884,9 +1902,14 @@ class MainWindow(QMainWindow):
                 ch = QHBoxLayout(card)
                 ch.setContentsMargins(0, 0, 10, 0)
                 ch.setSpacing(8)
-                strip = QLabel()
+                from PyQt6.QtGui import QColor as _QC, QPalette as _QPal
+                from PyQt6.QtWidgets import QFrame as _QF
+                strip = _QF()
                 strip.setFixedWidth(4)
-                strip.setStyleSheet(f"background:{color};border-radius:2px;")
+                strip.setAutoFillBackground(True)
+                _sp = strip.palette()
+                _sp.setColor(_QPal.ColorRole.Window, _QC(color))
+                strip.setPalette(_sp)
                 ch.addWidget(strip)
                 lab = QLabel(str(item.get("label", "")))
                 lab.setStyleSheet(f"color:{theme.C_MUTED};font-size:11pt;")

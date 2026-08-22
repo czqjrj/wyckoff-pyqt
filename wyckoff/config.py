@@ -18,67 +18,70 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 # ── 界面主题 (浅色细化) ──
 # 统一桌面端/图表的配色入口; 涨/多头用红, 跌/空头用绿 (A股习惯),
 # 状态语义 (成功/错误) 与方向语义 (涨/跌) 分离, 避免混淆。
+# 设计立意: 威科夫分析法源自 1930 年代读盘术, 配色取"图纸/墨水"气质 —
+# 冷调纸面背景、墨黑正文、靛蓝墨主强调; 红涨绿跌/琥珀警示保留为纯语义色,
+# accent 刻意避开红绿琥珀, 防止与方向/状态语义混淆。
 _THEME_LIGHT = {
-    "bg":          "#f4f6fb",   # 窗口背景
+    "bg":          "#eef1f7",   # 窗口背景 (冷调纸面)
     "panel":       "#ffffff",   # 面板/表格背景
-    "border":      "#dce3f0",   # 分隔线
-    "text":        "#1f2937",   # 正文
-    "muted":       "#8a94a6",   # 次要文本
-    "accent":      "#2563eb",   # 主强调 (操作/链接)
-    "accent_dark": "#1d4fd7",
+    "border":      "#d6dde9",   # hairline 分隔线
+    "text":        "#1a2238",   # 墨黑正文
+    "muted":       "#6b7589",   # 次要文本
+    "accent":      "#2d4a8a",   # 靛蓝墨主强调 (操作/链接)
+    "accent_dark": "#243a6e",
     # 方向语义 (A股: 红涨绿跌)
-    "up":          "#e03131",   # 涨 / 多头
-    "up_dark":     "#c92a2a",
-    "down":        "#2f9e44",   # 跌 / 空头
-    "down_dark":   "#15803d",
-    "amber":       "#d97706",   # 中性警示
+    "up":          "#d6332b",   # 涨 / 多头 (朱砂红)
+    "up_dark":     "#b3241d",
+    "down":        "#1f9b46",   # 跌 / 空头
+    "down_dark":   "#147a36",
+    "amber":       "#c77b0a",   # 中性警示
     # 控件
     "btn":         "#eef2f9",
-    "btn_hover":   "#e2e8f3",
-    "zebra":       "#f7f9fc",   # 表格斑马纹
-    "header":      "#eef2f9",   # 表头底
-    "sel":         "#dbeafe",   # 选中行高亮 (淡蓝)
+    "btn_hover":   "#e1e7f2",
+    "zebra":       "#f4f7fc",   # 表格斑马纹
+    "header":      "#eceff5",   # 表头底
+    "sel":         "#dde6f5",   # 选中行高亮 (靛蓝淡)
     # 图表
-    "grid":        "#dfe6f2",   # 图表网格线
-    "axis":        "#cbd5e1",   # 坐标轴线
-    "mkt":         "#f08c00",   # 大盘对比线
-    "poc":         "#d97706",   # 成交重心线
+    "grid":        "#d9e0ec",   # 图表网格线
+    "axis":        "#c2cad8",   # 坐标轴线
+    "mkt":         "#e8820a",   # 大盘对比线
+    "poc":         "#c77b0a",   # 成交重心线
     # P&F/K线 区间底色带 (浅色主题下的半透明浅色)
-    "zone_acc":    "#ffe4e6",   # 吸筹区淡红
-    "zone_dist":   "#d1fae5",   # 派发区淡绿
-    "zone_neut":   "#f1f3f5",   # 中性区淡灰
+    "zone_acc":    "#ffe1e3",   # 吸筹区淡红
+    "zone_dist":   "#d6f5e0",   # 派发区淡绿
+    "zone_neut":   "#eef1f5",   # 中性区淡灰
 }
 
-# 深色护眼主题: 低亮度高对比, 蓝紫基调, 减少刺眼光线。
+# 深色护眼主题: 低亮度高对比, 深墨蓝基调, accent 取月光靛蓝。
 _THEME_DARK = {
-    "bg":          "#12141a",   # 窗口背景 (近黑)
-    "panel":       "#1b1e27",   # 面板/表格背景
-    "border":      "#2c3038",   # 分隔线
+    "bg":          "#0e1018",   # 窗口背景 (深墨近黑)
+    "panel":       "#161a24",   # 面板/表格背景
+    "border":      "#262b38",   # 分隔线
     "text":        "#e6e9f0",   # 正文 (亮灰白)
-    "muted":       "#8b93a3",   # 次要文本
-    "accent":      "#6ea8fe",   # 主强调 (柔亮蓝)
-    "accent_dark": "#4d7fd1",
+    "muted":       "#7e8699",   # 次要文本
+    "accent":      "#8aa9ff",   # 主强调 (月光靛蓝)
+    "accent_dark": "#5d7fd1",
     # 方向语义 (A股: 红涨绿跌, 深色下略微提亮保证可读性)
-    "up":          "#e0534a",   # 涨 / 多头
+    "up":          "#e85a4f",   # 涨 / 多头
     "up_dark":     "#c73e36",
     "down":        "#4cb26a",   # 跌 / 空头
     "down_dark":   "#3b9254",
     "amber":       "#e8a33d",   # 中性警示
     # 控件
-    "btn":         "#242833",
-    "btn_hover":   "#2e3342",
-    "zebra":       "#20242e",   # 表格斑马纹
-    "header":      "#262b38",   # 表头底
-    "sel":         "#2f4a7a",   # 选中行高亮
+    "btn":         "#1e2230",
+    "btn_hover":   "#252a3a",
+    "zebra":       "#1a1e28",   # 表格斑马纹
+    "header":      "#1e2230",   # 表头底
+    "sel":         "#2c3a5e",   # 选中行高亮 (靛蓝)
     # 图表
-    "grid":        "#2c3038",   # 图表网格线
-    "axis":        "#41464f",   # 坐标轴线
+    "grid":        "#232838",   # 图表网格线
+    "axis":        "#3a3f4d",   # 坐标轴线
     "mkt":         "#e8a33d",   # 大盘对比线
     "poc":         "#e8a33d",   # 成交重心线
     # P&F/K线 区间底色带 (深色主题下低饱和暗色)
     "zone_acc":    "#3a1f24",   # 吸筹区暗红
     "zone_dist":   "#1b3327",   # 派发区暗绿
-    "zone_neut":   "#262b33",   # 中性区暗灰
+    "zone_neut":   "#1c2128",   # 中性区暗灰
 }
 
 THEMES = {
@@ -104,6 +107,19 @@ FONT_CANDIDATES = [
     "SimHei",
     "SimSun",
     "DejaVu Sans",
+]
+
+# 显示字体候选 (衬线): 用于品牌标题/面板标题, 呼应威科夫 1930s 报刊读盘气质,
+# 与正文无衬线形成层级。调用方经 pick_font_family 选本机已安装者。
+FONT_DISPLAY_CANDIDATES = [
+    "Noto Serif CJK SC",
+    "Source Han Serif CN",
+    "Source Han Serif SC",
+    "Noto Serif SC",
+    "STSong",
+    "SimSun",
+    "Noto Sans CJK SC",
+    "DejaVu Serif",
 ]
 
 MONO_FONT = "Noto Sans Mono CJK SC"

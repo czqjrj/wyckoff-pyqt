@@ -6,7 +6,7 @@
 只需要调用方重新渲染 (set_data) 即可整体换肤。"""
 from PyQt6.QtGui import QColor, QFont
 
-from wyckoff.config import THEMES, FONT_CANDIDATES
+from wyckoff.config import THEMES, FONT_CANDIDATES, FONT_DISPLAY_CANDIDATES, MONO_FONT
 
 C = THEMES["light"]
 _active = "light"
@@ -74,11 +74,46 @@ def set_theme(name):
 def pick_font_family(preferred=""):
     """在系统可用字体中挑选 FONT_CANDIDATES 里第一个存在的 (参考 config._pick_font)。"""
     from PyQt6.QtGui import QFontDatabase
+    from PyQt6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        # 模块导入期 (QSS = _build_qss(C)) 尚无 QApplication, QFontDatabase 不可用;
+        # 先回退静态候选, set_theme 在 MainWindow 构造时 (QApplication 已存在) 会重建。
+        return FONT_CANDIDATES[0] if FONT_CANDIDATES else (preferred or "sans-serif")
     families = set(QFontDatabase.families())
     for f in FONT_CANDIDATES:
         if f in families:
             return f
     return preferred or "sans-serif"
+
+
+def pick_display_font_family(preferred=""):
+    """在系统可用字体中挑选衬线显示字体候选里第一个存在的。"""
+    from PyQt6.QtGui import QFontDatabase
+    from PyQt6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        return FONT_DISPLAY_CANDIDATES[0] if FONT_DISPLAY_CANDIDATES else (preferred or "serif")
+    families = set(QFontDatabase.families())
+    for f in FONT_DISPLAY_CANDIDATES:
+        if f in families:
+            return f
+    return preferred or "serif"
+
+
+def pick_mono_font_family(preferred=""):
+    """在系统可用字体中挑选等宽数字字体 (价格/百分比等 tabular 数字)。"""
+    from PyQt6.QtGui import QFontDatabase
+    from PyQt6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        return MONO_FONT or (preferred or "monospace")
+    families = set(QFontDatabase.families())
+
+    def _has(name):
+        return name in families
+    for f in (MONO_FONT, "Noto Sans Mono CJK SC", "Source Han Mono SC",
+              "Sarasa Mono SC", "DejaVu Sans Mono", "Consolas", "Menlo"):
+        if _has(f):
+            return f
+    return preferred or "monospace"
 
 
 def app_font(size=10, bold=False):
@@ -91,6 +126,25 @@ def app_font(size=10, bold=False):
 
 def ui_font(size=10, bold=False):
     return app_font(size, bold)
+
+
+def display_font(size=10, bold=False):
+    """衬线显示字体: 用于品牌标题/面板标题, 建立与正文的层级。"""
+    f = QFont()
+    f.setFamily(FONT_DISPLAY_CANDIDATES[0] if FONT_DISPLAY_CANDIDATES else "serif")
+    f.setPointSize(int(size))
+    f.setBold(bold)
+    return f
+
+
+def mono_font(size=10, bold=False):
+    """等宽 tabular 字体: 用于价格/百分比/数据, 数字对齐便于扫读。"""
+    f = QFont()
+    f.setFamily(MONO_FONT or "monospace")
+    f.setStyleHint(QFont.StyleHint.Monospace)
+    f.setPointSize(int(size))
+    f.setBold(bold)
+    return f
 
 
 def color(hexstr, alpha=None):
@@ -106,7 +160,23 @@ def css_rgba(hexstr, alpha=255):
     return f"rgba({c.red()},{c.green()},{c.blue()},{c.alpha()})"
 
 
+def _display_family():
+    try:
+        return pick_display_font_family()
+    except Exception:
+        return FONT_DISPLAY_CANDIDATES[0] if FONT_DISPLAY_CANDIDATES else "serif"
+
+
+def _mono_family():
+    try:
+        return pick_mono_font_family()
+    except Exception:
+        return MONO_FONT or "monospace"
+
+
 def _build_qss(C):
+    _df = _display_family()
+    _mf = _mono_family()
     return f"""
 * {{
     font-family: "{FONT_CANDIDATES[0]}";
@@ -133,8 +203,10 @@ QFrame#vsep {{
 }}
 QLabel#brandTitle {{
     color: {C_ACCENT};
+    font-family: "{_df}";
     font-weight: bold;
-    font-size: 15pt;
+    font-size: 17pt;
+    padding-right: 2px;
 }}
 QLabel#tbName {{
     font-weight: bold;
@@ -143,19 +215,23 @@ QLabel#tbName {{
 }}
 QLabel#tbCode {{
     color: {C_MUTED};
+    font-family: "{_mf}";
 }}
 QLabel#tbPrice {{
+    font-family: "{_mf}";
     font-weight: bold;
-    font-size: 13pt;
+    font-size: 14pt;
 }}
 QLabel#tbPct {{
+    font-family: "{_mf}";
     font-weight: bold;
 }}
 QLabel#tbAdvice {{
     font-weight: bold;
 }}
 QLabel#panelHead {{
-    color: {C_MUTED};
+    color: {C_TEXT};
+    font-family: "{_df}";
     font-weight: bold;
     font-size: 12pt;
     padding-left: 4px;
@@ -180,7 +256,7 @@ QListWidget#sectionList {{
 }}
 QListWidget#sectionList::item {{
     border-radius: 3px;
-    padding: 6px 12px;
+    padding: 7px 12px;
     margin: 1px 0;
     color: {C_TEXT};
 }}
@@ -188,8 +264,9 @@ QListWidget#sectionList::item:hover {{
     background: {C["btn_hover"]};
 }}
 QListWidget#sectionList::item:selected {{
-    background: {C_ACCENT};
-    color: #ffffff;
+    background: {C["sel"]};
+    color: {C_ACCENT};
+    font-weight: bold;
     border-left: 3px solid {C_ACCENT};
 }}
 QTextBrowser#sectionText {{
@@ -283,7 +360,7 @@ QTabBar::tab {{
 QTabBar::tab:selected {{
     background: {C_PANEL};
     border: 1px solid {C_BORDER};
-    border-bottom: 2px solid {C_ACCENT};
+    border-bottom: 3px solid {C_ACCENT};
     color: {C_ACCENT};
     font-weight: bold;
 }}

@@ -119,6 +119,33 @@ def test_kline_widget_x_sync(widget):
     assert abs(rc[0] - rp[0]) < 1e-6 and abs(rc[1] - rp[1]) < 1e-6
 
 
+def test_kline_widget_arrow_zoom(widget):
+    """上/下箭头以视图中心为锚点缩放 (基类统一交互)。"""
+    app, w, df = widget
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    def key(k):
+        return QKeyEvent(QEvent.Type.KeyPress, k,
+                         Qt.KeyboardModifier.NoModifier)
+
+    w.reset_view()
+    app.processEvents()
+    vb = w.price_plot.getViewBox()
+    full_span = len(df) - 1
+    center = sum(vb.viewRange()[0]) / 2
+    w.keyPressEvent(key(Qt.Key.Key_Up))
+    app.processEvents()
+    x0, x1 = vb.viewRange()[0]
+    assert x1 - x0 == pytest.approx(full_span * 0.8), "上箭头应放大"
+    assert sum((x0, x1)) / 2 == pytest.approx(center, abs=1e-6), \
+        "放大应以视图中心为锚点"
+    w.keyPressEvent(key(Qt.Key.Key_Down))
+    app.processEvents()
+    x0, x1 = vb.viewRange()[0]
+    assert x1 - x0 == pytest.approx(full_span), "下箭头应回到全幅"
+
+
 def test_kline_widget_interactions(widget):
     """滚轮/键盘/复位/历史不抛异常且改变视图。"""
     app, w, df = widget

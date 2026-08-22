@@ -98,15 +98,22 @@ class WatchCardDelegate(QStyledItemDelegate):
         pct_font = QFont(base_font)
         pct_font.setPointSizeF(base_font.pointSizeF() - 1)
         pct_font.setBold(True)
+        # 价格/涨跌幅用等宽 tabular 数字, 便于多行扫读对齐
+        _mono = theme.pick_mono_font_family()
+        pct_font.setFamily(_mono)
+        price_font = QFont(base_font)
+        price_font.setBold(True)
+        price_font.setFamily(_mono)
         pfm = QFontMetrics(pct_font)
+        prfm = QFontMetrics(price_font)
         px = r.x() + w - 12
         if price is not None:
             price_txt = f"{price:.2f}"
-            pw = fm.horizontalAdvance(price_txt)
+            pw = prfm.horizontalAdvance(price_txt)
             px -= pw
-            painter.setFont(base_font)
+            painter.setFont(price_font)
             painter.setPen(QColor(theme.C_TEXT))
-            painter.drawText(px, r.y() + (h + fm.ascent() - fm.descent()) // 2, price_txt)
+            painter.drawText(px, r.y() + (h + prfm.ascent() - prfm.descent()) // 2, price_txt)
             px -= 8
         if pct is not None:
             arrow = "↑" if pct >= 0 else "↓"
