@@ -34,3 +34,6 @@ wx_portfolio.json
 wx_notes.json
 wx_alerts.json
 wx_vsa_thresholds.json
+
+# 发布资产
+/*.tar.gz
