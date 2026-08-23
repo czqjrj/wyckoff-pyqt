@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """backfill_ctx 回填逻辑测试 (离线: conftest 设 WYCKOFF_NO_NET=1)。"""
 import os
 import sys
@@ -8,8 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from wyckoff.backfill_ctx import (_has_ctx, backfill_feedback,
-                                  backfill_one_signal, backfill_signals)
+from wyckoff.backfill_ctx import _has_ctx, backfill_feedback, backfill_one_signal, backfill_signals
 from wyckoff.context import CONTEXT_FEAT_KEYS
 
 

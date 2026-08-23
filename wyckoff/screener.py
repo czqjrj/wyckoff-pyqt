@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """综合选股引擎: 威科夫阶段 + 基本面 + 资金流 + 技术指标多维评分。
 
 筛选流程:
@@ -18,18 +17,15 @@
 import json
 import os
 import threading
-import time
 
 import numpy as np
 
-from .backtest import signal_score as _wyckoff_signal_score
-from .datasource import fetch_kline
 from ._log import log_exc
-from .indicators import add_indicators
-from .phases import judge_phase
+from .datasource import fetch_kline
 from .events import detect_all
-from .indicators import find_pivots
+from .indicators import add_indicators, find_pivots
 from .paths import ALL_STOCKS_FILE, STOCK_NAMES_FILE
+from .phases import judge_phase
 from .utils import normalize_symbol
 
 # 基本面/资金流依赖 (延迟导入, 避免循环)
@@ -66,7 +62,7 @@ def _load_stock_names():
     for f in [STOCK_NAMES_FILE, ALL_STOCKS_FILE]:
         try:
             if os.path.exists(f):
-                with open(f, "r", encoding="utf-8") as fh:
+                with open(f, encoding="utf-8") as fh:
                     data = json.load(fh)
                     for k, v in data.items():
                         if isinstance(v, dict) and "name" in v:

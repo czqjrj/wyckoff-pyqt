@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """高级扫描引擎测试 (wyckoff.scan_adv): 8 项基于K线的专项扫描 + 调度。
 
 全部离线: monkeypatch scan_adv.fetch_kline 注入合成数据, 不访问网络。

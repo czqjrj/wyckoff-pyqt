@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """新功能测试: 预警 / 持仓存储 / 备注 / CSV 导出。
 
 覆盖:
@@ -45,9 +44,8 @@ def test_alerts_enable_toggle(tmp_path, monkeypatch):
 
 
 def test_portfolio_and_notes_storage(tmp_path, monkeypatch):
-    from wyckoff.storage import (load_portfolio, save_portfolio,
-                                 load_notes, save_notes)
     import wyckoff.storage as st
+    from wyckoff.storage import load_notes, load_portfolio, save_notes, save_portfolio
     st.PORTFOLIO_FILE = str(tmp_path / "wx_portfolio.json")
     st.NOTES_FILE = str(tmp_path / "wx_notes.json")
     save_portfolio([{"code": "600104", "name": "上汽集团", "shares": 1000,
@@ -63,8 +61,8 @@ def test_signals_csv_export(tmp_path):
     import wyckoff.signal_accuracy as sa
     sa.SIGNAL_ACCURACY_FILE = str(tmp_path / "wx_signal_accuracy.json")
     sa._WINRATE_CACHE = None
-    import pandas as pd
     import numpy as np
+    import pandas as pd
     df = pd.DataFrame({
         "day": pd.date_range("2024-01-01", periods=60, freq="D"),
         "open": np.linspace(10, 15, 60), "high": np.linspace(11, 16, 60),

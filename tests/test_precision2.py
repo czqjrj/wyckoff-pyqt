@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """第二轮精度升级回归测试:
 1. 跟进确认 (confirm_events): 事件后 window 根内价格朝信号方向跟进 → 确认;
    因果性 (只用后续已见bar), 中性/末端事件为待确认 None;
@@ -10,10 +9,10 @@
 import numpy as np
 import pandas as pd
 
-from wyckoff.indicators import add_indicators, find_pivots
-from wyckoff.events import detect_all, confirm_events
-from wyckoff.fusion import fuse_signals, _event_score, _align, _htf_direction
 from wyckoff.backtest import backtest_events
+from wyckoff.events import confirm_events, detect_all
+from wyckoff.fusion import _align, _event_score, _htf_direction, fuse_signals
+from wyckoff.indicators import add_indicators, find_pivots
 
 
 def _mk_df(n=500, seed=11):

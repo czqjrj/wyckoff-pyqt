@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """国家队 ETF 跟踪: 用主力资金流/量价代理监测汇金证金常用宽基 ETF 的买卖异动。
 
 说明: 无法直接获取国家队持仓明细, 本模块以"异常资金流入/流出"作为代理信号。
@@ -14,9 +13,9 @@
 """
 from concurrent.futures import ThreadPoolExecutor
 
-from .datasource import fetch_realtime, fetch_kline
-from .fundamental import fetch_main_flow
 from ._shared import http_session
+from .datasource import fetch_kline, fetch_realtime
+from .fundamental import fetch_main_flow
 from .indicators import add_indicators
 
 # 汇金/证金历史上公开使用过的宽基 ETF 买入载体

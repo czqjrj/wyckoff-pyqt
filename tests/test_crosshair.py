@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """十字光标 (Crosshair) 离屏测试: 类本身 + 四个图表集成。
 
 GUI 依赖无法在无 Qt 环境的 CI 上运行, 失败时自动跳过而非报错。
@@ -12,7 +11,7 @@ import pandas as pd
 import pytest
 from pyqtgraph.Qt.QtCore import QPointF
 
-from wyckoff.chart import build_kline_data, build_ind_data, build_market_data
+from wyckoff.chart import build_ind_data, build_kline_data, build_market_data
 from wyckoff.pnf import build_pnf, build_pnf_data, pnf_history_targets, pnf_targets
 
 
@@ -43,6 +42,7 @@ def _emit_outside(plot):
 class TestCrosshairClass:
     def test_show_and_text(self):
         import pyqtgraph as pg
+
         from desktop.crosshair import Crosshair
         app = _app()
         win = pg.GraphicsLayoutWidget()
@@ -61,6 +61,7 @@ class TestCrosshairClass:
 
     def test_hide_outside_and_detach(self):
         import pyqtgraph as pg
+
         from desktop.crosshair import Crosshair
         app = _app()
         win = pg.GraphicsLayoutWidget()

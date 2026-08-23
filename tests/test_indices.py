@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
 """A股主要指数目录单元测试: 符号/名称解析与个股代码不冲突。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import pytest
 
 from wyckoff.indices import (
-    INDEX_CATALOG, find_index, index_symbols, is_index_symbol, search_index,
+    INDEX_CATALOG,
+    find_index,
+    index_symbols,
+    is_index_symbol,
+    search_index,
 )
 
 

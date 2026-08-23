@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """A股补充数据源测试 (wyckoff.flow_extra): 龙虎榜/两融/解禁/业绩预告/北向解析。
 
 全部离线: monkeypatch flow_extra._ak 注入假 akshare 模块。

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """VSA 量价分析。
 
 整合来源 (见 docs/vsa_sources/):
@@ -77,7 +76,7 @@ def thresholds(scale: int) -> dict:
     base = dict(DEFAULT_THRESHOLDS.get(scale, DEFAULT_THRESHOLDS[240]))
     try:
         if os.path.exists(VSA_THRESHOLDS_FILE):
-            with open(VSA_THRESHOLDS_FILE, "r", encoding="utf-8") as f:
+            with open(VSA_THRESHOLDS_FILE, encoding="utf-8") as f:
                 payload = json.load(f)
             over = ((payload.get("scales") or {}).get(str(scale)) or {}).get("thresholds") or {}
             base.update(over)

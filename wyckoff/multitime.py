@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """多周期共振: 日线 + 周线 + 月线, 并支持分钟级对照日线方向。"""
 import numpy as np
 
-from .indicators import add_indicators, find_pivots
 from .events import detect_all
+from .indicators import add_indicators, find_pivots
 from .phases import phase_segments
 
 _PHASE_CN = {

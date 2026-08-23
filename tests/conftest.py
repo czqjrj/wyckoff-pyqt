@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """测试夹具: 隔离全部用户数据 (设置/自选/缓存/拼音索引) 与内存缓存, 
 避免污染项目根目录的正式数据文件。
 
@@ -47,8 +46,8 @@ def no_pinyin_network(monkeypatch):
     的 wyckoff_stock_names.json (bundle 资源文件)。
     """
     try:
-        import wyckoff.pinyin as pinyin
         import desktop.main_window as mw
+        import wyckoff.pinyin as pinyin
     except Exception:
         return
     monkeypatch.setattr(mw, "ensure_full_market_index", lambda *a, **k: False)

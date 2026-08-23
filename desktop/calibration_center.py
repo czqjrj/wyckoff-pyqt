@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """校准中心: 分层校准管线的观测窗口 (总览 / 信号校准 / 模型校准 / 分析校准)。
 
 数据全部来自 wyckoff 包:
@@ -10,33 +9,55 @@ import os
 import statistics
 from collections import OrderedDict
 
+import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QMessageBox, QPushButton, QScrollArea, QSplitter, QTabWidget,
-    QTextBrowser, QVBoxLayout, QWidget,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
-import pyqtgraph as pg
 
 from wyckoff.accuracy import (
-    HORIZONS, accuracy_stats, export_accuracy, load_accuracy,
+    HORIZONS,
+    accuracy_stats,
+    export_accuracy,
+    load_accuracy,
     run_auto_accuracy_eval,
 )
 from wyckoff.calibration import calibration_status, record_calibration
 from wyckoff.config import _PHASE_STYLE, event_dir, vsa_dir
+from wyckoff.paths import ACCURACY_FILE, FEEDBACK_FILE, SIGNAL_ACCURACY_FILE
 from wyckoff.pnf_accuracy import (
     PNF_ACC_DIR as _PNF_ACC_DIR,
+)
+from wyckoff.pnf_accuracy import (
     load_latest_report as _pnf_load_latest,
+)
+from wyckoff.pnf_accuracy import (
     run_eval as _pnf_run_eval,
 )
-from wyckoff.paths import (ACCURACY_FILE, FEEDBACK_FILE,
-                           SIGNAL_ACCURACY_FILE)
 from wyckoff.signal_accuracy import (
-    _fmt_stats, export_signals, load_signals, run_auto_signal_eval,
+    _fmt_stats,
+    export_signals,
+    load_signals,
+    run_auto_signal_eval,
     signal_stats,
 )
 from wyckoff.storage import (
-    build_feedback_record, feedback_key, load_feedback, save_feedback,
+    build_feedback_record,
+    feedback_key,
+    load_feedback,
+    save_feedback,
 )
 
 from . import theme
@@ -300,7 +321,7 @@ class CalibrationCenter(QDialog):
             ht = QHBoxLayout()
             t_label = _card_title(title)
             badge = QLabel()
-            badge.setStyleSheet(f"font-weight:bold;font-size:9pt;")
+            badge.setStyleSheet("font-weight:bold;font-size:9pt;")
             ht.addWidget(t_label)
             ht.addStretch(1)
             ht.addWidget(badge)
@@ -482,8 +503,7 @@ class CalibrationCenter(QDialog):
         self.tabs.addTab(page, "模型校准")
 
     def _render_model_tab(self):
-        from wyckoff.online_model import (MODEL_MIN_AUC, MODEL_MIN_OOS,
-                                          MODEL_MIN_TRAIN, model_status)
+        from wyckoff.online_model import MODEL_MIN_AUC, MODEL_MIN_OOS, MODEL_MIN_TRAIN, model_status
         st = model_status()
         if not st:
             for k, (val, sub) in self._model_cards.items():
@@ -1104,9 +1124,11 @@ class CalibrationCenter(QDialog):
         self.sig_consistency.setText(self._consistency_summary())
         # 验证 (三套统计只算一次, lines/verdict 共享)
         try:
-            from wyckoff.validation import (compute_validation_stats,
-                                            validation_lines,
-                                            validation_verdict)
+            from wyckoff.validation import (
+                compute_validation_stats,
+                validation_lines,
+                validation_verdict,
+            )
             vstats = compute_validation_stats(records)
             vlines = validation_lines(records, stats=vstats)
             self.sig_validation.setText("\n".join(vlines) if vlines else "")
@@ -1127,8 +1149,7 @@ class CalibrationCenter(QDialog):
     def _consistency_summary(self):
         """L5 多周期一致性: 各类型 5/10/20/40 根收缩胜率 + 边缘判定。"""
         try:
-            from wyckoff.signal_accuracy import win_rate_profile
-            from wyckoff.signal_accuracy import load_win_rates
+            from wyckoff.signal_accuracy import load_win_rates, win_rate_profile
             keys = set()
             for h in (5, 10, 20, 40):
                 keys.update(load_win_rates(h).keys())
@@ -1552,7 +1573,9 @@ class CalibrationCenter(QDialog):
         self.render_all()
 
     def _on_pnf_export(self):
-        import os, json, shutil
+        import json
+        import os
+        import shutil
         rep = _pnf_load_latest()
         if not rep:
             QMessageBox.information(self, "PNF 导出", "尚无最新评估报告 — 请先点 ⚡立即评估")
@@ -1828,6 +1851,7 @@ class CalibrationCenter(QDialog):
         if not d:
             return
         import os
+
         from wyckoff.accuracy import export_accuracy_csv
         path = export_accuracy_csv(load_accuracy(),
                                    os.path.join(d, "wx_accuracy.csv"))
@@ -1848,6 +1872,7 @@ class CalibrationCenter(QDialog):
         if not d:
             return
         import os
+
         from wyckoff.signal_accuracy import export_signals_csv
         path = export_signals_csv(load_signals(),
                                   os.path.join(d, "wx_signal_accuracy.csv"))
@@ -1859,6 +1884,7 @@ class CalibrationCenter(QDialog):
         if not d:
             return
         import os
+
         from wyckoff.signal_accuracy import export_review_report
         path = export_review_report(days=7, markdown=True,
                                     path=os.path.join(d, "wx_signal_review.md"))
@@ -1871,9 +1897,8 @@ class CalibrationCenter(QDialog):
         self.on_export_feedback()
 
     def on_clear_all(self):
-        from wyckoff.accuracy import save_accuracy, load_accuracy
-        from wyckoff.signal_accuracy import save_signals, load_signals, \
-            invalidate_win_rate_cache
+        from wyckoff.accuracy import load_accuracy, save_accuracy
+        from wyckoff.signal_accuracy import invalidate_win_rate_cache, load_signals, save_signals
         from wyckoff.storage import load_feedback, save_feedback
         n_acc = len(load_accuracy())
         n_sig = len(load_signals())

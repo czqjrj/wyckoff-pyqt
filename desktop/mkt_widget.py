@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """pyqtgraph 资金透视控件 (替换原 matplotlib plot_market 资金透视图)。
 
 数据由 AnalysisThread 在 worker 线程通过 chart.build_market_data() 收集 (文本/

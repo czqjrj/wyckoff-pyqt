@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """信号准确度追踪模块测试: 记录/去重/冷却窗/过期清理/胜率表。
 
 覆盖:
@@ -8,7 +7,6 @@
 """
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

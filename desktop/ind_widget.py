@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """pyqtgraph 技术指标控件 (替换原 matplotlib 技术指标图, 排版/配色与原版一致)。
 
 数据由 AnalysisThread 在 worker 线程通过 chart.build_ind_data() 收集 (指标计算
@@ -23,9 +22,9 @@ import datetime as _dt
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt6.QtWidgets import QScrollArea
 from pyqtgraph.Qt import QtGui
 from pyqtgraph.Qt.QtCore import Qt
-from PyQt6.QtWidgets import QScrollArea
 
 from wyckoff.config import FONT_CANDIDATES
 

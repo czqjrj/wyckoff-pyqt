@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自选股卡片式列表: 阶段徽标 + 名称/代码 + 现价 + 彩色涨跌。
 
 用 QStyledItemDelegate 绘制, 数据经 QListWidgetItem.setData 存于扩展 role:
@@ -6,7 +5,7 @@
 wx 原版 WatchCard 的 PyQt6 等价物。
 """
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QFontMetrics
 from PyQt6.QtWidgets import QStyledItemDelegate
 
 from . import theme

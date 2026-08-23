@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """分析准确度跟踪: 记录每次分析的预测, 到期后用真实行情评估并汇总。
 
 流程:
@@ -23,19 +22,19 @@ import time
 
 import numpy as np
 
-from ._shared import atomic_write_json, run_pending_eval
 from ._log import log_exc
+from ._shared import atomic_write_json, run_pending_eval
+from .analysis import build_trade_plan
 from .config import VERSION, W_RECENT
-from .paths import ACCURACY_FILE, DATA_DIR
-from .indicators import add_indicators, find_pivots
+from .datasource import fetch_kline
 from .events import detect_all
+from .fusion import fuse_signals
+from .indicators import add_indicators, find_pivots
+from .paths import ACCURACY_FILE, DATA_DIR
 from .phases import judge_phase
 from .pnf import build_pnf, pnf_targets
 from .vsa import vsa_classify
-from .fusion import fuse_signals
 from .waves import calc_targets
-from .datasource import fetch_kline
-from .analysis import build_trade_plan
 
 # 评估周期 (根): 约 2周/1月/2月 (日线)
 HORIZONS = (10, 20, 40)
@@ -50,7 +49,7 @@ def _key(rec):
 
 def load_accuracy():
     try:
-        with open(ACCURACY_FILE, "r", encoding="utf-8") as f:
+        with open(ACCURACY_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -226,8 +225,7 @@ def auto_evaluate_feedback(df, symbol, scale, segs, horizon=20, min_move=0.005):
     if not segs:
         return 0
     from .config import _PHASE_STYLE
-    from .storage import (feedback_key, build_feedback_record,
-                          load_feedback, save_feedback, _day_fmt)
+    from .storage import _day_fmt, build_feedback_record, feedback_key, load_feedback, save_feedback
     close = df["close"].values
     n = len(df)
     with _FB_LOCK:
@@ -627,8 +625,12 @@ if __name__ == "__main__":
         print(f"\n本次新增评估 {n} 条, 累计 {len(records)} 条")
         # 信号级准确度同步评估 (同一 cron 钩子)
         try:
-            from .signal_accuracy import (run_auto_signal_eval, load_signals,
-                                          signal_stats, _fmt_stats)
+            from .signal_accuracy import (
+                _fmt_stats,
+                load_signals,
+                run_auto_signal_eval,
+                signal_stats,
+            )
             ns = run_auto_signal_eval(force=True)
             print("\n" + _fmt_stats(signal_stats(load_signals())))
             print(f"本次新增信号评估 {ns} 条")

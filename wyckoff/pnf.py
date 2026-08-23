@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """点数图 (Point & Figure) 计算与绘图。
 
 口径依据 (威科夫 P&F 计数官方来源):
@@ -32,7 +31,6 @@
   - 近端参考目标为本项目自创的可到达口径, 非威科夫概念 (见 _pnf_targets_at)。
 """
 import pandas as pd
-
 from matplotlib.figure import Figure
 
 from .config import _fs

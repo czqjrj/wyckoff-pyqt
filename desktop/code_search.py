@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """键盘精灵 (股票代码快速搜索)。
 
 对应 legacy wx 版的 "键盘精灵": 在非输入控件上敲字母/数字 → 弹出
@@ -7,10 +6,16 @@
 - Enter 选中分析, Esc 关闭, 上下键移动
 - 非模态悬浮窗 (StayOnTop), 可复用
 """
-from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QVBoxLayout,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QVBoxLayout,
 )
 
 from wyckoff.pinyin import search_stock
@@ -59,12 +64,12 @@ class CodeSearchDialog(QDialog):
         hh = QHBoxLayout(head)
         hh.setContentsMargins(10, 5, 10, 5)
         ti = QLabel("键盘精灵", head)
-        ti.setStyleSheet(f"color:#ffffff;font-weight:bold;font-size:12pt;"
-                         f"background:transparent;")
+        ti.setStyleSheet("color:#ffffff;font-weight:bold;font-size:12pt;"
+                         "background:transparent;")
         hh.addWidget(ti)
         tip = QLabel("输入代码/名称/拼音  (Esc 关闭)", head)
-        tip.setStyleSheet(f"color:rgba(255,255,255,200);font-size:10pt;"
-                          f"background:transparent;")
+        tip.setStyleSheet("color:rgba(255,255,255,200);font-size:10pt;"
+                          "background:transparent;")
         hh.addWidget(tip)
         hh.addStretch(1)
         root.addWidget(head)

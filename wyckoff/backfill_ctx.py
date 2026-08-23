@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """历史样本 L5 语境特征回填 (一次性 CLI)。
 
 把信号准确度库 (wx_signal_accuracy.json 的 event 记录) 与阶段带反馈库

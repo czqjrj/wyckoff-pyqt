@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI 问股 (ai_chat) 单元测试: 不联网, mock 客户端。
 
 覆盖:

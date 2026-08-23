@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """准确性验证层测试 (wyckoff.validation):
 1. Rank IC: 置信度与收益的 Spearman 秩相关 + 分档胜率曲线;
 2. Bootstrap CI: 胜率 95% 置信区间 + 小样本标注;
@@ -9,11 +8,17 @@
 import numpy as np
 import pandas as pd
 
-from wyckoff.validation import (rank_ic, bootstrap_winrate_ci, winrate_ci_table,
-                                 significance_table, win_rate_of_oos,
-                                 validation_lines, validation_verdict,
-                                 validation_ai_interpret)
 from wyckoff.fusion import _winrate_weight
+from wyckoff.validation import (
+    bootstrap_winrate_ci,
+    rank_ic,
+    significance_table,
+    validation_ai_interpret,
+    validation_lines,
+    validation_verdict,
+    win_rate_of_oos,
+    winrate_ci_table,
+)
 
 
 def _rec(kind, type_, conf, ret, date="2024-06-01"):

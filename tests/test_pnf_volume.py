@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """点数图成交量聚合 (pnf_volume) 的单元测试。
 
 验证: 列级量与箱体量 (Volume-at-Price) 的归属口径与 build_pnf 完全一致,

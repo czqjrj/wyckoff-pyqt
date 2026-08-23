@@ -1,14 +1,11 @@
-# -*- coding: utf-8 -*-
 """增强波浪分析 (waves.enhanced_wave_analysis) 集成测试。
 
 覆盖: 完整5浪/ABC 输出行、斐波那契汇聚、交叉验证、机会/风险、图标注数据。
 """
 
 import pandas as pd
-import pytest
 
 from wyckoff.waves import enhanced_wave_analysis
-from wyckoff.wavecount import count_waves
 
 
 def _df_from_pivots(pivots, n=60):
@@ -105,6 +102,7 @@ def test_enhanced_down_branch_no_short_specs():
     """A股只能做多: 下跌波段的操作参考不得出现 做空/空头止损/空头目标 交易规格,
     只给 减仓/离场 指引与 上方确认位/下方回踩支撑参考。"""
     import numpy as np
+
     from wyckoff.waves import elliott_wave
     df = pd.DataFrame({"close": [20.0, 19.0, 18.0, 17.0],
                        "high": [20.5, 19.5, 18.5, 17.5],

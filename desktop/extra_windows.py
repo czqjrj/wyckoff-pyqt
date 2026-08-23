@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """候选池 & 行业板块扫描窗口 (PyQt6)。
 
 - CandidatesWindow: 待观察候选清单 (load_candidates), 双击加载分析
@@ -16,16 +15,35 @@ import time
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics, QPalette
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QAbstractSpinBox, QComboBox, QDialog, QDoubleSpinBox,
-    QFrame, QHBoxLayout, QHeaderView, QItemDelegate, QLabel, QLineEdit,
-    QMessageBox, QProgressBar, QPushButton, QSpinBox, QStyledItemDelegate,
-    QTableWidget, QTableWidgetItem, QTextEdit, QToolButton, QVBoxLayout,
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QComboBox,
+    QDialog,
+    QDoubleSpinBox,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
 from wyckoff.paths import DATA_DIR
 from wyckoff.storage import (
-    load_candidates, load_settings, load_watchlist, save_candidates,
+    load_candidates,
+    load_settings,
+    load_watchlist,
+    save_candidates,
     save_watchlist,
 )
 
@@ -684,7 +702,7 @@ class _SectorScanThread(QThread):
             results = scan_sector_stocks(self._bk, self._name, limit=self._limit,
                                          confirm_enabled=self._confirm,
                                          on_result=on_result)
-        except Exception as e:
+        except Exception:
             results = []
             import traceback
             traceback.print_exc()
@@ -938,7 +956,9 @@ class _ScanThread(QThread):
 
     def run(self):
         from wyckoff.backtest import (
-            reset_scan_confirm, scan_stock_signals, signal_score,
+            reset_scan_confirm,
+            scan_stock_signals,
+            signal_score,
         )
         reset_scan_confirm()
         total = len(self._codes)
@@ -1893,7 +1913,7 @@ class AlertsWindow(QDialog):
             self.ed_target.setPlaceholderText("目标价 (数字)")
 
     def _add(self):
-        from wyckoff.alerts import add_alert, load_alerts
+        from wyckoff.alerts import add_alert
         from wyckoff.utils import normalize_symbol
         code = self.ed_code.text().strip()
         if not code:
@@ -1948,8 +1968,9 @@ class AlertsWindow(QDialog):
         self.refresh()
 
     def refresh(self):
-        from wyckoff.alerts import load_alerts
         from datetime import datetime
+
+        from wyckoff.alerts import load_alerts
         records = load_alerts()
         self.table.setRowCount(len(records))
         from PyQt6.QtGui import QColor
@@ -2145,7 +2166,7 @@ class PortfolioWindow(QDialog):
         return (price / cost - 1) if (price and cost) else None
 
     def _add(self):
-        from PyQt6.QtWidgets import QDialogButtonBox, QFormLayout, QLineEdit, QDialog
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLineEdit
         dlg = QDialog(self)
         dlg.setWindowTitle("新增持仓")
         form = QFormLayout(dlg)
@@ -2221,8 +2242,9 @@ class PortfolioWindow(QDialog):
             self.on_load(code)
 
     def _export_csv(self):
+        import csv
+
         from PyQt6.QtWidgets import QFileDialog
-        import csv, os
         d = QFileDialog.getSaveFileName(self, "导出持仓 CSV", "wx_portfolio.csv",
                                         "CSV (*.csv)")[0]
         if not d:
@@ -2426,8 +2448,8 @@ class _ScreenerThread(QThread):
 
     def _build_universe(self):
         """动态成交额排名 → 离线抽样 → 内置静态, 返回 (codes, source_label)。"""
-        from wyckoff.fundamental import fetch_market_universe, local_universe
         from wyckoff.backtest import MARKET_UNIVERSE
+        from wyckoff.fundamental import fetch_market_universe, local_universe
         n = int(self._filters.get("universe_size", 100) or 100)
         try:
             codes = fetch_market_universe(n)
@@ -2441,8 +2463,8 @@ class _ScreenerThread(QThread):
         return MARKET_UNIVERSE, f"内置{len(MARKET_UNIVERSE)}"
 
     def run(self):
-        from wyckoff.screener import screen_stocks
         from wyckoff._log import log_msg
+        from wyckoff.screener import screen_stocks
         start = time.time()
         self.status.emit("正在获取选股宇宙 ...")
         try:

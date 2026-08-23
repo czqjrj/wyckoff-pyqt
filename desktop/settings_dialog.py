@@ -1,11 +1,21 @@
-# -*- coding: utf-8 -*-
 """设置对话框: 编辑与 wyckoff.config.DEFAULT_SETTINGS 同键的界面设置 dict。"""
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFontComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFontComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from wyckoff.config import PERIOD_OPTIONS, SCALE_OPTIONS

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """信号解释弹窗的胜率/置信度统计块 (MainWindow._signal_stats_html) 离屏测试。
 
 GUI 依赖无法在无 Qt 环境的 CI 上运行, 失败时自动跳过而非报错。

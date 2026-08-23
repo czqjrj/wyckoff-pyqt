@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """主窗口: 三栏布局 (自选股 | 图表 | 结论) + 后台分析线程。
 
 移植自 legacy/wyckoff_desktop_wx.py (wxPython), 改用 PyQt6:
@@ -12,30 +11,67 @@ import re
 import threading
 import traceback
 
-from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QDockWidget,
-    QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSpinBox, QSplitter, QTabBar, QTabWidget, QTextBrowser,
-    QTextEdit, QToolBar, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QDockWidget,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QTabBar,
+    QTabWidget,
+    QTextBrowser,
+    QTextEdit,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
 
-from wyckoff.analysis import run_analysis, _ANALYSIS_CACHE, _ANALYSIS_LOCK
-from wyckoff.config import (
-    EVENT_BEAR, EVENT_BULL, EVENT_CN, PERIOD_OPTIONS, SCALE_OPTIONS,
-    TICKER_MAX_ITEMS, TICKER_MIN_VSA_WINRATE, TICKER_MIN_WINRATE,
-    TICKER_ROT_MS, TICKER_SCROLL_MS, TICKER_SCROLL_SPEED,
-    VSA_BEAR, VSA_BULL, VSA_CN,
-)
 from wyckoff._log import log_exc, log_msg
+from wyckoff.analysis import _ANALYSIS_CACHE, _ANALYSIS_LOCK, run_analysis
+from wyckoff.config import (
+    EVENT_BEAR,
+    EVENT_BULL,
+    EVENT_CN,
+    PERIOD_OPTIONS,
+    SCALE_OPTIONS,
+    TICKER_MAX_ITEMS,
+    TICKER_MIN_VSA_WINRATE,
+    TICKER_MIN_WINRATE,
+    TICKER_ROT_MS,
+    TICKER_SCROLL_MS,
+    TICKER_SCROLL_SPEED,
+    VSA_BEAR,
+    VSA_BULL,
+    VSA_CN,
+)
 from wyckoff.pinyin import (
-    ensure_full_market_index, load_pinyin_cache, load_watchlist_stocks,
-    local_search_stock, search_stock,
+    ensure_full_market_index,
+    load_pinyin_cache,
+    load_watchlist_stocks,
+    local_search_stock,
+    search_stock,
 )
 from wyckoff.storage import (
-    load_settings, load_watchlist, save_settings, save_watchlist,
+    load_settings,
+    load_watchlist,
+    save_settings,
+    save_watchlist,
 )
 from wyckoff.utils import normalize_symbol
 from wyckoff.vsa_explain import LONG_ONLY_NOTE, explain
@@ -44,15 +80,21 @@ from . import theme
 from .calibration_center import CalibrationCenter
 from .code_search import CodeSearchDialog
 from .extra_windows import (
-    AlertsWindow, CompareWindow, EtfMonitorWindow, HoldingsWindow, NteamWindow,
-    PortfolioWindow, NotesWindow, ScanWindow, ScreenerWidget,
+    AlertsWindow,
+    CompareWindow,
+    EtfMonitorWindow,
+    HoldingsWindow,
+    NotesWindow,
+    NteamWindow,
+    PortfolioWindow,
+    ScanWindow,
+    ScreenerWidget,
 )
+from .ind_widget import IndScroll, IndWidget
 from .kline_widget import KlineWidget
-from .pnf_widget import PnfWidget
-from .ind_widget import IndWidget, IndScroll
 from .mkt_widget import MktWidget
+from .pnf_widget import PnfWidget
 from .settings_dialog import SettingsDialog
-
 
 # ──────────────────────────────────────────── 后台分析线程 ────────────────────────────────────────────
 
@@ -467,9 +509,9 @@ class _ScanMarketThread(QThread):
 
     def run(self):
         try:
-            from wyckoff.fundamental import fetch_market_universe
             from wyckoff.backtest import MARKET_UNIVERSE
             from wyckoff.config import SCAN_SRC_FETCH_THRESHOLD
+            from wyckoff.fundamental import fetch_market_universe
             codes = fetch_market_universe(100) or MARKET_UNIVERSE
             src = ("成交额Top" + str(len(codes))
                    if len(codes) > SCAN_SRC_FETCH_THRESHOLD
@@ -503,8 +545,8 @@ class _AnalysisTickerThread(QThread):
             self.result.emit([])
             return
         try:
-            from wyckoff.indicators import find_pivots
             from wyckoff.events import detect_all
+            from wyckoff.indicators import find_pivots
             from wyckoff.vsa import vsa_classify
             df = self._df
             code = self._code
@@ -1516,6 +1558,7 @@ class MainWindow(QMainWindow):
 
     def _add_watch_item(self, code, name):
         from PyQt6.QtCore import QSize
+
         from .watch_card import ROLE_NAME, ROLE_PCT, ROLE_PRICE, ROLE_TAG, ROLE_TAG_COLOR
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, code)
@@ -1915,7 +1958,8 @@ class MainWindow(QMainWindow):
                 ch = QHBoxLayout(card)
                 ch.setContentsMargins(0, 0, 10, 0)
                 ch.setSpacing(8)
-                from PyQt6.QtGui import QColor as _QC, QPalette as _QPal
+                from PyQt6.QtGui import QColor as _QC
+                from PyQt6.QtGui import QPalette as _QPal
                 from PyQt6.QtWidgets import QFrame as _QF
                 strip = _QF()
                 strip.setFixedWidth(4)
@@ -2262,8 +2306,8 @@ class MainWindow(QMainWindow):
         置信度为当前所点击事件 bar 的置信度 (VSA 标签无置信度, 为 None)。
         样本 < 10 视为样本不足, 不展示百分数。
         """
-        from wyckoff.vsa_explain import EVENT_EXPLAIN, VSA_EXPLAIN
         from wyckoff.signal_accuracy import load_win_rates
+        from wyckoff.vsa_explain import VSA_EXPLAIN
         kind = "vsa" if label in VSA_EXPLAIN else "event"
         bits = []
         if kind == "event" and isinstance(conf, (int, float)):
@@ -2731,9 +2775,10 @@ class MainWindow(QMainWindow):
 
     def _stamp_pixmap(self, pm, title=""):
         """给导出的图表加时间戳水印 (左下角 时间 + 股票)。"""
-        from PyQt6.QtGui import QPainter, QColor, QFont
         from datetime import datetime
+
         from PyQt6.QtCore import QPointF
+        from PyQt6.QtGui import QColor, QFont, QPainter
         painter = QPainter(pm)
         font = QFont(self.font())
         font.setPointSize(10)
@@ -2820,8 +2865,7 @@ class MainWindow(QMainWindow):
         def worker():
             try:
                 from wyckoff.accuracy import run_auto_accuracy_eval
-                from wyckoff.signal_accuracy import run_auto_signal_eval, \
-                    expire_stale_signals
+                from wyckoff.signal_accuracy import expire_stale_signals, run_auto_signal_eval
                 n = run_auto_accuracy_eval()
                 ns = run_auto_signal_eval()
                 nd = expire_stale_signals()
@@ -2848,8 +2892,8 @@ class MainWindow(QMainWindow):
     def _calibration_remind(self):
         try:
             from wyckoff.accuracy import accuracy_stats, load_accuracy
-            from wyckoff.signal_accuracy import signal_stats, load_signals
             from wyckoff.calibration import calibration_status
+            from wyckoff.signal_accuracy import load_signals, signal_stats
             from wyckoff.storage import load_feedback
             acc = accuracy_stats(load_accuracy())
             sig = signal_stats(load_signals())
@@ -3075,10 +3119,11 @@ class MainWindow(QMainWindow):
         if not code:
             self._status("请先完成一次分析再导出", theme.C_UP)
             return
+        import os
         from datetime import datetime
+
         from wyckoff.paths import DATA_DIR
         from wyckoff.utils import normalize_symbol
-        import os
         out_dir = QFileDialog.getExistingDirectory(
             self, "选择导出目录", DATA_DIR)
         if not out_dir:
@@ -3120,7 +3165,7 @@ class MainWindow(QMainWindow):
 
     # ── 清除缓存 / 帮助 ──
     def _clear_market_cache(self):
-        from wyckoff import sqldb, datasource
+        from wyckoff import datasource, sqldb
         from wyckoff.analysis import _ANALYSIS_CACHE
         stats = sqldb.cache_stats()
         sqldb.clear_cache()
@@ -3136,8 +3181,14 @@ class MainWindow(QMainWindow):
             f"释放磁盘占用 {stats['db_bytes'] / 1024:.0f} KB")
 
     def show_help(self):
-        from PyQt6.QtGui import (QColor, QKeySequence, QShortcut,
-                                 QTextCharFormat, QTextCursor, QTextDocument)
+        from PyQt6.QtGui import (
+            QColor,
+            QKeySequence,
+            QShortcut,
+            QTextCharFormat,
+            QTextCursor,
+            QTextDocument,
+        )
         from PyQt6.QtWidgets import QTextEdit
         dlg = QDialog(self)
         dlg.setWindowTitle("使用说明")
@@ -3228,11 +3279,12 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _help_html(self):
-        from wyckoff.paths import HELP_FILE
         import os
+
+        from wyckoff.paths import HELP_FILE
         try:
             if os.path.exists(HELP_FILE):
-                with open(HELP_FILE, "r", encoding="utf-8") as f:
+                with open(HELP_FILE, encoding="utf-8") as f:
                     return f.read()
         except Exception:
             pass
@@ -3488,6 +3540,7 @@ def datetime_now():
 
 def main():
     import sys
+
     from PyQt6.QtCore import qInstallMessageHandler
     from PyQt6.QtWidgets import QApplication
 

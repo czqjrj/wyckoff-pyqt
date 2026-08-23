@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """交易计划方向/现价/止损/目标自洽性回归测试。
 
 背景: 用户实测复现"方向=多头/低吸, 现价10.27, 止损却给10.34"的自相矛盾计划。
 根因: 现价已跌破 Spring/SC 低点 (结构买点失效) 时, 结构止损自然落在现价上方,
 原代码未做自洽性校验直接输出。本测试固化修复行为。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

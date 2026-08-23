@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """技术指标与 ZigZag 枢轴点。"""
 import numpy as np
 import pandas as pd
@@ -76,7 +75,7 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     low = df["low"].values
     open_ = df["open"].values
     volume = df["volume"].values
-    
+
     out = pd.DataFrame(index=df.index)
     out["day"] = df["day"]
     out["open"] = open_
@@ -84,20 +83,20 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     out["low"] = low
     out["close"] = close
     out["volume"] = volume
-    
+
     # 基础衍生量
     ret = np.empty(n)
     ret[0] = np.nan
     ret[1:] = np.diff(close) / close[:-1]
     out["ret"] = ret
-    
+
     rng = high - low
     out["range"] = rng
     out["body"] = np.abs(close - open_)
     out["upper_wick"] = high - np.maximum(open_, close)
     out["lower_wick"] = np.minimum(open_, close) - low
     out["direction"] = np.where(close >= open_, 1, -1)
-    
+
     # 成交量均线 (前缀和 O(n))
     out["vol_ma5"] = _rolling_mean(volume, 5)
     out["vol_ma10"] = _rolling_mean(volume, 10)
@@ -105,13 +104,13 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     out["vol_ma20"] = vol_ma20
     out["vol_ma50"] = _rolling_mean(volume, 50)
     out["vol_ratio_20"] = volume / vol_ma20
-    
+
     # 量 Z-score
     vol_std20 = _rolling_std(volume, 20)
     vol_z_20 = np.full_like(volume, np.nan, dtype=float)
     np.divide(volume - vol_ma20, vol_std20, out=vol_z_20, where=vol_std20 > 0)
     out["vol_z_20"] = vol_z_20
-    
+
     # 价格均线
     out["price_ma5"] = _rolling_mean(close, 5)
     out["price_ma10"] = _rolling_mean(close, 10)
@@ -119,20 +118,20 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     out["price_ma20"] = price_ma20
     out["price_ma50"] = _rolling_mean(close, 50)
     out["price_ma200"] = _rolling_mean(close, 200)
-    
+
     # ATR(14)
     pc = np.roll(close, 1)
     pc[0] = np.nan
     tr = np.maximum.reduce([rng, np.abs(high - pc), np.abs(low - pc)])
     out["atr"] = _rolling_mean(tr, 14)
-    
+
     # BOLL (20, 2)
     out["boll_mid"] = price_ma20
     boll_std = _rolling_std(close, 20)
     out["boll_std"] = boll_std
     out["boll_up"] = price_ma20 + 2 * boll_std
     out["boll_dn"] = price_ma20 - 2 * boll_std
-    
+
     # MACD (12, 26, 9) - EWMA
     e12 = _ewma(close, 12)
     e26 = _ewma(close, 26)
@@ -141,7 +140,7 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     macd_dea = _ewma(macd_dif, 9)
     out["macd_dea"] = macd_dea
     out["macd_hist"] = (macd_dif - macd_dea) * 2
-    
+
     # KDJ (9, 3, 3)
     low9_min = np.full(n, np.nan)
     high9_max = np.full(n, np.nan)
@@ -156,14 +155,14 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
             min_dq.pop()
         min_dq.append(i)
         low9_min[i] = low[min_dq[0]]
-        
+
         while max_dq and max_dq[0] <= i - 9:
             max_dq.popleft()
         while max_dq and high[max_dq[-1]] <= high[i]:
             max_dq.pop()
         max_dq.append(i)
         high9_max[i] = high[max_dq[0]]
-    
+
     rsv = np.full_like(close, np.nan, dtype=float)
     np.divide((close - low9_min) * 100, high9_max - low9_min, out=rsv, where=high9_max > low9_min)
     kdj_k = _ewma(np.nan_to_num(rsv, nan=50.0), 3, adjust=False)  # com=2 → span=3
@@ -171,7 +170,7 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     kdj_d = _ewma(kdj_k, 3, adjust=False)
     out["kdj_d"] = kdj_d
     out["kdj_j"] = 3 * kdj_k - 2 * kdj_d
-    
+
     # RSI (6, 12, 24)
     diff = np.empty(n)
     diff[0] = np.nan
@@ -184,12 +183,12 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
         rs = np.full_like(up_ma, np.nan, dtype=float)
         np.divide(up_ma, dn_ma, out=rs, where=dn_ma > 0)
         out[f"rsi_{period}"] = 100 - 100 / (1 + rs)
-    
+
     # OBV
     sign = np.sign(diff)
     sign[0] = 0
     out["obv"] = np.cumsum(sign * volume)
-    
+
     # 涨跌停/一字板标记
     pct = ret
     lim = _limit_pct(symbol)
@@ -197,7 +196,7 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     out["limit_dn"] = (close <= low + 1e-9) & (pct <= -(lim - 0.005))
     out["locked"] = out["limit_up"] | out["limit_dn"]
     out["is_new_stock"] = n < 120
-    
+
     return out
 
 
@@ -232,7 +231,7 @@ def find_pivots(df: pd.DataFrame, order: int = None, sensitivity: str = "normal"
     high_v = df["high"].values
     low_v = df["low"].values
     day_v = df["day"].values
-    
+
     # 纯 NumPy 局部极值检测: 滑动窗口比较
     max_idx = []
     min_idx = []
@@ -243,7 +242,7 @@ def find_pivots(df: pd.DataFrame, order: int = None, sensitivity: str = "normal"
             max_idx.append(i)
         if is_min:
             min_idx.append(i)
-    
+
     max_set = set(max_idx)
     min_set = set(min_idx)
     pivots = []

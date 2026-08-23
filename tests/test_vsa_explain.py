@@ -1,14 +1,19 @@
-# -*- coding: utf-8 -*-
 """VSA 信号解释系统测试: 覆盖全部标签、字段完整性、去重前缀与摘要。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from wyckoff.vsa import _PRIORITY
 from wyckoff.vsa_explain import (
-    VSA_EXPLAIN, EVENT_EXPLAIN, explain, explain_lines, explain_summary,
-    meaning_pure, DIR_SYMBOL, LONG_ONLY_NOTE,
+    DIR_SYMBOL,
+    EVENT_EXPLAIN,
+    LONG_ONLY_NOTE,
+    VSA_EXPLAIN,
+    explain,
+    explain_lines,
+    explain_summary,
+    meaning_pure,
 )
 
 
@@ -114,11 +119,12 @@ def test_all_signals_in_conclusion():
     """结论区 VSA 信号段应能引用解释 (build_conclusion 不抛错)。"""
     import matplotlib
     matplotlib.use("Agg")
-    from wyckoff.indicators import add_indicators
-    from wyckoff.vsa import vsa_classify
-    from wyckoff.conclusion import build_conclusion
     import numpy as np
     import pandas as pd
+
+    from wyckoff.conclusion import build_conclusion
+    from wyckoff.indicators import add_indicators
+    from wyckoff.vsa import vsa_classify
 
     np.random.seed(1)
     n = 400

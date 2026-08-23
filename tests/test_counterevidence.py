@@ -1,14 +1,13 @@
-# -*- coding: utf-8 -*-
 """反面证据积分 (wyckoff/counterevidence.py) 回归测试。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
-from wyckoff.counterevidence import counter_evidence, ce_lines, _alert_level, RED_TH
+from wyckoff.counterevidence import RED_TH, _alert_level, ce_lines, counter_evidence
 
 
 def _mk_df(closes, opens=None, highs=None, lows=None, volumes=None):

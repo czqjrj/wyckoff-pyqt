@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI 问股对话框: 基于当前分析报告的多轮对话窗口。
 
 与主界面"AI解读"标签的关系:
@@ -16,8 +15,7 @@ import html
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QKeyEvent
-from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QPushButton,
-                             QTextBrowser, QVBoxLayout)
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QPushButton, QTextBrowser, QVBoxLayout
 
 from . import theme
 

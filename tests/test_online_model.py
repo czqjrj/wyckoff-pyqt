@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """L4 在线校准模型测试: 特征向量 / 训练 / 样本外门控 / conf 接管。
 
 覆盖:
@@ -12,8 +11,6 @@ import tempfile
 
 os.environ.setdefault("WYCKOFF_DATA_DIR", tempfile.mkdtemp())
 
-import numpy as np
-import pytest
 
 from wyckoff import online_model as om
 

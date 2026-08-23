@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """验证 build_kline_data (pyqtgraph 桌面端 K 线数据收集) 的输出契约。
 
 该函数是 matplotlib plot_chart 与 pyqtgraph KlineWidget 的共享数据边界,
@@ -7,7 +6,7 @@
 import numpy as np
 import pandas as pd
 
-from wyckoff.chart import build_kline_data, _event_layout, kline_caption
+from wyckoff.chart import _event_layout, build_kline_data, kline_caption
 from wyckoff.config import EVENT_COLORS
 
 _KEYS = {

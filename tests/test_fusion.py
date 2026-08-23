@@ -1,19 +1,17 @@
-# -*- coding: utf-8 -*-
 """多维度信号融合 (wyckoff.fusion.fuse_signals) 的回归测试。
 
 验证: K线结构 / 威科夫事件 / VSA / P&F 四维信号被量化成统一多空评分,
 方向一致的维度产生共振并提高置信度, 分歧产生矛盾提示 (综合方向不盲目跟多)。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
-from wyckoff.fusion import (fuse_signals, _event_score, _vsa_score,
-                            _pnf_score, _kline_score)
+from wyckoff.fusion import _event_score, _kline_score, _pnf_score, _vsa_score, fuse_signals
 
 
 def _df(closes):

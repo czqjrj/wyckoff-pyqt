@@ -1,16 +1,20 @@
-# -*- coding: utf-8 -*-
 """AI 报告解读 (wyckoff/interpret.py) 回归测试。
 
 不调用真实 API: 验证不可用时的优雅降级与文本清洗逻辑。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from wyckoff.interpret import (llm_client, interpret_report, _clean_text,
-                               _is_degenerate, interpret_tag,
-                               _contradictory_plan)
+from wyckoff.interpret import (
+    _clean_text,
+    _contradictory_plan,
+    _is_degenerate,
+    interpret_report,
+    interpret_tag,
+    llm_client,
+)
 
 
 def test_llm_client_unavailable_when_disabled():

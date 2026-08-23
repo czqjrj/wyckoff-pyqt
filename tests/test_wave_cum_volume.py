@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
 """验证波段累积成交量 (每波段重置累计) 的切分与累计逻辑。"""
 import numpy as np
 
-from wyckoff.chart import _wave_segments, _wave_cum_volume
+from wyckoff.chart import _wave_cum_volume, _wave_segments
 
 
 def test_wave_segments_reset_at_boundaries():

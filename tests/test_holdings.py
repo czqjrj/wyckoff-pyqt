@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """国家队持仓透视模块测试: 机构识别、报表期生成、持股格式化。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from wyckoff.holdings import classify_holder, report_dates, format_shares
+from wyckoff.holdings import classify_holder, format_shares, report_dates
 
 
 def test_classify_national_holders():

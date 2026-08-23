@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 """结论/汇总对增强层 (反面证据/九大检验/AI证伪/仓位) 的渲染回归测试。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """PNF (点数图) 三档目标准确率评估 (可 import 库模块, UI / Cron / CLI 都走这里)。
 
 暴露给外部的主要 API:
@@ -20,7 +19,6 @@ from wyckoff.datasource import fetch_kline
 from wyckoff.indicators import add_indicators
 from wyckoff.paths import DATA_DIR
 from wyckoff.pnf import build_pnf, pnf_history_targets, pnf_volume
-
 
 PNF_ACC_DIR = os.path.join(DATA_DIR, "pnf_accuracy")
 PNF_ACC_LATEST = os.path.join(PNF_ACC_DIR, "pnf_latest.json")
@@ -142,7 +140,7 @@ def run_eval(print_stdout: bool = True, export_json: bool = True,
     result["synthetic_n"] = len(all_hist)
     _p(f"  合成行情产出历史段: {len(all_hist)}")
 
-    _p(f"\n[2/3] 尝试拉取真实股票数据...")
+    _p("\n[2/3] 尝试拉取真实股票数据...")
     if real_symbols is None:
         real_symbols = [
             "000001.SZ", "600519.SH", "000858.SZ", "601318.SH",
@@ -312,7 +310,7 @@ def load_latest_report() -> dict:
     if not os.path.exists(PNF_ACC_LATEST):
         return {}
     try:
-        with open(PNF_ACC_LATEST, "r", encoding="utf-8") as f:
+        with open(PNF_ACC_LATEST, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}

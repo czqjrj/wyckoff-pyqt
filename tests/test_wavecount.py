@@ -1,9 +1,7 @@
-# -*- coding: utf-8 -*-
 """波浪计数模块 (wyckoff.wavecount) 测试: 完美5浪/ABC/无效结构。"""
 
-import pytest
 
-from wyckoff.wavecount import count_waves, _is_impulse, _is_abc
+from wyckoff.wavecount import _is_abc, _is_impulse, count_waves
 
 
 def _piv(types, prices, idxs=None):

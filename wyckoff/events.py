@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """威科夫事件检测与置信度打分 - 向量化优化版。"""
 import numpy as np
 import pandas as pd
@@ -23,7 +22,7 @@ def _empirical_reliability(type_, d=0):
     if not USE_EMPIRICAL_CONF:
         return None
     try:
-        from .signal_accuracy import win_rate_of, load_win_rates, MIN_SHRUNK_N
+        from .signal_accuracy import MIN_SHRUNK_N, load_win_rates
         rates = load_win_rates(20)
         rec = rates.get(("event", str(type_)))
         if not rec or rec["n"] < MIN_SHRUNK_N:
@@ -87,7 +86,7 @@ class _EventContext:
         self.lower_wick = df["lower_wick"].values
         self.upper_wick = df["upper_wick"].values
         self.days = df["day"].values
-        
+
         # 预计算 rolling 极值
         c = self.close
         self.lo40 = pd.Series(c).rolling(41, min_periods=1).min().values
@@ -96,7 +95,7 @@ class _EventContext:
         self.prev_high_60 = pd.Series(self.high).rolling(60).max().shift(1).values
         self.hi60 = pd.Series(self.high).rolling(60).max().values
         self.lo60 = pd.Series(self.low).rolling(60).min().values
-        
+
         # 布林带宽分位
         self.bw_series = None
         if {"boll_up", "boll_dn", "boll_mid"}.issubset(df.columns):
@@ -109,7 +108,7 @@ class _EventContext:
                 self.bw_series = bwv
             except Exception:
                 pass
-        
+
         # 区间位置
         span60 = np.where(self.hi60 - self.lo60 > 1e-9, self.hi60 - self.lo60, 1e-9)
         self.pos60 = np.clip((c - self.lo60) / span60, 0.0, 1.0)
@@ -122,7 +121,7 @@ class _EventContext:
                 self.boll_pct = np.clip((c - bd) / bspan, 0.0, 1.0)
             except Exception:
                 pass
-        
+
         self.locked = df["locked"].values if "locked" in df.columns else np.zeros(self.n, bool)
 
         # RSI/KDJ (供置信度打分用)
@@ -150,16 +149,16 @@ def detect_climaxes(ctx: _EventContext):
     cvals = ctx.close
     rng = np.where(ctx.range > 1e-9, ctx.range, 1e-9)
     span = np.where(ctx.hi40 - ctx.lo40 > 1e-9, ctx.hi40 - ctx.lo40, 1e-9)
-    
+
     lo_zone = (cvals - ctx.lo40) / span < 0.15
     hi_zone = (ctx.hi40 - cvals) / span < 0.15
     vol_ok = ctx.vol_ratio_20 >= 1.6
     vol_hi = ctx.vol_ratio_20 >= 2.0
-    
+
     sc_cond = vol_ok & lo_zone & (ctx.lower_wick / rng > 0.30)
     hi_zone_narrow = (ctx.hi40 - cvals) / span < 0.10
     bc_cond = vol_hi & hi_zone_narrow & (ctx.upper_wick / rng > 0.30)
-    
+
     idx = np.where((sc_cond | bc_cond) & (np.arange(ctx.n) >= 20))[0]
     events = []
     for i in idx:
@@ -183,7 +182,7 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
     closes = ctx.close
     volume = ctx.volume
     vol_ma20 = ctx.vol_ma20
-    
+
     # Spring: 刺破前低后收回
     if len(lows) > 1:
         low_idx = np.array([p["idx"] for p in lows])
@@ -197,7 +196,7 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
                                        date=low_date[k], price=float(low_price[k]),
                                        desc=f"刺破{low_price[k-1]:.2f}后收回",
                                        color=EVENT_COLORS["Spring"]))
-    
+
     # UTAD: 冲高突破前高后回落
     if len(highs) > 1:
         high_idx = np.array([p["idx"] for p in highs])
@@ -211,7 +210,7 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
                                        date=high_date[k], price=float(high_price[k]),
                                        desc=f"冲高{high_price[k]:.2f}后回落",
                                        color=EVENT_COLORS["UTAD"]))
-    
+
     # SOS: 放量上破前枢轴高点 + 吸筹背景
     if len(highs) > 1:
         high_idx = np.array([p["idx"] for p in highs])
@@ -240,14 +239,14 @@ def detect_ar_st(ctx: _EventContext, pivots, climax):
     lows, highs = _split_pivots(pivots)
     events = []
     volume = ctx.volume
-    
+
     high_idx = np.array([p["idx"] for p in highs]) if len(highs) else np.array([], dtype=int)
     high_price = np.array([p["price"] for p in highs]) if len(highs) else np.array([])
     high_date = [p["date"] for p in highs] if len(highs) else []
     low_idx = np.array([p["idx"] for p in lows]) if len(lows) else np.array([], dtype=int)
     low_price = np.array([p["price"] for p in lows]) if len(lows) else np.array([])
     low_date = [p["date"] for p in lows] if len(lows) else []
-    
+
     for ev in climax:
         if ev["type"] == "SC":
             # AR: SC 后第一个高点
@@ -281,19 +280,19 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
     ctx = _as_ctx(ctx)
     lows, highs = _split_pivots(pivots)
     events = []
-    
+
     # 预计算数组
     cvals = ctx.close
     hival = ctx.high
     vol = ctx.volume
     vol_ma20 = ctx.vol_ma20
     days = ctx.days
-    
+
     vol_ok = vol >= vol_ma20 * 1.25
     joc_vol = vol >= vol_ma20 * 1.8
     raw_joc = joc_vol & (cvals > ctx.prev_high_60 * 1.01)
     raw_sos = vol_ok & ~raw_joc & (cvals > ctx.prev_close_30)
-    
+
     idx = np.where((raw_joc | raw_sos) & (np.arange(ctx.n) >= 61))[0]
     for i in idx:
         i = int(i)
@@ -316,16 +315,16 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
                 events.append(dict(type="SOS", idx=i, date=pd.Timestamp(days[i]),
                                    price=float(hival[i]), desc="放量突破30日收盘高点",
                                    color=EVENT_COLORS["SOS"]))
-    
+
     events = _dedup(events, span=15)
-    
+
     # LPS / BU
     low_idx = np.array([p["idx"] for p in lows]) if len(lows) else np.array([], dtype=int)
     low_price = np.array([p["price"] for p in lows]) if len(lows) else np.array([])
     low_date = [p["date"] for p in lows] if len(lows) else []
     high_arr = ctx.high
     low_arr = ctx.low
-    
+
     for base in events:
         if base["type"] not in ("SOS", "JOC"):
             continue
@@ -336,7 +335,7 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
         else:
             floor = low_arr[max(0, b_idx - 20):b_idx].min()
         range_high = high_arr[max(0, b_idx - 60):b_idx].max()
-        
+
         mask = (low_idx > b_idx) & (low_idx <= b_idx + 25) & \
                (low_price > floor * 0.99) & (vol[low_idx] < vol_ma20[low_idx])
         if np.any(mask):
@@ -359,15 +358,15 @@ def detect_ut(ctx: _EventContext, pivots, base_events):
     events = []
     if not len(highs):
         return events
-    
+
     high_idx = np.array([p["idx"] for p in highs])
     high_price = np.array([p["price"] for p in highs])
     high_date = [p["date"] for p in highs]
     close = ctx.close
     n = ctx.n
-    
+
     utad_idx = {e["idx"] for e in base_events if e["type"] == "UTAD"}
-    
+
     for bc in base_events:
         if bc["type"] != "BC":
             continue
@@ -396,7 +395,7 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
     events = []
     if not len(lows):
         return events
-    
+
     low_idx = np.array([p["idx"] for p in lows])
     low_price = np.array([p["price"] for p in lows])
     low_date = [p["date"] for p in lows]
@@ -405,7 +404,7 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
     volume = ctx.volume
     vol_ma20 = ctx.vol_ma20
     n = ctx.n
-    
+
     for base in base_events:
         if base["type"] not in ("UTAD", "LPSY", "BC"):
             continue
@@ -439,13 +438,13 @@ def detect_lpsy(ctx: _EventContext, pivots, base_events):
     events = []
     if not len(highs):
         return events
-    
+
     high_idx = np.array([p["idx"] for p in highs])
     high_price = np.array([p["price"] for p in highs])
     high_date = [p["date"] for p in highs]
     volume = ctx.volume
     vol_ma20 = ctx.vol_ma20
-    
+
     for base in base_events:
         if base["type"] not in ("UTAD", "BC"):
             continue
@@ -485,14 +484,14 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
     close = df["close"].values
     high = df["high"].values
     low = df["low"].values
-    
+
     if not events:
         return events
-    
+
     idx = np.array([e["idx"] for e in events])
     types = np.array([e["type"] for e in events])
     dirs = np.array([event_dir(t) for t in types])
-    
+
     out = []
     for j, e in enumerate(events):
         ne = dict(e)
@@ -543,7 +542,7 @@ def event_confidence(ctx: _EventContext, events):
     ctx = _as_ctx(ctx)
     if not events:
         return events
-    
+
     n = ctx.n
     vol_ma = ctx.vol_ma20
     rng_ma = pd.Series(ctx.range).rolling(20).mean().values
@@ -561,7 +560,7 @@ def event_confidence(ctx: _EventContext, events):
     rsi_6 = ctx.rsi_6
     kdj_d = ctx.kdj_d
     locked = ctx.locked
-    
+
     ev_list = list(events)
     types = np.array([e["type"] for e in ev_list])
     idx = np.array([e["idx"] for e in ev_list])
@@ -570,11 +569,11 @@ def event_confidence(ctx: _EventContext, events):
     rsi_val = None
     kdj_val = None
     confluent = 0
-    
+
     # 预计算同向共振索引
     dir_idx = {1: np.array([i for i, d in zip(idx, dirs) if d == 1], dtype=int),
                -1: np.array([i for i, d in zip(idx, dirs) if d == -1], dtype=int)}
-    
+
     for e in ev_list:
         i = e["idx"]
         if not (0 <= i < n):
@@ -583,24 +582,24 @@ def event_confidence(ctx: _EventContext, events):
         if locked[i]:
             e["conf"] = 5
             continue
-        
+
         vr = volume[i] / max(vol_ma[i], 1e-9)
         rm = rng_ma[i]
         rw = rng[i] / rm if (np.isfinite(rm) and rm > 1e-9) else 1.0
         cpos = (close[i] - low[i]) / max(rng[i], 1e-9)
         score = 40
-        
+
         if e["type"] == "ST":
             score += min(20, max(0, (2.0 - vr)) * 15)
         else:
             score += min(30, max(0, (vr - 1.0)) * 25)
         score += min(20, max(0, (rw - 1.0)) * 20)
-        
+
         if e["type"] in ("SC", "ST", "Spring", "LPS", "PSY", "Shakeout"):
             score += min(10, max(0, (0.35 - cpos)) * 25)
         elif e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
             score += min(10, max(0, (cpos - 0.65)) * 25)
-        
+
         d = event_dir(e["type"])
         up_i = False
         confluent = 0

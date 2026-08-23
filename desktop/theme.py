@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """UI 主题: 颜色 / 字体 / 全局样式表。复用 wyckoff.config 的调色板, 保证图表与界面一致。
 
 支持浅色 (light) 与深色护眼 (dark) 两套主题, 通过 set_theme() 在运行时切换:
@@ -6,7 +5,7 @@
 只需要调用方重新渲染 (set_data) 即可整体换肤。"""
 from PyQt6.QtGui import QColor, QFont
 
-from wyckoff.config import THEMES, FONT_CANDIDATES, FONT_DISPLAY_CANDIDATES, MONO_FONT
+from wyckoff.config import FONT_CANDIDATES, FONT_DISPLAY_CANDIDATES, MONO_FONT, THEMES
 
 C = THEMES["light"]
 _active = "light"

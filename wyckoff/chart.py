@@ -1,18 +1,29 @@
-# -*- coding: utf-8 -*-
 """K线图 / 资金透视 (资金/筹码/股东) 绘制。"""
 from collections import defaultdict
 
-import numpy as np
 import matplotlib.dates as mdates
+import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnnotationBbox, DrawingArea
 from matplotlib.patches import Arc, Circle, Rectangle
 from matplotlib.text import Text
 
-from .config import (_fs, _PHASE_STYLE, EVENT_CN, event_dir,
-                     THEME, C_UP, C_UP_DARK, C_DOWN, C_DOWN_DARK, C_GRID, W_RECENT,
-                     SD_BULL, SD_BEAR)
+from .config import (
+    _PHASE_STYLE,
+    C_DOWN,
+    C_DOWN_DARK,
+    C_GRID,
+    C_UP,
+    C_UP_DARK,
+    EVENT_CN,
+    SD_BEAR,
+    SD_BULL,
+    THEME,
+    W_RECENT,
+    _fs,
+    event_dir,
+)
 from .fundamental import holder_ratio_ok
 from .phases import phase_segments
 from .waves import extract_wave_points

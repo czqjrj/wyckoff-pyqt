@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """数据源 K 线时间段回归测试: 无论哪个源返回多少根, fetch_kline 都必须
 只保留最近 datalen 根 (东财 beg=0 时忽略 lmt 返回全历史, 曾在近1月时把
 整个1997年以来的K线灌进来, 导致"时间段没起作用")。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

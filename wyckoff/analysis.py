@@ -1,37 +1,53 @@
-# -*- coding: utf-8 -*-
 """完整分析流水线 (run_analysis) 与交易计划生成。"""
 import threading
 
 import numpy as np
 
-from .config import DEFAULT_BACKTEST, PERIOD_OPTIONS, W_RECENT
-from .utils import normalize_symbol
-from .datasource import fetch_kline, fetch_name, data_source_of, merge_realtime_bar
-from .indicators import add_indicators, find_pivots, pivot_order
-from .events import detect_all
-from .phases import judge_phase, phase_segments
-from .waves import calc_targets, enhanced_wave_analysis
-from .pnf import build_pnf, pnf_targets, pnf_history_targets, plot_pnf, pnf_volume
-from .vsa import vsa_classify
-from .fusion import fuse_signals
-from .structure import structure_progress
-from .market import (find_trading_range, volume_profile, supply_demand,
-                     build_market_labels, build_sd_series, fetch_market_env,
-                     fetch_market_series, relative_strength, fetch_holder_history,
-                     relative_strength_series)
-from .multitime import multi_tf_analysis
 from .backtest import backtest_events, backtest_vsa, robustness_check
-from .conclusion import build_conclusion, build_signal_summary, sections_to_text
 from .chart import plot_chart, plot_indicators
-from .fundamental import (fetch_fundamental, fetch_main_flow,
-                          fetch_sector_flow, build_confirm_section)
+from .conclusion import build_conclusion, build_signal_summary, sections_to_text
+from .config import DEFAULT_BACKTEST, PERIOD_OPTIONS, W_RECENT
 from .counterevidence import counter_evidence
-from .ninetests import nine_tests
-from .filters import (chip_analysis, granville_signal, volatility_signal,
-                      fundamental_filter, flow_gate)
+from .datasource import data_source_of, fetch_kline, fetch_name, merge_realtime_bar
+from .events import detect_all
 from .falsify import falsify_structure
+from .filters import (
+    chip_analysis,
+    flow_gate,
+    fundamental_filter,
+    granville_signal,
+    volatility_signal,
+)
+from .fundamental import (
+    build_confirm_section,
+    fetch_fundamental,
+    fetch_main_flow,
+    fetch_sector_flow,
+)
+from .fusion import fuse_signals
+from .indicators import add_indicators, find_pivots, pivot_order
 from .interpret import interpret_report
+from .market import (
+    build_market_labels,
+    build_sd_series,
+    fetch_holder_history,
+    fetch_market_env,
+    fetch_market_series,
+    find_trading_range,
+    relative_strength,
+    relative_strength_series,
+    supply_demand,
+    volume_profile,
+)
+from .multitime import multi_tf_analysis
+from .ninetests import nine_tests
+from .phases import judge_phase, phase_segments
+from .pnf import build_pnf, plot_pnf, pnf_history_targets, pnf_targets, pnf_volume
 from .risk import position_lines
+from .structure import structure_progress
+from .utils import normalize_symbol
+from .vsa import vsa_classify
+from .waves import calc_targets, enhanced_wave_analysis
 
 _ANALYSIS_CACHE = {}
 # run_analysis 会从多个后台线程 (分析/扫描/面板扫描) 并发调用, 缓存必须加锁

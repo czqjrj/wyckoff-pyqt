@@ -1,18 +1,16 @@
-# -*- coding: utf-8 -*-
 """AI 反向证伪 (wyckoff/falsify.py) 回归测试。
 
 不调用真实 API: 验证不可用时的优雅降级与 JSON 解析/门控逻辑。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
-from wyckoff.falsify import (_parse_json, falsify_structure, llm_client,
-                             fal_lines)
+from wyckoff.falsify import _parse_json, fal_lines, falsify_structure, llm_client
 
 
 def _mk_df(n=40):

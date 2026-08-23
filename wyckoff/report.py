@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """导出报告构建: 面向大模型 (DeepSeek 等) 的完整结构化报告。
 
 旧版导出只写当前选中的单个结论标签 (如"概览"), 信息量太小, 喂给大模型
@@ -20,8 +19,8 @@
 """
 import numpy as np
 
-from .config import EVENT_CN, VSA_CN
 from .conclusion import sections_to_text
+from .config import EVENT_CN, VSA_CN
 
 
 def _fmt_price(v):
@@ -267,7 +266,7 @@ def build_export_report(symbol, name, scale_txt, period_txt, df, sections,
     scale: VSA 周期校准用 (缺省重算时)。
     """
     blocks = []
-    head = [f"威科夫分析报告 (DeepSeek 解读优化版)",
+    head = ["威科夫分析报告 (DeepSeek 解读优化版)",
             f"标的: {name or ''} ({symbol})",
             f"周期: {scale_txt} / {period_txt}"]
     if df is not None and len(df):

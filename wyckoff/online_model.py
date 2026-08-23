@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """L4 特征级在线校准模型: 结构特征 + 类型 one-hot + 强 L2 逻辑回归。
 
 分层校准方案中 L4 是核心层:
@@ -20,7 +19,7 @@ import time
 
 import numpy as np
 
-from .config import EVENT_COLORS, BULL_EVENTS, BEAR_EVENTS, NEUTRAL_EVENTS, event_dir
+from .config import EVENT_COLORS, event_dir
 from .paths import ONLINE_MODEL_FILE
 
 try:
@@ -47,7 +46,8 @@ _FEAT_INDEX = {f: i for i, f in enumerate(FEATURES)}
 
 # 缺失特征的中性填充 (boll_pct 中轨; 其余来自 context.SAFE_FILL)
 try:
-    from .context import SAFE_FILL as _CTX_SAFE_FILL, CONTEXT_FEAT_KEYS as _CTX_KEYS
+    from .context import CONTEXT_FEAT_KEYS as _CTX_KEYS
+    from .context import SAFE_FILL as _CTX_SAFE_FILL
     _NEUTRAL_FILL = {"boll_pct": 0.5, **_CTX_SAFE_FILL}
 except Exception:  # pragma: no cover - context 不可用时退回 v1 行为
     _NEUTRAL_FILL = {"boll_pct": 0.5}
@@ -90,7 +90,7 @@ def feature_vector(e) -> np.ndarray:
 
 def _load_state():
     try:
-        with open(ONLINE_MODEL_FILE, "r", encoding="utf-8") as fh:
+        with open(ONLINE_MODEL_FILE, encoding="utf-8") as fh:
             return json.load(fh)
     except Exception:
         return {}
@@ -98,6 +98,7 @@ def _load_state():
 
 def _save_state(state):
     import os
+
     from ._shared import atomic_write_json
     os.makedirs(os.path.dirname(ONLINE_MODEL_FILE), exist_ok=True)
     atomic_write_json(ONLINE_MODEL_FILE, state)

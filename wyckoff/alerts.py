@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自选股预警: 价格阈值 + 信号触发提醒。
 
 规则存储: ~/.wyckoff/wx_alerts.json
@@ -12,12 +11,12 @@
   - 触发返回 [(code, name, text)] 供界面弹窗 + TTS。
 """
 import json
+import os
 import threading
 import time
 
 from ._shared import atomic_write_json
 from .paths import DATA_DIR
-import os
 
 ALERTS_FILE = os.path.join(DATA_DIR, "wx_alerts.json")
 
@@ -26,7 +25,7 @@ _LOCK = threading.Lock()
 
 def load_alerts():
     try:
-        with open(ALERTS_FILE, "r", encoding="utf-8") as f:
+        with open(ALERTS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:

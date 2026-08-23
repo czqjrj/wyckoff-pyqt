@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """行情数据获取 (K线 / 实时 / 名称), 带两级缓存与多数据源容灾。
 
 默认走新浪财经接口; 失败时自动依次切换到东方财富、腾讯行情 (见 F3)。
@@ -18,11 +17,11 @@ from threading import Lock
 import numpy as np
 import pandas as pd
 
-from .config import MIN_KLINE_BARS, SINA_HEADERS
-from .utils import normalize_symbol
+from . import sqldb
 from ._log import log_exc
 from ._shared import http_session
-from . import sqldb
+from .config import MIN_KLINE_BARS, SINA_HEADERS
+from .utils import normalize_symbol
 
 _KLINE_CACHE = OrderedDict()   # {(symbol, scale): (ts, full_df)} — LRU, 存全量按需截断
 _KLINE_CACHE_TTL = 300  # 5分钟

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """信号胜率方向化测试: 标称空头信号 (UTAD/LPSY/SUP 等) 以"下跌"为命中。
 
 - vsa_dir / event_dir 方向语义;
@@ -7,8 +6,7 @@
 """
 import pytest
 
-from wyckoff.config import (event_dir, vsa_dir, VSA_BULL, VSA_BEAR,
-                            EVENT_BULL, EVENT_BEAR)
+from wyckoff.config import EVENT_BEAR, EVENT_BULL, VSA_BEAR, VSA_BULL, event_dir, vsa_dir
 
 
 def test_vsa_dir_semantics():
@@ -106,8 +104,9 @@ def test_bootstrap_ci_direction_aware():
 
 def test_oos_direction_aware(monkeypatch):
     """win_rate_of_oos 空头信号以跌为命中 (不依赖 monkeypatch 时也方向化)。"""
-    from wyckoff.validation import win_rate_of_oos
     import pandas as pd
+
+    from wyckoff.validation import win_rate_of_oos
     recs = [dict(kind="event", type="UTAD", date=d, results={"20": {"ret": r}})
             for d, r in (("2024-01-05", -0.05), ("2024-01-10", -0.08),
                          ("2024-01-15", +0.03))]
@@ -119,7 +118,6 @@ def test_oos_direction_aware(monkeypatch):
 def test_fusion_weight_uses_directional_win(monkeypatch):
     """_winrate_weight 直接用方向化胜率加权: 空头命中率高 → 权重>1 (不再双重反转)。"""
     from wyckoff.fusion import _winrate_weight
-    import wyckoff.fusion as fusion
 
     def fake_win(kind, type_, horizon=20, baseline=0.5):
         return 0.85          # 高方向命中

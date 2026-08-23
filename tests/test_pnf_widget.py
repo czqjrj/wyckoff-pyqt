@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """PnfWidget (pyqtgraph) 离屏冒烟测试: 渲染 + 交互 (滚轮/键盘/复位/历史) + 导出。
 
 GUI 依赖无法在无 Qt 环境的 CI 上运行, 失败时自动跳过而非报错。
@@ -12,7 +11,10 @@ import pandas as pd
 import pytest
 
 from wyckoff.pnf import (
-    build_pnf, build_pnf_data, pnf_history_targets, pnf_targets,
+    build_pnf,
+    build_pnf_data,
+    pnf_history_targets,
+    pnf_targets,
 )
 
 
@@ -87,9 +89,8 @@ def test_pnf_widget_renders(widget):
 def test_pnf_widget_wheel_zoom(widget):
     """滚轮向上缩小跨度 (以光标为锚点)。"""
     app, w, df = widget
-    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtCore import QPoint, QPointF, Qt
     from PyQt6.QtGui import QWheelEvent
-    from PyQt6.QtCore import Qt
 
     w.reset_view()
     app.processEvents()
@@ -109,9 +110,8 @@ def test_pnf_widget_wheel_zoom(widget):
 def test_pnf_widget_keyboard_reset(widget):
     """键盘 +/左右/Home 不抛异常, Home 复位到全幅。"""
     app, w, df = widget
-    from PyQt6.QtCore import QEvent
+    from PyQt6.QtCore import QEvent, Qt
     from PyQt6.QtGui import QKeyEvent
-    from PyQt6.QtCore import Qt
 
     def key(k):
         return QKeyEvent(QEvent.Type.KeyPress, k, Qt.KeyboardModifier.NoModifier)

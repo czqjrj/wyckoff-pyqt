@@ -1,18 +1,28 @@
-# -*- coding: utf-8 -*-
 """解读语音播报 (wyckoff/tts.py) 回归测试。
 
 不调用真实语音引擎/网络: 验证文本清洗、引擎解析、开关逻辑与同步降级路径。
 真实发声 (edge-tts/pyttsx3/espeak) 依赖安装, 仅在有引擎时做轻量同步冒烟。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from wyckoff.tts import (clean_speech_text, best_engine, available_engines,
-                         is_enabled, _edge_rate, EDGE_VOICES, speak, stop,
-                         is_speaking, parse_engine_choice, parse_voice_choice,
-                         chunk_speech_text, speak_sequence)
+from wyckoff.tts import (
+    EDGE_VOICES,
+    _edge_rate,
+    available_engines,
+    best_engine,
+    chunk_speech_text,
+    clean_speech_text,
+    is_enabled,
+    is_speaking,
+    parse_engine_choice,
+    parse_voice_choice,
+    speak,
+    speak_sequence,
+    stop,
+)
 
 
 def test_parse_engine_choice():
@@ -128,6 +138,7 @@ def test_speak_sequence_empty_or_no_engine():
 def test_speak_sequence_prepends_label(monkeypatch):
     """带标签的 parts 会把标签并进正文 (标签。正文), 无标签直接读正文。"""
     import time as _time
+
     from wyckoff import tts
     captured = []
 
@@ -169,6 +180,7 @@ def test_play_mp3_stop_terminates_player(tmp_path, monkeypatch):
     ffplay 把整段长解读放完, 表现'一直响'/新旧播报叠播)。"""
     import threading
     import time as _time
+
     from wyckoff.tts import _play_mp3
 
     bin_dir = tmp_path / "bin"

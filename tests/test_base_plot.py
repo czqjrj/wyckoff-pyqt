@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """BasePlotWidget 通用图表基类测试。
 
 覆盖需求点:
@@ -29,6 +28,7 @@ class _Chart:
 
     def __init__(self):
         import pyqtgraph as pg
+
         from desktop.base_plot import BasePlotWidget
 
         class Chart(BasePlotWidget):

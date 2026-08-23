@@ -1,18 +1,17 @@
-# -*- coding: utf-8 -*-
 """点数图历史上涨/下跌测算 (pnf_history_targets) 的回归测试。
 
 验证: 历史各 TR 突破段均产出上/下目标, 且突破后的实际价格走势被正确
 核对为 到位(up_hit/down_hit) 或 未到。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
-from wyckoff.pnf import (build_pnf, pnf_targets, pnf_history_targets, _pnf_zone)
+from wyckoff.pnf import _pnf_zone, build_pnf, pnf_history_targets, pnf_targets
 
 
 def _df_with_trends():

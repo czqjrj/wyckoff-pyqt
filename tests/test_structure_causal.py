@@ -1,20 +1,17 @@
-# -*- coding: utf-8 -*-
 """结构进度因果链校验: 孤立/越序事件不推进阶段, 前置存在时才推进。
 
 威科夫本质 = 阶段因果链: Spring 需先有 SC/ST, LPS 需先有 SOS/JOC,
 UTAD 需先有 BC。旧版"事件序号取最大"会把无铺垫的孤立高等级事件
 直接推升阶段, 违背因果定律。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import numpy as np
 import pandas as pd
-import pytest
 
-from wyckoff.structure import structure_progress, _has_prereq
+from wyckoff.structure import _has_prereq, structure_progress
 
 
 def _df(n=240):

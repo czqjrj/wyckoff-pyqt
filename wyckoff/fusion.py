@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """多维度信号融合: K线结构 / 威科夫事件 / VSA量价 / P&F点数图 → 统一多空评分。
 
 设计动机: 各模块 (phase/events/vsa/pnf) 独立输出各自的多空判断, 结论区并列
@@ -10,8 +9,7 @@
 信号强度一致性"决定: 全部同向且强 → 高, 部分同向 → 中, 方向分裂 → 低。
 """
 
-from .config import (event_dir, vsa_dir, W_RECENT,
-                     VSA_BULL, VSA_BEAR)
+from .config import VSA_BEAR, VSA_BULL, W_RECENT, event_dir
 
 # 各维度权重 (K线结构最重, 威科夫事件次之, VSA与P&F辅助确认)
 W_KLINE = 0.35

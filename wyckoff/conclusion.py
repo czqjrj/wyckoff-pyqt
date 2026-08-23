@@ -1,14 +1,13 @@
-# -*- coding: utf-8 -*-
 """结论生成: 结构化信号汇总 + 分节结论 + 文本拼接。"""
 import pandas as pd
 
-from .config import EVENT_CN, W_RECENT, ER_BULL, ER_BEAR, VSA_CN, vsa_dir
-from .vsa_explain import VSA_EXPLAIN, meaning_pure, LONG_ONLY_NOTE
-from .phases import judge_phase, flow_confirmed
+from .config import ER_BEAR, ER_BULL, EVENT_CN, VSA_CN, W_RECENT, vsa_dir
 from .counterevidence import ce_lines
-from .ninetests import nt_lines
-from .filters import build_filter_sections, filter_summary_cards
 from .falsify import fal_lines
+from .filters import build_filter_sections, filter_summary_cards
+from .ninetests import nt_lines
+from .phases import flow_confirmed, judge_phase
+from .vsa_explain import LONG_ONLY_NOTE, VSA_EXPLAIN, meaning_pure
 
 
 def _recent_win_rate(kind, sig_list, min_n=10):

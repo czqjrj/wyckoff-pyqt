@@ -1,22 +1,26 @@
-# -*- coding: utf-8 -*-
 """因果式回测、稳健性检查与自选股信号扫描。"""
+import threading
 import time
 from collections import defaultdict
-import threading
 
 import numpy as np
 
-from .datasource import fetch_kline, fetch_name
-from .indicators import add_indicators, find_pivots
-from .events import detect_all
-from .config import event_dir, VSA_BULL, VSA_BEAR
-from .phases import judge_phase
-from .vsa import vsa_classify
-from .utils import normalize_symbol
 from ._shared import http_session
-from .fundamental import (fetch_fundamental, fetch_main_flow, fetch_sector_flow,
-                          build_confirm_section, fetch_all_board_stats,
-                          fetch_board_constituents)
+from .config import VSA_BEAR, VSA_BULL, event_dir
+from .datasource import fetch_kline, fetch_name
+from .events import detect_all
+from .fundamental import (
+    build_confirm_section,
+    fetch_all_board_stats,
+    fetch_board_constituents,
+    fetch_fundamental,
+    fetch_main_flow,
+    fetch_sector_flow,
+)
+from .indicators import add_indicators, find_pivots
+from .phases import judge_phase
+from .utils import normalize_symbol
+from .vsa import vsa_classify
 
 # 扫描用 EM 健康熔断: 连续 N 只确认抓取全失败 → 本次扫描跳过确认 (快速失败)
 _EM_FAIL_STREAK = 0

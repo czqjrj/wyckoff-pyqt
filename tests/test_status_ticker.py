@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """状态栏滚动头条 (自选股定时扫描高命中信号) 测试。
 
 - build_ticker_msgs 纯函数: 事件/VSA 实测胜率阈值过滤、颜色、条数上限;
@@ -9,7 +8,6 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-
 from PyQt6.QtWidgets import QWidget
 
 from wyckoff.config import TICKER_MAX_ITEMS
@@ -281,8 +279,8 @@ def test_push_analysis_ticker_recent_hits(monkeypatch):
         return {"Spring": 0.82, "SOW": 0.66}.get(str(type_), baseline)
     monkeypatch.setattr("wyckoff.signal_accuracy.win_rate_of", win_rate_of)
 
-    import pandas as pd
     import numpy as np
+    import pandas as pd
 
     def fake_find_pivots(df, order=6):
         return {"a": 0, "l": 1, "a2": 2, "l2": 3, "a3": 4, "l3": 5,

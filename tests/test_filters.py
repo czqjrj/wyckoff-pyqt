@@ -1,17 +1,22 @@
-# -*- coding: utf-8 -*-
 """补充分析方法过滤层 (wyckoff/filters.py) 回归测试。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
+from wyckoff.filters import (
+    build_filter_sections,
+    chip_analysis,
+    filter_summary_cards,
+    flow_gate,
+    fundamental_filter,
+    granville_signal,
+    volatility_signal,
+)
 from wyckoff.indicators import add_indicators
-from wyckoff.filters import (chip_analysis, granville_signal, volatility_signal,
-                             fundamental_filter, flow_gate,
-                             build_filter_sections, filter_summary_cards)
 
 
 def _mk_df(n=300, closes=None, volumes=None):

@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """波浪理论分析 + 威科夫目标价计算。"""
 import pandas as pd
 
-from .wavecount import count_waves, WaveCount
 from .config import W_PIVOT_LONG
+from .wavecount import WaveCount, count_waves
 
 
 def enhanced_wave_analysis(df: pd.DataFrame, pivots, phase="", events=None):
@@ -284,7 +283,7 @@ def elliott_wave(df: pd.DataFrame, pivots):
         if last_close < fibo[1.618]:
             lines.append(f"  目标: 前高 {end:.2f} 突破后看 {fibo[1.272]:.2f} → {fibo[1.618]:.2f}")
         else:
-            lines.append(f"  目标: 现价已超1.618扩展位, 上方无结构性目标")
+            lines.append("  目标: 现价已超1.618扩展位, 上方无结构性目标")
     else:
         # A股只能做多、不能做空: 下跌结构只给出 减仓/离场 指引与 上方确认位/下方
         # 回踩支撑参考, 不输出"空头止损/目标"式的可执行做空交易规格。
@@ -295,7 +294,7 @@ def elliott_wave(df: pd.DataFrame, pivots):
         if last_close > fibo[1.618]:
             lines.append(f"  下方回踩支撑参考: 前低 {end:.2f} 跌破后看 {fibo[1.272]:.2f} → {fibo[1.618]:.2f}")
         else:
-            lines.append(f"  下方回踩支撑参考: 现价已跌破1.618扩展位, 下方无结构性支撑")
+            lines.append("  下方回踩支撑参考: 现价已跌破1.618扩展位, 下方无结构性支撑")
         lines.append("  提示: A股不能做空; 下跌结构仅供持仓者减仓/离场参考, 不构成做空指令")
 
     return lines
@@ -332,7 +331,6 @@ def extract_wave_points(pivots):
 def calc_targets(df, pivots, events):
     """威科夫目标价: 基于吸筹/派发区间的点数计算 + 关键事件价位"""
     targets = {}
-    from .config import W_PIVOT_LONG
     recent = [e for e in events if e["idx"] >= len(df) - W_PIVOT_LONG]
 
     scs = [e for e in recent if e["type"] == "SC"]

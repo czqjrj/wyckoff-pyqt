@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """资金流 / 筹码分布 / 股东户数 / 大盘背景 / 供需与交易区间分析。"""
 import time
 from threading import Lock

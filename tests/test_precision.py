@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """精度升级三项回归测试:
 1. P&F ATR 动态格值 (box_mode="atr"): 随波动率自适应, 与 pct 模式同构;
 2. VSA 量 Z-score 异常检测 (vol_z_20 + vsa_volume_anomaly): 统计量异常,
@@ -9,10 +8,10 @@
 import numpy as np
 import pandas as pd
 
-from wyckoff.indicators import add_indicators, find_pivots, pivot_order, PIVOT_SENSITIVITY
-from wyckoff.vsa import vsa_classify, vsa_volume_anomaly, thresholds
 from wyckoff.backtest import backtest_vsa
+from wyckoff.indicators import PIVOT_SENSITIVITY, add_indicators, find_pivots, pivot_order
 from wyckoff.pnf import build_pnf, pnf_box_label
+from wyckoff.vsa import thresholds, vsa_classify, vsa_volume_anomaly
 
 
 def _mk_df(n=500, seed=11, vol_spike_at=None, vol_spike=20.0):

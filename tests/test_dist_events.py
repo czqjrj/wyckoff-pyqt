@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """派发侧对称补齐回归测试:
 1. BC 之后的第一个低点枢轴 → 自动回落 AR (detect_ar_st 派发分支);
 2. BC 后冲高测试前高失败 → UT (detect_ut);
@@ -6,8 +5,8 @@
 4. 完整派发因果链 BC→AR→UT→UTAD→LPSY→SOW 推进结构进度到 Phase D;
 5. detect_all 串联新事件且不破坏中性/吸筹事件确认。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -15,8 +14,8 @@ import numpy as np
 import pandas as pd
 
 from wyckoff import events as E
-from wyckoff.structure import structure_progress
 from wyckoff.indicators import add_indicators
+from wyckoff.structure import structure_progress
 
 
 def _mkdf(n=300):

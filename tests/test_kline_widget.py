@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """KlineWidget (pyqtgraph) 离屏冒烟测试: 渲染 + 三图 X 联动 + 交互 + 标签命中。
 
 GUI 依赖无法在无 Qt 环境的 CI 上运行, 失败时自动跳过而非报错。
 """
 import os
-import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -149,9 +147,8 @@ def test_kline_widget_arrow_zoom(widget):
 def test_kline_widget_interactions(widget):
     """滚轮/键盘/复位/历史不抛异常且改变视图。"""
     app, w, df = widget
-    from PyQt6.QtCore import QEvent, QPoint, QPointF
+    from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
     from PyQt6.QtGui import QKeyEvent, QWheelEvent
-    from PyQt6.QtCore import Qt
 
     w.reset_view()
     app.processEvents()

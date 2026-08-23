@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """L5 威科夫语境特征: 为每个事件补写发生时的结构性上下文。
 
 动机: L4 在线校准模型的特征全是通用 K 线技术量 (量比/波幅/布林位...),
@@ -71,7 +70,7 @@ def _prefix_structs(df, pivots, m, cache):
     """df[:m] 前缀上的 (阶段段, 区间) 结构; cache 为单次 enrich 调用内的 {m: 结果}。
 
     枢轴只保留 idx+order < m 的 (更晚的枢轴在信号时点尚未确认, 真实时点不可见)。"""
-    from .phases import phase_segments, _detect_ranges
+    from .phases import _detect_ranges, phase_segments
     hit = cache.get(m)
     if hit is not None:
         return hit
@@ -210,7 +209,6 @@ def enrich(df, pivots, events, index_df=None):
     try:
         if not events or df is None or len(df) == 0:
             return
-        from .phases import phase_segments, _detect_ranges
         close = df["close"].values
         vol = df["volume"].values if "volume" in df else None
         cache = {}

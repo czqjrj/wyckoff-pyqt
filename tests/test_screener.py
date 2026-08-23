@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
 """综合选股引擎 (wyckoff/screener.py) 单元测试。"""
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from wyckoff.indicators import add_indicators
 
@@ -141,7 +139,7 @@ def test_screen_stocks_empty():
 
 def test_screen_stocks_no_network(monkeypatch):
     """在无网络环境下 screen_stocks 不应崩溃。"""
-    from wyckoff.screener import screen_stocks, quick_fundamental_filter
+    from wyckoff.screener import screen_stocks
     # mock quick_fundamental_filter to bypass network
     monkeypatch.setattr("wyckoff.screener.quick_fundamental_filter",
                         lambda codes, f, **kw: codes[:3])
@@ -252,7 +250,6 @@ def test_screen_stocks_signal_filter_soft(monkeypatch):
 
 def test_total_score_formula():
     """综合评分公式测试。"""
-    from wyckoff.screener import _score_technical, _score_fundamental, _score_flow
 
     # 满分场景: 信号满分40 + 技术满分25 + 资金满分20 + 基本面满分15 = 100
     signal_bonus = 40  # max possible from phase+signals
@@ -363,8 +360,9 @@ def test_screen_stocks_parallel(monkeypatch):
 
 def test_screen_stocks_cancel(monkeypatch):
     """取消: 停止后续评分并返回 partial 结果。"""
-    from wyckoff.screener import screen_stocks
     import threading
+
+    from wyckoff.screener import screen_stocks
     cancel = threading.Event()
 
     def _mock_score(code, datalen=500):

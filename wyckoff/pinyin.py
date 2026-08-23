@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本地股票拼音索引 + 股票搜索 (本地优先, 东方财富补全)。
 
 键盘精灵搜索范围必须覆盖全部 A 股: 启动时后台下载全市场股票列表并构建
@@ -10,13 +9,12 @@ import os
 import time
 from threading import Lock
 
-
-from ._shared import atomic_write_json, http_session
 from ._log import log_exc
-from .paths import ALL_STOCKS_FILE, STOCK_NAMES_FILE
-from .utils import normalize_symbol
-from .storage import load_watchlist
+from ._shared import atomic_write_json, http_session
 from .datasource import fetch_name
+from .paths import ALL_STOCKS_FILE, STOCK_NAMES_FILE
+from .storage import load_watchlist
+from .utils import normalize_symbol
 
 try:
     from pypinyin import lazy_pinyin
@@ -90,7 +88,7 @@ def _py_initials(text: str) -> str:
 def _read_json(path):
     """读取 JSON 文件为 dict, 失败/损坏返回 {}。"""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:

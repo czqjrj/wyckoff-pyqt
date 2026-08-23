@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """反面证据积分追踪 (Counter-Evidence) 与紧急反转提示。
 
 借鉴 WyckoffPro CounterEvidenceTracker 的思想: 对当前"吸筹/派发"结构假设

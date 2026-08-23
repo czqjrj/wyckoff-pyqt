@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """LPS/BU 事件生成回归测试。
 
 曾实测 bug: detect_joc_lps_bu 的 LPS/BU 循环以调用方传入的 base_events
@@ -6,8 +5,8 @@
 0 个样本) —— 威科夫标准买点(Phase D 最后支撑点)从未被输出。修复后应以
 函数内部生成的 SOS/JOC 为基准。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

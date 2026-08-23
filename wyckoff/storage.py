@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """用户数据持久化: 自选股 / 设置 / 阶段带反馈标注 / 持仓簿。"""
 import json
 import os
@@ -7,8 +6,14 @@ import re
 from ._log import log_exc
 from ._shared import atomic_write_json
 from .config import DEFAULT_SETTINGS
-from .paths import (WATCHLIST_FILE, SETTINGS_FILE, FEEDBACK_FILE,
-                    CANDIDATES_FILE, PORTFOLIO_FILE, NOTES_FILE)
+from .paths import (
+    CANDIDATES_FILE,
+    FEEDBACK_FILE,
+    NOTES_FILE,
+    PORTFOLIO_FILE,
+    SETTINGS_FILE,
+    WATCHLIST_FILE,
+)
 
 # 优先使用环境变量中的 AI API Key, 避免把密钥明文写入配置文件
 # (wyckoff_settings.json 可能被误提交/同步; env 方式密钥不入盘)。
@@ -17,7 +22,7 @@ API_KEY_ENV = "WYCKOFF_API_KEY"
 
 def load_watchlist():
     try:
-        with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+        with open(WATCHLIST_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return ["600104", "000001", "300750", "688981"]
@@ -33,7 +38,7 @@ def save_watchlist(codes):
 def load_candidates():
     """待观察清单: [{code, name, score, phase, conf_q, signals, date}], 按保存时间倒序。"""
     try:
-        with open(CANDIDATES_FILE, "r", encoding="utf-8") as f:
+        with open(CANDIDATES_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -51,7 +56,7 @@ def save_candidates(records):
 # 记录: [{code, name, shares, cost, buy_date, stop, note, created_ts}]
 def load_portfolio():
     try:
-        with open(PORTFOLIO_FILE, "r", encoding="utf-8") as f:
+        with open(PORTFOLIO_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:
@@ -69,7 +74,7 @@ def save_portfolio(records):
 # {code: note}
 def load_notes():
     try:
-        with open(NOTES_FILE, "r", encoding="utf-8") as f:
+        with open(NOTES_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -97,7 +102,7 @@ def _dedupe_api_key(key):
 def load_settings():
     s = dict(DEFAULT_SETTINGS)
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
             saved = json.load(f)
         if isinstance(saved, dict):
             s.update(saved)
@@ -132,7 +137,7 @@ def feedback_key(symbol, scale, start_dt, end_dt):
 
 def load_feedback():
     try:
-        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+        with open(FEEDBACK_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:

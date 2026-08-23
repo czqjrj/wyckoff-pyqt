@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """信号准确性验证层: 检验"置信度打分是否真的预判收益 / 信号是否真优于随机"。
 
 在 signal_accuracy 追踪数据 (signal_accuracy.json) 之上做四类统计验证,
@@ -20,8 +19,8 @@ import time
 import numpy as np
 import pandas as pd
 
-from .signal_accuracy import load_signals, _sig_date
 from .config import event_dir, vsa_dir
+from .signal_accuracy import _sig_date, load_signals
 
 # 置信度分档边界 (与 accuracy_center 展示口径一致)
 CONF_BANDS = (("≥80", 80), ("60-79", 60), ("40-59", 40), ("<40", 0))
@@ -326,7 +325,7 @@ def validation_lines(records, horizon=20, stats=None):
         for t, s in ci["types"].items():
             tag = "样本不足" if s["insufficient"] else f"{s['ci_lo']:.0f}-{s['ci_hi']:.0f}%"
             rows.append(f"{t}: {s['win']:.0f}%[{tag}]")
-        lines.append(f"事件胜率CI(95%): " + "  ".join(sorted(rows)))
+        lines.append("事件胜率CI(95%): " + "  ".join(sorted(rows)))
     # 3. 随机入场显著性
     if sig:
         lines.append(f"随机入场基准: 全池{sig['pool']['n']}条 均值{sig['pool']['mean']:+.1f}% "

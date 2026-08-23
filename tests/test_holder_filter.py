@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """股东户数失真记录过滤的回归测试。
 
 背景: 福莱特 (601865) 上市初期 17户→13.9万户 (环比+819570%) 的假性暴增曾被
 误展示为 "筹码分散 / 派发迹象"。holder_ratio_ok 是单一权威过滤函数,
 fundamental / market / chart 均复用, 本测试锁定其行为防止回归。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

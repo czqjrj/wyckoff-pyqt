@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """信号准确度追踪: 对每个独立信号 (威科夫事件 / VSA) 做逐信号命中追踪。
 
 与 accuracy.py (整份分析的阶段/目标追踪) 互补: 这里记录每一次分析中检测出的
@@ -27,12 +26,12 @@ import numpy as np
 import pandas as pd
 
 from ._shared import atomic_write_json
-from .paths import SIGNAL_ACCURACY_FILE
+from .config import STRONG_TIER_TYPES, event_dir, vsa_dir
 from .datasource import fetch_kline
-from .indicators import add_indicators, find_pivots
 from .events import detect_all
+from .indicators import add_indicators, find_pivots
+from .paths import SIGNAL_ACCURACY_FILE
 from .vsa import vsa_classify
-from .config import event_dir, vsa_dir, STRONG_TIER_TYPES
 
 # 评估周期 (根)
 HORIZONS = (5, 10, 20, 40)
@@ -130,7 +129,7 @@ def expire_stale_signals(max_age_days: int = 365, keep_done_days: int = 730):
 
 def load_signals():
     try:
-        with open(SIGNAL_ACCURACY_FILE, "r", encoding="utf-8") as f:
+        with open(SIGNAL_ACCURACY_FILE, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
     except Exception:

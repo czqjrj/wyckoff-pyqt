@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """准确度校准: 从 accuracy 评估导出中诊断失效规则并输出调整建议。
 
 自动化闭环的最后一步 (评估 → 汇总 → 诊断 → 建议):
@@ -274,7 +273,7 @@ def main(argv=None):
         print(f"未找到导出文件 {path}")
         print("请先运行: python -m wyckoff.accuracy --export")
         return 1
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     records = data.get("records") or []
     if not records:
@@ -297,7 +296,7 @@ def main(argv=None):
     fb = []
     if os.path.exists(FEEDBACK_FILE):
         try:
-            with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
+            with open(FEEDBACK_FILE, encoding="utf-8") as f:
                 fbdata = json.load(f)
             fb = fbdata if isinstance(fbdata, list) else []
         except Exception:

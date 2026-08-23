@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """pyqtgraph P&F 点数图控件 (替换原 matplotlib 点数图)。
 
 数据由 AnalysisThread 在 worker 线程通过 build_pnf_data() 收集 (点数图计算

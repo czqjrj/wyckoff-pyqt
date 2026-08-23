@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """威科夫九大买卖检验 (Nine Tests)。
 
 借鉴 WyckoffPro 的 NineBuyingTests/NineSellingTests, 以九条规则检验吸筹
@@ -6,7 +5,8 @@
    部分通过时给出"还缺什么"。纯规则, 数据全部取自本项目已有的 df/events/tr/pnf。
 """
 
-from ._shared import recent_events as _recent, vol_wave as _vol_wave
+from ._shared import recent_events as _recent
+from ._shared import vol_wave as _vol_wave
 
 
 def _support_level(df, pivots, tr):

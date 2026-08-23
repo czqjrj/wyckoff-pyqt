@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """解读语音播报 (TTS): 把 AI 解读 / 分析结论用中文语音读出来。
 
 设计: 多后端插件式, 按可用性自动降级, 未安装任何引擎时优雅返回 (不影响分析):
@@ -15,8 +14,8 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import tempfile
+import threading
 import time
 
 from ._log import log_exc
@@ -249,6 +248,7 @@ def _speak_edge(text, voice, rate_pct, stop):
         return "edge-tts 未安装 (pip install edge-tts)"
     try:
         import asyncio
+
         import edge_tts
 
         async def _synth_chunk(chunk):

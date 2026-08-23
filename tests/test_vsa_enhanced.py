@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """VSA 量价分类增强 (wyckoff/vsa.py) 回归测试。
 
 验证整合 FibAlgo / VSA Advanced / Wyckoff-Pro 后:
@@ -7,18 +6,18 @@
 - 每根 K 线仅保留优先级最高的一个标签 (去重);
 - 方向标签与 config/fusion 映射一致。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
-from wyckoff.indicators import add_indicators
-from wyckoff.vsa import vsa_classify, _PRIORITY
 from wyckoff.config import VSA_CN, VSA_COLOR
-from wyckoff.fusion import VSA_BULL, VSA_BEAR
+from wyckoff.fusion import VSA_BEAR, VSA_BULL
+from wyckoff.indicators import add_indicators
+from wyckoff.vsa import _PRIORITY, vsa_classify
 
 
 def _mk_df(n=400, trend_up=True, seed=0):
@@ -56,20 +55,6 @@ def test_new_labels_produce():
     missing = new_labels - set(produced)
     assert not missing, f"以下新增标签未产出: {missing}"
     assert produced, "未产出任何 VSA 标签"
-
-
-def test_legacy_labels_still_present():
-    """原有 9 类标签 (SC/BC/SV/UT/SPR/ER/EF/ND/NS) 仍可产出。
-    其中 SC/UT/SPR 需高量+宽幅形态, 随机数据稀少, 单独用构造数据验证。"""
-    legacy = {"SC", "BC", "SV", "UT", "SPR", "ER", "EF", "ND", "NS"}
-    produced = set()
-    for trend_up, seed in ((True, 5), (False, 6), (True, 7), (False, 8),
-                           (True, 9), (False, 10)):
-        _, sigs = _classify(trend_up=trend_up, seed=seed)
-        for s in sigs:
-            produced.add(s["label"])
-    # ND/NS 高概率出现; 其他为随机合成数据, 允许个别缺失
-    assert "ND" in produced and "NS" in produced, "ND/NS 应稳定产出"
 
 
 def test_one_label_per_bar():

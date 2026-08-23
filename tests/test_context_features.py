@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """L5 语境特征 (wyckoff/context.py) 单元测试。"""
 import os
 import sys

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI 报告解读 (可选): 把完整的威科夫分析报告发给 DeepSeek / OpenAI 兼容接口,
 让大模型从"普通投资者能看懂"的视角解读报告含义, 输出通俗化的要点解读。
 
@@ -216,7 +215,7 @@ def interpret_tag(label, settings, context=None, min_len=120, max_tokens=1200,
     解读硬性约束: A股只能做多不能做空 → 偏空信号的建议只落在
     减仓/离场/回避/不追高/不接飞刀 等动作, 严禁出现做空、开空仓、放空、空头回补等指令。
     """
-    from .vsa_explain import explain_lines, VSA_EXPLAIN, EVENT_EXPLAIN
+    from .vsa_explain import EVENT_EXPLAIN, VSA_EXPLAIN, explain_lines
     if label not in VSA_EXPLAIN and label not in EVENT_EXPLAIN:
         return None
     base = "\n".join(explain_lines(label))

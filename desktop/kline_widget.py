@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """pyqtgraph K线图控件 (替换原 matplotlib K线图)。
 
 数据由 AnalysisThread 在 worker 线程通过 build_kline_data() 收集 (K线相关计算
@@ -19,7 +18,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui
 from pyqtgraph.Qt.QtCore import Qt
 
-from wyckoff.config import (FONT_CANDIDATES, W_RECENT, _PHASE_STYLE)
+from wyckoff.config import _PHASE_STYLE, FONT_CANDIDATES, W_RECENT
 
 from . import theme
 from .base_plot import BasePlotWidget
@@ -35,7 +34,7 @@ def _feedback_verdicts(df, segs, symbol, scale):
     if not segs or not symbol:
         return {}
     try:
-        from wyckoff.storage import feedback_key, load_feedback, _day_fmt
+        from wyckoff.storage import _day_fmt, feedback_key, load_feedback
     except Exception:
         return {}
     fbmap = {}

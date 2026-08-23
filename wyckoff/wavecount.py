@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自动波浪计数 (艾略特波浪理论): 基于枢轴序列识别推动浪/修正浪结构。
 
 与旧 elliott_wave 的单波段斐波那契不同, 本模块:
@@ -14,7 +13,6 @@
     "未完成/新起点", 与威科夫"阶段待确认"的保守口径一致。
 """
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
 
 
 # ── 数据结构 ──
@@ -33,16 +31,16 @@ class WaveCount:
     """一次波浪计数结果。"""
     kind: str                       # "impulse" / "corrective" / "none"
     direction: str                  # 推动/修正的总体方向
-    points: List[WavePoint]         # 已识别浪位点 (按时间序)
-    waves: List[dict]               # [{wave,start_idx,end_idx,start,end,direction,label}]
+    points: list[WavePoint]         # 已识别浪位点 (按时间序)
+    waves: list[dict]               # [{wave,start_idx,end_idx,start,end,direction,label}]
     position: str                   # "浪3中" / "浪4回调" / "ABC回调" 等描述
     position_wave: str              # 当前处于的浪号 "1".."5","A","B","C",""
     done: bool                      # 当前浪位是否结构完成
-    fib_confluence: List[dict]      # [{level, price, kind("回撤"/"扩展")}]
-    next_target: Optional[float]    # 下一个扩展目标
-    invalidation: Optional[float]   # 结构失效价
+    fib_confluence: list[dict]      # [{level, price, kind("回撤"/"扩展")}]
+    next_target: float | None    # 下一个扩展目标
+    invalidation: float | None   # 结构失效价
     quality: float                  # 0~1 结构质量分
-    detail: List[str] = field(default_factory=list)
+    detail: list[str] = field(default_factory=list)
 
 
 # ── 工具 ──

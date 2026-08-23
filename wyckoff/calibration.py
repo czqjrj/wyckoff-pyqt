@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """校准基线管理: 记录"上次校准"时各数据集的已评估样本量, 与当前对比。
 
 超过提醒阈值 (新增评估样本量) 即提示重新校准阈值, 避免用陈旧的检测/打分
@@ -22,7 +21,7 @@ SIGNAL_EVAL_THRESHOLD = 200    # 信号准确度 (逐信号)
 
 def _load():
     try:
-        with open(CALIB_FILE, "r", encoding="utf-8") as f:
+        with open(CALIB_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}

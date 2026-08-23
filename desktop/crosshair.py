@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
 """通用十字光标 (Crosshair) — 挂载到任意 pyqtgraph PlotItem。
 
 跟随鼠标显示两条虚线 (横/纵), 并在顶部显示 X 读数 (日期/序号/成交量等)、
 右侧显示 Y 读数 (价格/资金/指标值等)。格式化由调用方通过闭包提供,
 使各图表可以自由定义坐标含义 (如日期索引 → 日期字符串)。
 """
+import pyqtgraph as pg
 from pyqtgraph.Qt.QtCore import QPointF, Qt
 from pyqtgraph.Qt.QtGui import QFont
-
-import pyqtgraph as pg
 
 from . import theme
 

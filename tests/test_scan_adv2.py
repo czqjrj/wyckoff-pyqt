@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """高级扫描引擎第二轮测试 (wyckoff.scan_adv): 派发/平台突破/吸筹完成度 + 大宗/调研/涨停/质押。
 
 K线类离线: monkeypatch scan_adv.fetch_kline 注入合成数据。

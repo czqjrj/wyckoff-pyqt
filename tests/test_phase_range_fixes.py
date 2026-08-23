@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """阶段区间划分四项理论修正回归测试。
 
 1. Spring/UTAD 刺破收回不切断区间 (_detect_ranges 探针逻辑);
@@ -6,8 +5,8 @@
 3. _mark_bottoms 需吸筹事件证据才标吸筹;
 4. 区间参数全部抽到 config, 常量与 events.Spring 阈值口径统一。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -15,10 +14,15 @@ import numpy as np
 import pandas as pd
 
 from wyckoff.config import (
-    RANGE_TOL, RANGE_PROBE_WIN, RANGE_BAND, RANGE_MIN_BARS,
-    RANGE_EVENT_WEIGHT, ACC_RANGE_EV, DIST_RANGE_EV,
+    ACC_RANGE_EV,
+    DIST_RANGE_EV,
+    RANGE_BAND,
+    RANGE_EVENT_WEIGHT,
+    RANGE_MIN_BARS,
+    RANGE_PROBE_WIN,
+    RANGE_TOL,
 )
-from wyckoff.phases import _detect_ranges, _range_type_by_events, _mark_bottoms
+from wyckoff.phases import _detect_ranges, _mark_bottoms, _range_type_by_events
 
 
 def _osc_df(n=200, spring_idx=None, spring_lo=78.0, recover=True,

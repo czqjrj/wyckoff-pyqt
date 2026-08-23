@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """SQLite 持久化缓存 (K线 / 复权因子) - msgpack 二进制序列化优化版。
 
 内存缓存 (datasource._KLINE_CACHE / _FACTOR_CACHE) 进程退出即失效; 本模块把
@@ -19,12 +18,12 @@
 db 读写失败一律静默降级为"未命中" (回退网络/内存), 并写 wx_debug.log,
 缓存故障绝不阻塞行情获取主流程。
 """
-import msgpack
 import os
 import sqlite3
 import threading
 import time
 
+import msgpack
 import numpy as np
 import pandas as pd
 

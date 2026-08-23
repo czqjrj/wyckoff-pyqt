@@ -1,21 +1,25 @@
-# -*- coding: utf-8 -*-
 """导出报告构建 (wyckoff/report.py) 回归测试。
 
 核心: 报告必须包含 完整分节结论 + 关键量化速览 + 近期K线明细,
 喂给大模型时不能让"当前选中单个标签"那种稀疏文本导致解读偏离。
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 import pandas as pd
 
-from wyckoff.report import (build_export_report, build_quick_snapshot,
-                            build_recent_bars, build_signal_summary_text,
-                            build_indicator_table, build_vsa_table,
-                            build_event_table)
+from wyckoff.report import (
+    build_event_table,
+    build_export_report,
+    build_indicator_table,
+    build_quick_snapshot,
+    build_recent_bars,
+    build_signal_summary_text,
+    build_vsa_table,
+)
 
 
 def _mk_df(n=220):

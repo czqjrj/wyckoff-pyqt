@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """高级扫描引擎: 在传统"信号扫描"之上的专项扫描集合。
 
 与 screener (多维综合选股) / backtest (信号扫描) 互补, 各自面向一个具体问题:
@@ -22,10 +21,8 @@
 import datetime as _dt
 
 import numpy as np
-import pandas as pd
 
 from .backtest import MARKET_UNIVERSE
-from .config import SCAN_SRC_FETCH_THRESHOLD
 from .datasource import fetch_kline
 from .events import detect_all
 from .fundamental import fetch_market_universe
@@ -34,9 +31,17 @@ from .phases import judge_phase
 from .utils import normalize_symbol
 
 try:
-    from .flow_extra import (fetch_dzjy, fetch_gpzy, fetch_jgdy, fetch_lhb_stats,
-                             fetch_margin, fetch_north, fetch_restricted,
-                             fetch_yjyg, fetch_ztpool)
+    from .flow_extra import (
+        fetch_dzjy,
+        fetch_gpzy,
+        fetch_jgdy,
+        fetch_lhb_stats,
+        fetch_margin,
+        fetch_north,
+        fetch_restricted,
+        fetch_yjyg,
+        fetch_ztpool,
+    )
 except Exception:  # pragma: no cover - flow_extra 惰性 import akshare
     fetch_dzjy = fetch_gpzy = fetch_jgdy = fetch_lhb_stats = None
     fetch_margin = fetch_north = fetch_restricted = fetch_yjyg = fetch_ztpool = None
@@ -317,7 +322,7 @@ def scan_volume_divergence(codes, workers=6, cancel_event=None, datalen=500):
         if last < hi20 * 0.97 and vr20 < 0.7:
             return "缩量回踩", f"较20日高回调, 量比{vr20:.1f} (缩量健康)"
         if bw_pct is not None and bw_pct < 30 and vr20 < 1.2:
-            return "布林蓄势", f"带宽处于近{pbq := int(bw_pct)}%分位, 低波动蓄势"
+            return "布林蓄势", f"带宽处于近{int(bw_pct)}%分位, 低波动蓄势"
         return None, None
 
     def one(code):
@@ -372,7 +377,7 @@ def _bw_of(df):
 def scan_sector_driven(workers=6, cancel_event=None, top=6, per=15):
     """强势板块 (资金流入+上涨) → 板块内信号股联动。"""
     try:
-        from .backtest import scan_sectors, scan_sector_stocks
+        from .backtest import scan_sector_stocks, scan_sectors
     except Exception:
         return []
     try:

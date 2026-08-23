@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """基本面 / 主力资金流抓取与威科夫阶段确认规则。
 
 - 基本面: 腾讯 qt.gtimg.cn 为主源 (PE/PB/市值/换手/外盘内盘, 稳定), 东方财富
@@ -8,9 +7,9 @@
 - build_confirm_section: 把基本面+资金流证据对齐到当前威科夫阶段, 输出
   确认/背离条目与置信度修饰, 供结论区展示。全部 fail-soft。
 """
+import json
 import os
 import time
-import json
 from threading import Lock, Semaphore
 
 import pandas as pd
@@ -83,7 +82,7 @@ def local_universe(n: int = 300):
     ST/*ST/退市/新股 (无成交额排名, 抽样质量次优但可用)。返回带前缀代码列表。
     """
     try:
-        with open(ALL_STOCKS_FILE, "r", encoding="utf-8") as f:
+        with open(ALL_STOCKS_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return []
@@ -276,7 +275,7 @@ def _load_board_map():
     # 磁盘缓存 (跨会话复用, 板块码稳定)
     try:
         if os.path.exists(BOARD_MAP_FILE) and now - os.path.getmtime(BOARD_MAP_FILE) < 86400:
-            with open(BOARD_MAP_FILE, "r", encoding="utf-8") as f:
+            with open(BOARD_MAP_FILE, encoding="utf-8") as f:
                 bmap = json.load(f)
             if isinstance(bmap, dict) and bmap:
                 with _LOCK:

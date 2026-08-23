@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """SQLite 持久化缓存测试: 读写往返 / TTL 过期 / 清除 / 统计 / 顺序还原。"""
 import pandas as pd
 

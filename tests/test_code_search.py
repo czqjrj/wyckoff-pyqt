@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """键盘精灵 (CodeSearchDialog + MainWindow 全局事件过滤) 离屏测试。
 
 GUI 依赖无法在无 Qt 环境的 CI 上运行, 失败时自动跳过而非报错。

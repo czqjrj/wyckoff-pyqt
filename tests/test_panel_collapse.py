@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """左右面板折叠功能 (MainWindow) 离屏测试。
 
 GUI 依赖无法在无 Qt 环境的 CI 上运行, 失败时自动跳过而非报错。
@@ -159,8 +158,9 @@ def test_apply_panel_state_does_not_corrupt_settings(win):
 
 def test_startup_restores_collapsed_panel(tmp_path, monkeypatch):
     """退出时折叠右栏 → 下次启动保持折叠 (端到端恢复)。"""
-    import desktop.main_window as mw
     from PyQt6.QtWidgets import QApplication
+
+    import desktop.main_window as mw
     app = QApplication.instance()
     saved = {}
     monkeypatch.setattr(mw, "save_settings", lambda s: saved.update(s))

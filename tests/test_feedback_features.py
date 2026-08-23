@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """build_feedback_record 四类阶段带统一特征落库测试。"""
 import os
 import sys
