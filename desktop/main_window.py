@@ -717,8 +717,12 @@ class MainWindow(QMainWindow):
 
         self._reload_watchlist()
         # 启动即做一次自选股扫描, 让状态栏中间头条尽快填充 (不依赖 auto_scan 开关)
+        # 用挂在窗口上的单发定时器而非裸 singleShot: 窗口关闭即失效, 避免僵尸回调
         if self._watchlist:
-            QTimer.singleShot(4000, self._startup_ticker_scan)
+            self._startup_scan_timer = QTimer(self)
+            self._startup_scan_timer.setSingleShot(True)
+            self._startup_scan_timer.timeout.connect(self._startup_ticker_scan)
+            self._startup_scan_timer.start(4000)
         # 启动默认: 优先加载上次退出前最后分析的股票 (自动记住), 否则用设置的默认股票
         last_code = str(self.settings.get("last_analyzed_code", "") or "").strip()
         default_load = str(self.settings.get("default_load", "") or "").strip()
@@ -795,7 +799,8 @@ class MainWindow(QMainWindow):
         v.addAction(self.act_toggle_watch)
         v.addAction(self.act_toggle_right)
         v.addSeparator()
-        v.addAction("切换深色护眼主题", self.toggle_theme)
+        self.act_toggle_theme = v.addAction(self._theme_toggle_text(),
+                                            self.toggle_theme)
         v.addAction("设置...", "Ctrl+,", self.open_settings)
 
         # 工具: 持仓/盯盘监测 + 信号验证 + 本地数据维护
@@ -2789,10 +2794,15 @@ class MainWindow(QMainWindow):
         if getattr(self, "_ac_win", None) is None:
             self._ac_win = CalibrationCenter(self, settings=self.settings)
         win = self._ac_win
-        win.tabs.setCurrentIndex(max(0, min(2, int(select))))
-        win.refresh_feedback(self._last_segs, self._last_symbol,
-                             self._last_datalen, self._last_scale, self._last_df)
-        win.render_all()
+        # 批量改数据/切页期间挂起懒渲染, end_update 统一渲总览+当前页
+        win.begin_update()
+        try:
+            win.refresh_feedback(self._last_segs, self._last_symbol,
+                                 self._last_datalen, self._last_scale,
+                                 self._last_df)
+            win.tabs.setCurrentIndex(max(0, min(5, int(select))))
+        finally:
+            win.end_update()
         win.show()
         win.raise_()
         win.activateWindow()
@@ -2890,6 +2900,7 @@ class MainWindow(QMainWindow):
             self.tabs.removeTab(index)
             self.tab_screener.deleteLater()
             self.tab_screener = None
+            self.screener_widget = None  # 已销毁, 防主题切换时访问野指针
 
     # ── 批量扫描 ──
     def scan_watchlist(self):
@@ -3297,6 +3308,11 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
             self._text_font_size = new_ts
             self._apply_text_zoom()
 
+    def _theme_toggle_text(self):
+        """主题切换菜单文案: 显示"要切换到"的目标主题 (当前深色 → 提示切浅色)。"""
+        return ("切换到浅色主题" if theme.active_theme() == "dark"
+                else "切换到深色护眼主题")
+
     def toggle_theme(self):
         new = "light" if theme.active_theme() == "dark" else "dark"
         self.settings["theme"] = new
@@ -3307,6 +3323,16 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
     def _apply_theme(self):
         theme.set_theme(str(self.settings.get("theme", "light") or "light"))
         self.setStyleSheet(theme.QSS)
+        # 菜单项文案随当前主题翻转
+        if getattr(self, "act_toggle_theme", None) is not None:
+            self.act_toggle_theme.setText(self._theme_toggle_text())
+        # 综合选股页内联样式随主题重刷 (构造期烧入的配色会残留)
+        try:
+            sw = getattr(self, "screener_widget", None)
+            if sw is not None:
+                sw.apply_theme()
+        except Exception:
+            pass
         # 批量更新: 4图表重渲染 + 主题刷新合并为一次重绘
         self.setUpdatesEnabled(False)
         try:
@@ -3397,14 +3423,21 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         th = getattr(self, "_thread", None)
         if th is not None and th.isRunning():
             th.wait(5000)
+        t = getattr(self, "_startup_scan_timer", None)
+        if t is not None:
+            try:
+                t.stop()
+            except Exception:
+                pass
         for t in list(getattr(self, "_analysis_threads", {}) or {}):
             if t is not None and t.isRunning():
                 t.wait(5000)
         for t in list(getattr(self, "_rt_threads", {}) or {}):
             if t is not None and t.isRunning():
                 t.wait(8000)
-        for t in list(getattr(self, "_scan_threads", {}) or {}):
-            if t is not None and t.isRunning():
+        st = getattr(self, "_scan_threads", None)
+        for t in list(st.values() if isinstance(st, dict) else (st or [])):
+            if t is not None and hasattr(t, "isRunning") and t.isRunning():
                 t.wait(8000)
         for t in list(getattr(self, "_label_ai_threads", {}) or {}):
             if t is not None and t.isRunning():

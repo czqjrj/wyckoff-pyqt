@@ -65,6 +65,67 @@ _SCAN_COL_CN = {"code": "代码", "name": "名称", "last": "现价", "phase": "
                  "industry": "行业", "pct_y1": "近1年%"}
 
 
+# ── 主题化内联样式构建器 ──
+# 这些样式在控件构造时烧入 (内联 stylesheet 优先级高于全局 QSS),
+# 主题切换后必须由 apply_theme()/retheme_children() 重刷, 否则残留旧主题配色。
+
+
+def _table_qss():
+    return (f"QTableWidget{{background:{theme.C_PANEL};"
+            f"border:1px solid {theme.C_BORDER};}}"
+            f"QTableWidget::item:selected{{background:{theme.C['sel']};}}")
+
+
+def _chip_qss():
+    return (f"QToolButton{{background:transparent;color:{theme.C_MUTED};"
+            f"border:1px solid {theme.C_BORDER};border-radius:11px;"
+            f"padding:3px 14px;}}"
+            f"QToolButton:hover{{color:{theme.C_ACCENT};"
+            f"border-color:{theme.C_ACCENT};}}"
+            f"QToolButton:checked{{background:{theme.C['sel']};"
+            f"color:{theme.C_ACCENT};border-color:{theme.C_ACCENT};"
+            f"font-weight:bold;}}")
+
+
+def _ghost_btn_qss():
+    return (f"QPushButton{{background:{theme.C_PANEL};color:{theme.C_TEXT};"
+            f"padding:5px 14px;border-radius:5px;border:1px solid {theme.C_BORDER};}}"
+            f"QPushButton:hover{{background:{theme.C['btn_hover']};"
+            f"border-color:{theme.C_ACCENT};}}"
+            f"QPushButton:pressed{{background:{theme.C['sel']};}}")
+
+
+def _flabel_qss():
+    return f"color:{theme.C_MUTED};font-weight:bold;font-size:10pt;"
+
+
+def retheme_children(root):
+    """按 themedRole 属性重刷 root 子树内所有主题化控件的内联样式。
+
+    供构造期烧入内联配色的窗口/组件在 set_theme 后调用。
+    """
+    for w in root.findChildren(QWidget):
+        role = w.property("themedRole")
+        if not role:
+            continue
+        if role == "table":
+            w.setStyleSheet(_table_qss())
+        elif role == "chip":
+            w.setStyleSheet(_chip_qss())
+        elif role == "ghostBtn":
+            w.setStyleSheet(_ghost_btn_qss())
+        elif role == "flabel":
+            w.setStyleSheet(_flabel_qss())
+        elif role == "vline":
+            w.setStyleSheet(f"color:{theme.C_BORDER};")
+        elif role == "accentStrip":
+            p = w.palette()
+            p.setColor(QPalette.ColorRole.Window, QColor(theme.C_ACCENT))
+            w.setPalette(p)
+        elif role == "panelHead":
+            w.setStyleSheet("")  # 颜色由全局 QSS QLabel#panelHead 提供
+
+
 def _table(select_rows=True):
     t = QTableWidget()
     t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -78,8 +139,8 @@ def _table(select_rows=True):
     t.verticalHeader().setVisible(False)
     # 关闭排序时的自动 Resize (性能瓶颈), 手动控制列宽
     t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    t.setStyleSheet(f"QTableWidget{{background:{theme.C_PANEL};border:1px solid {theme.C_BORDER};}}"
-                    f"QTableWidget::item:selected{{background:{theme.C['sel']};}}")
+    t.setProperty("themedRole", "table")
+    t.setStyleSheet(_table_qss())
     return t
 
 
@@ -88,6 +149,7 @@ def _vline():
     f = QFrame()
     f.setFrameShape(QFrame.Shape.VLine)
     f.setFixedHeight(22)
+    f.setProperty("themedRole", "vline")
     f.setStyleSheet(f"color:{theme.C_BORDER};")
     return f
 
@@ -101,12 +163,14 @@ def _panel_head(text):
     strip = QFrame()
     strip.setFixedSize(4, 15)
     strip.setAutoFillBackground(True)
+    strip.setProperty("themedRole", "accentStrip")
     p = strip.palette()
     p.setColor(QPalette.ColorRole.Window, QColor(theme.C_ACCENT))
     strip.setPalette(p)
     h.addWidget(strip)
     lab = QLabel(text)
     lab.setObjectName("panelHead")
+    lab.setProperty("themedRole", "panelHead")
     h.addWidget(lab)
     h.addStretch(1)
     return box
@@ -115,7 +179,8 @@ def _panel_head(text):
 def _flabel(text):
     """筛选字段标签: 小号加粗 muted, 与控件基线对齐, 弱化标签强化数据。"""
     lab = QLabel(text)
-    lab.setStyleSheet(f"color:{theme.C_MUTED};font-weight:bold;font-size:10pt;")
+    lab.setProperty("themedRole", "flabel")
+    lab.setStyleSheet(_flabel_qss())
     return lab
 
 
@@ -125,15 +190,8 @@ def _chip(text):
     b.setText(text)
     b.setCheckable(True)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
-    b.setStyleSheet(
-        f"QToolButton{{background:transparent;color:{theme.C_MUTED};"
-        f"border:1px solid {theme.C_BORDER};border-radius:11px;"
-        f"padding:3px 14px;}}"
-        f"QToolButton:hover{{color:{theme.C_ACCENT};"
-        f"border-color:{theme.C_ACCENT};}}"
-        f"QToolButton:checked{{background:{theme.C['sel']};"
-        f"color:{theme.C_ACCENT};border-color:{theme.C_ACCENT};"
-        f"font-weight:bold;}}")
+    b.setProperty("themedRole", "chip")
+    b.setStyleSheet(_chip_qss())
     return b
 
 
@@ -141,12 +199,8 @@ def _ghost_btn(text):
     """次级操作按钮: 面板底色 + hairline 边框, hover 提亮 (底部工具行统一用)。"""
     b = QPushButton(text)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
-    b.setStyleSheet(
-        f"QPushButton{{background:{theme.C_PANEL};color:{theme.C_TEXT};"
-        f"padding:5px 14px;border-radius:5px;border:1px solid {theme.C_BORDER};}}"
-        f"QPushButton:hover{{background:{theme.C['btn_hover']};"
-        f"border-color:{theme.C_ACCENT};}}"
-        f"QPushButton:pressed{{background:{theme.C['sel']};}}")
+    b.setProperty("themedRole", "ghostBtn")
+    b.setStyleSheet(_ghost_btn_qss())
     return b
 
 
@@ -2477,6 +2531,7 @@ class ScreenerWidget(QWidget):
 
         # ── 筛选条件面板 (卡片样式) ──
         filter_box = QWidget()
+        self.filter_box = filter_box  # apply_theme 重刷内联样式用
         filter_box.setStyleSheet(
             f"QWidget#filterBox{{background:{theme.C_PANEL};"
             f"border:1px solid {theme.C_BORDER};border-radius:8px;}}")
@@ -2670,6 +2725,7 @@ class ScreenerWidget(QWidget):
         stats_lay.setContentsMargins(4, 2, 4, 2)
         stats_lay.setSpacing(18)
         self._stat_blocks = []
+        self._stat_caps = []
         for cap in ("入选", "最高总分", "平均总分"):
             cell = QWidget()
             v = QVBoxLayout(cell)
@@ -2686,6 +2742,7 @@ class ScreenerWidget(QWidget):
             v.addWidget(cap_lab)
             stats_lay.addWidget(cell)
             self._stat_blocks.append(val)
+            self._stat_caps.append(cap_lab)
         self.st_relax = QLabel("")
         self.st_relax.setStyleSheet(
             f"color:{theme.C_AMBER};font-weight:bold;font-size:10pt;"
@@ -2713,12 +2770,48 @@ class ScreenerWidget(QWidget):
             hb.addWidget(b)
         hb.addStretch(1)
         hint = QLabel("双击行加载 K 线分析")
+        self._hint_label = hint
         hint.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
         hb.addWidget(hint)
         root.addLayout(hb)
 
         self._results = []
         self._thread = None
+
+    def apply_theme(self):
+        """主题切换后重刷构造期烧入的内联样式 (否则残留旧主题深/浅配色)。"""
+        self.filter_box.setStyleSheet(
+            f"QWidget#filterBox{{background:{theme.C_PANEL};"
+            f"border:1px solid {theme.C_BORDER};border-radius:8px;}}")
+        self.btn_start.setStyleSheet(
+            f"QPushButton{{background:{theme.C_ACCENT};color:#fff;"
+            f"font-weight:bold;padding:6px 24px;border-radius:6px;"
+            f"border:none;}}"
+            f"QPushButton:hover{{background:{theme.C['accent_dark']};}}"
+            f"QPushButton:pressed{{background:{theme.C['accent_dark']};}} "
+            f"QPushButton:disabled{{background:{theme.C_MUTED};color:#fff;}}")
+        self.prog.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:10pt;padding:0 8px;")
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar{{border:none;border-radius:3px;"
+            f"background:{theme.C['btn_hover']};}}"
+            f"QProgressBar::chunk{{background:{theme.C_ACCENT};"
+            f"border-radius:3px;}}")
+        self.lbl_preset_desc.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:10pt;")
+        for val in self._stat_blocks:
+            val.setStyleSheet(
+                f"color:{theme.C_ACCENT};font-weight:bold;font-size:15pt;"
+                f"font-family:'{theme.mono_font().family()}';")
+        for cap in self._stat_caps:
+            cap.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        self.st_relax.setStyleSheet(
+            f"color:{theme.C_AMBER};font-weight:bold;font-size:10pt;"
+            f"padding:0 6px;")
+        self._hint_label.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        # chips / 表格 / ghost 按钮 / 分隔线 / 标题色条等带 themedRole 的控件
+        retheme_children(self)
+        self.update()
 
     def _collect_filters(self):
         """收集界面筛选条件 → dict。"""

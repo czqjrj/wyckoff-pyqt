@@ -360,6 +360,10 @@ def test_startup_ticker_scan_placeholder():
     started = []
     try:
         w = MainWindow()
+        # 停掉构造期挂的 4s 启动扫描定时器: 慢机上它可能在断言前被事件泵补触发, 造成双计数
+        t = getattr(w, "_startup_scan_timer", None)
+        if t is not None:
+            t.stop()
         w.resize(1600, 900)
         w.show()
         app.processEvents()
