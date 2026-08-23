@@ -252,6 +252,9 @@ def test_export_review_report(tmp_path, monkeypatch):
     assert "类型胜率" in txt
     assert "信号明细" in txt
     assert "600104" in txt
+    # 明细表含判断方向/预期收益/实际收益三列
+    assert "方向" in txt and "预期收益" in txt and "实际收益" in txt
+    assert "多头" in txt or "空头" in txt
     # HTML 版本
     out2 = tmp_path / "wx_signal_review.html"
     sa.export_review_report(path=str(out2), days=2000, markdown=False)

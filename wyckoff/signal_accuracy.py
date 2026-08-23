@@ -566,7 +566,8 @@ def export_review_report(records=None, path=None, days=7, markdown=True):
     内容:
       - 周期内新增信号总数、已评估数、类型分布
       - 按信号类型汇总的 5/20 根胜率 (vs 历史累计)
-      - 逐信号明细: 日期/标的/类型/入场价/各周期收益/命中标记
+      - 逐信号明细: 日期/标的/类型/判断方向/预期收益(类型历史20根方向化均值)/
+        实际收益(20根方向化真实收益)/入场价/各周期收益
     返回写入路径。
     """
     import datetime
@@ -634,10 +635,26 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
 
     # 明细
     lines += ["## 近周期信号明细", ""]
-    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 入场价 | 5根 | 10根 | 20根 | 40根 |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 方向 | 预期收益 | 实际收益 "
+              "| 入场价 | 5根 | 10根 | 20根 | 40根 |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+
+    def _dir_of(r):
+        t = r.get("type", "")
+        return event_dir(t) if r.get("kind") == "event" else vsa_dir(t)
+
+    # 预期收益查找表: 该类型历史已评估 20 根收益的方向化均值 ( favorable move )
+    _exp = {}
+    for kind in ("event", "vsa"):
+        for t, st in ((stats.get(kind) or {}).items()):
+            h20 = st["horizons"].get("20") or []
+            if h20:
+                d = event_dir(t) if kind == "event" else vsa_dir(t)
+                m = statistics.mean(h20)
+                _exp[(kind, t)] = m if d >= 0 else -m
+
     if not recent:
-        lines += ["| (无) | | | | | | | | | |"]
+        lines += ["| (无) | | | | | | | | | | | | | |"]
     for r in recent:
         kind_cn = "事件" if r.get("kind") == "event" else "VSA"
         res = r.get("results") or {}
@@ -646,13 +663,24 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
             rr = res.get(str(h))
             cells.append(f"{rr['ret'] * 100:+.1f}%" if rr and rr.get("ret") is not None
                          else "-")
+        d = _dir_of(r)
+        dir_cn = "多头" if d > 0 else ("空头" if d < 0 else "中性")
+        exp = _exp.get((r.get("kind"), r.get("type")))
+        exp_s = f"{exp * 100:+.1f}%" if exp is not None else "-"
+        # 实际收益: 20 根真实收益按方向化 (多头取 ret, 空头取 -ret), 正=信号做对
+        r20 = (res.get("20") or {}).get("ret")
+        act_s = "-"
+        if r20 is not None:
+            act_s = f"{(r20 if d >= 0 else -r20) * 100:+.1f}%"
         lines.append(f"| {r.get('date', '')[:10]} | {r.get('code')} | "
                      f"{r.get('name') or ''} | {kind_cn} | {r.get('type')} | "
+                     f"{dir_cn} | {exp_s} | {act_s} | "
                      f"{r.get('price') or '-'} | " + " | ".join(cells) + " |")
     lines.append("")
-    lines.append("> 说明: 5/10/20/40 根收益为该信号出现后的真实行情累计收益; "
-                 "胜率为方向化命中 (多头/中性涨记中, 标称空头跌记中)。"
-                 "未走满周期显示为 `-`。")
+    lines.append("> 说明: 方向=该信号类型的标称方向 (多头/空头/中性); "
+                 "预期收益=同类型历史已评估信号的 20 根方向化均值收益; "
+                 "实际收益=本条信号 20 根真实收益的方向化值 (正=做对, 负=做错); "
+                 "5/10/20/40 根为未方向化的原始累计收益。未走满周期显示为 `-`。")
 
     path = path or os.path.join(os.path.dirname(SIGNAL_ACCURACY_FILE),
                                 "wx_signal_review.md")
