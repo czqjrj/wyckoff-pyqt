@@ -238,23 +238,27 @@ def test_phase_reliability(tmp_path, monkeypatch):
 
 
 def test_export_review_report(tmp_path, monkeypatch):
-    """复盘周报: 生成 Markdown 且包含类型汇总与明细表。"""
+    """复盘周报: 生成 Markdown 且包含分组命中统计与明细表。"""
     _isolated(tmp_path, monkeypatch)
     df = _df()
-    ev = [_ev(10), _ev(90)]
+    ev = [_ev(10, "Spring"), _ev(90, "UTAD")]
+    vsa = [dict(_ev(50), type="SUP")]
     sa.record_signals(df, "sh600104", "600104", 240, 100,
-                      events=ev, vsa_signals=[], name="测试")
+                      events=ev, vsa_signals=vsa, name="测试")
     out = tmp_path / "wx_signal_review.md"
     p = sa.export_review_report(path=str(out), days=2000)
     txt = out.read_text(encoding="utf-8")
     assert os.path.exists(p)
     assert "威科夫信号复盘周报" in txt
     assert "类型胜率" in txt
-    assert "信号明细" in txt
+    assert "命中统计" in txt
+    assert "近周期信号明细" in txt
     assert "600104" in txt
-    # 明细表含判断方向/预期收益/实际收益三列
-    assert "方向" in txt and "预期收益" in txt and "实际收益" in txt
-    assert "多头" in txt or "空头" in txt
+    # 明细表含 组别/判断方向/预期收益/实际收益 列, 且方向真实渲染 (非中性)
+    assert all(c in txt for c in ("组别", "方向", "预期收益", "实际收益"))
+    assert "多头" in txt and "空头" in txt
+    # 强/弱梯队分组统计 (Spring/UTAD 为实证强组, VSA 归弱组)
+    assert "强信号组" in txt and "弱信号组" in txt
     # HTML 版本
     out2 = tmp_path / "wx_signal_review.html"
     sa.export_review_report(path=str(out2), days=2000, markdown=False)

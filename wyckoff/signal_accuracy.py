@@ -32,7 +32,7 @@ from .datasource import fetch_kline
 from .indicators import add_indicators, find_pivots
 from .events import detect_all
 from .vsa import vsa_classify
-from .config import event_dir, vsa_dir
+from .config import event_dir, vsa_dir, STRONG_TIER_TYPES
 
 # 评估周期 (根)
 HORIZONS = (5, 10, 20, 40)
@@ -633,12 +633,6 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
     except Exception:
         pass
 
-    # 明细
-    lines += ["## 近周期信号明细", ""]
-    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 方向 | 预期收益 | 实际收益 "
-              "| 入场价 | 5根 | 10根 | 20根 | 40根 |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-
     def _dir_of(r):
         t = r.get("type", "")
         return event_dir(t) if r.get("kind") == "event" else vsa_dir(t)
@@ -653,6 +647,48 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
                 m = statistics.mean(h20)
                 _exp[(kind, t)] = m if d >= 0 else -m
 
+    # 近周期命中统计 (按实证强/弱梯队分组)
+    evaled = []
+    for r in recent:
+        r20 = ((r.get("results") or {}).get("20") or {}).get("ret")
+        if r20 is None:
+            continue
+        d = _dir_of(r)
+        tier = "强" if (r.get("kind") == "event"
+                        and r.get("type") in STRONG_TIER_TYPES) else "弱"
+        evaled.append((r, r20 if d >= 0 else -r20, d, tier))
+    lines += ["## 近周期命中统计", ""]
+    if evaled:
+        wins = sum(1 for _, a, _, _ in evaled if a > 0)
+        exps = [_exp.get((r.get("kind"), r.get("type"))) for r, _, _, _ in evaled]
+        exps = [e for e in exps if e is not None]
+        lines += [
+            f"- 窗口内新增 **{len(recent)}** 条, 已走满 20 根 **{len(evaled)}** 条",
+            f"- 整体方向命中: **{wins}/{len(evaled)} ({wins / len(evaled) * 100:.1f}%)**"
+            f" · 平均预期收益 {f'{statistics.mean(exps) * 100:+.2f}%' if exps else '-'}"
+            f" · 平均实际收益 {statistics.mean(a for _, a, _, _ in evaled) * 100:+.2f}%",
+        ]
+        for tier, label in (("强", "强信号组 (Spring/Shakeout/UTAD/LPSY/ST/LPS/SC)"),
+                            ("弱", "弱信号组 (其余事件 + 全部 VSA, 仅作确认证据)")):
+            grp = [x for x in evaled if x[3] == tier]
+            if not grp:
+                continue
+            gw = sum(1 for _, a, _, _ in grp if a > 0)
+            gex = [_exp.get((r.get("kind"), r.get("type"))) for r, _, _, _ in grp]
+            gex = [e for e in gex if e is not None]
+            lines.append(
+                f"- **{label}**: {gw}/{len(grp)} ({gw / len(grp) * 100:.1f}%)"
+                f" · 平均实际收益 {statistics.mean(a for _, a, _, _ in grp) * 100:+.2f}%")
+        lines.append("")
+    else:
+        lines += [f"- 窗口内新增 {len(recent)} 条, 尚无走满 20 根的信号", ""]
+
+    # 明细
+    lines += ["## 近周期信号明细", ""]
+    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 组别 | 方向 | 预期收益 "
+              "| 实际收益 | 入场价 | 5根 | 10根 | 20根 | 40根 |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+
     if not recent:
         lines += ["| (无) | | | | | | | | | | | | | |"]
     for r in recent:
@@ -665,6 +701,8 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
                          else "-")
         d = _dir_of(r)
         dir_cn = "多头" if d > 0 else ("空头" if d < 0 else "中性")
+        tier_cn = "强" if (r.get("kind") == "event"
+                           and r.get("type") in STRONG_TIER_TYPES) else "弱"
         exp = _exp.get((r.get("kind"), r.get("type")))
         exp_s = f"{exp * 100:+.1f}%" if exp is not None else "-"
         # 实际收益: 20 根真实收益按方向化 (多头取 ret, 空头取 -ret), 正=信号做对
@@ -674,10 +712,12 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
             act_s = f"{(r20 if d >= 0 else -r20) * 100:+.1f}%"
         lines.append(f"| {r.get('date', '')[:10]} | {r.get('code')} | "
                      f"{r.get('name') or ''} | {kind_cn} | {r.get('type')} | "
-                     f"{dir_cn} | {exp_s} | {act_s} | "
+                     f"{tier_cn} | {dir_cn} | {exp_s} | {act_s} | "
                      f"{r.get('price') or '-'} | " + " | ".join(cells) + " |")
     lines.append("")
-    lines.append("> 说明: 方向=该信号类型的标称方向 (多头/空头/中性); "
+    lines.append("> 说明: 组别=实证梯队 (强: Spring/Shakeout/UTAD/LPSY/ST/LPS/SC; "
+                 "弱: 其余), 依据 docs/accuracy_report.md 的 6000+ 样本实测; "
+                 "方向=该信号类型的标称方向; "
                  "预期收益=同类型历史已评估信号的 20 根方向化均值收益; "
                  "实际收益=本条信号 20 根真实收益的方向化值 (正=做对, 负=做错); "
                  "5/10/20/40 根为未方向化的原始累计收益。未走满周期显示为 `-`。")

@@ -244,6 +244,12 @@ VSA_BULL = {"SC", "SV", "SPR", "DEM", "TRD", "ETR", "NS", "TEST"}
 VSA_BEAR = {"BC", "UT", "SUP", "UPT", "ETF", "TRU", "ND"}
 VSA_NEUTRAL = {"ER", "EF", "ABS", "CHOC", "EVR", "N"}
 
+# 实证强/弱信号梯队 (docs/accuracy_report.md): 20 根方向命中率显著优于随机
+# 基准的七类事件为强组; 其余事件 (SOS/JOC/BC/AR/PSY 等) 及全部 VSA 为弱组,
+# 仅作确认证据, 不单独触发交易。
+STRONG_TIER_TYPES = frozenset(
+    {"Spring", "Shakeout", "UTAD", "LPSY", "ST", "LPS", "SC"})
+
 
 def vsa_dir(lab):
     """VSA 标签方向: 1=多头(标称看多, 上涨即对), -1=空头(标称看空, 下跌即对),
