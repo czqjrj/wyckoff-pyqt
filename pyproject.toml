@@ -25,7 +25,7 @@ test = ["pytest>=7"]
 lint = ["ruff>=0.6"]
 
 [tool.setuptools]
-packages = ["wyckoff", "desktop"]
+packages = ["wyckoff", "desktop", "sync"]
 
 [tool.ruff]
 line-length = 100

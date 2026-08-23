@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -200,6 +201,7 @@ class CalibrationCenter(QDialog):
         self._eval_thread = None
         self._pnf_th = None
         self._model_th = None
+        self._sync_th = None
         # 渲染优化: 文件级 mtime 缓存 + 懒加载 (只渲染可见 tab)
         self._cache = _MtimeCache()
         self._acc_stats_memo = None  # (mtime, accuracy_stats 结果)
@@ -490,6 +492,40 @@ class CalibrationCenter(QDialog):
         note.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
         lay.addWidget(note)
 
+        # ── 数据同步区: 多端校准数据经私有 git 仓库汇合 (docs/plan_multiuser_sync.md) ──
+        sync_box = QFrame()
+        sync_box.setStyleSheet(f"QFrame {{ background:{theme.C_PANEL};"
+                               f"border:1px solid {theme.C_BORDER};border-radius:4px; }}")
+        sl = QHBoxLayout(sync_box)
+        sl.setContentsMargins(10, 6, 10, 6)
+        sl.setSpacing(8)
+        st_title = QLabel("数据同步")
+        st_title.setStyleSheet("font-weight:bold;")
+        sl.addWidget(st_title)
+        self._sync_url_edit = QLineEdit()
+        from wyckoff.storage import load_settings
+
+        self._sync_url_edit.setText(str(load_settings().get("calib_repo_url") or ""))
+        self._sync_url_edit.setPlaceholderText(
+            "私有 git 仓库地址, 如 git@github.com:user/wyckoff-calib.git")
+        self._sync_url_edit.setToolTip(
+            "多台机器各自积累的信号评估/反馈标注通过该仓库合并共享;\n"
+            "同步协议: pull → 合并 → 新增时全量重训 → push")
+        sl.addWidget(self._sync_url_edit, 1)
+        save_btn = QPushButton("保存地址")
+        save_btn.setToolTip("保存仓库地址并 clone (首次)")
+        save_btn.clicked.connect(self._on_sync_setup)
+        sl.addWidget(save_btn)
+        self._sync_btn = QPushButton("⇅ 立即同步")
+        self._sync_btn.setToolTip("pull 远端 → 合并进本地 → 有新增则重训模型 → push")
+        self._sync_btn.clicked.connect(self._on_sync_now)
+        sl.addWidget(self._sync_btn)
+        lay.addWidget(sync_box)
+        self._sync_status = QLabel("")
+        self._sync_status.setWordWrap(True)
+        self._sync_status.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        lay.addWidget(self._sync_status)
+
         self._model_coef_scroll = QScrollArea()
         self._model_coef_scroll.setWidgetResizable(True)
         self._model_coef_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -501,6 +537,115 @@ class CalibrationCenter(QDialog):
         lay.addWidget(self._model_coef_scroll, 1)
 
         self.tabs.addTab(page, "模型校准")
+        self._render_sync_status()
+
+    def _render_sync_status(self):
+        """同步状态行: 上次同步摘要 (读 settings 缓存, 不触发网络)。"""
+        from wyckoff.storage import load_settings
+
+        rec = load_settings().get("calib_last_sync") or {}
+        if not rec:
+            self._sync_status.setText(
+                "尚未同步。GitHub 建私有空仓后填入地址 → 保存 → 立即同步 "
+                "(首推即初始全量库)。")
+            return
+        import time as _time
+        parts = [f"上次同步 {_time.strftime('%Y-%m-%d %H:%M', _time.localtime(rec.get('ts', 0)))}"]
+        if "signals_new" in rec or "feedback_new" in rec:
+            n_new = int(rec.get("signals_new", 0) or 0) + int(rec.get("feedback_new", 0) or 0)
+            parts.append(f"本次新增 {n_new} 条")
+        elif rec.get("pushed"):
+            parts.append("已推送")
+        else:
+            parts.append("无变更")
+        if rec.get("retrained"):
+            parts.append("已重训模型")
+        color = theme.C_DOWN if rec.get("error") else theme.C_MUTED
+        text = "  ·  ".join(parts)
+        if rec.get("error"):
+            text += f"  ·  ⚠ {rec['error']}"
+        self._sync_status.setText(text)
+        self._sync_status.setStyleSheet(f"color:{color};font-size:9pt;")
+
+    def _on_sync_setup(self):
+        url = self._sync_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "数据同步", "请先填写私有仓库地址。")
+            return
+        try:
+            from sync import service as sync_service
+
+            sync_service.setup(url)
+        except Exception as e:
+            QMessageBox.critical(self, "数据同步", f"clone 失败:\n{e}")
+            return
+        self._render_sync_status()
+
+    def _on_sync_now(self):
+        if self._sync_th is not None and self._sync_th.isRunning():
+            return
+        url = self._sync_url_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "数据同步", "请先填写并保存私有仓库地址。")
+            return
+        # 地址有改动时静默更新设置 (不重新 clone, push/pull 时会自动对 remote 校正)
+        from wyckoff.storage import load_settings, save_settings
+
+        s = load_settings()
+        if s.get("calib_repo_url") != url:
+            s["calib_repo_url"] = url
+            save_settings(s)
+        btn = self._sync_btn
+        btn.setEnabled(False)
+        btn.setText("同步中...")
+
+        def _work():
+            from sync import service as sync_service
+
+            r = sync_service.sync()
+            # 附带远端概况供状态行展示 (fetch 失败不影响主流程)
+            try:
+                r["remote_info"] = sync_service.status()
+            except Exception:
+                pass
+            return r
+
+        th = _RetrainThread(_work, self)
+        th.finished.connect(lambda res: self._on_sync_done(btn, th, res))
+        self._sync_th = th
+        th.start()
+
+    def _on_sync_done(self, btn, th, result):
+        self._sync_th = None
+        btn.setEnabled(True)
+        btn.setText("⇅ 立即同步")
+        if result.get("skipped"):
+            self._sync_status.setText(f"已跳过同步: {result['skipped']}")
+            return
+        err = result.get("error")
+        if isinstance(result, dict) and result.get("ok"):
+            n_new = (int(result.get("signals_new", 0) or 0)
+                     + int(result.get("feedback_new", 0) or 0))
+            n_upd = (int(result.get("signals_upd", 0) or 0)
+                     + int(result.get("feedback_upd", 0) or 0))
+            msg = f"同步完成: 新增 {n_new} 条, 更新 {n_upd} 条"
+            if result.get("retrained"):
+                st = result.get("model_metrics") or {}
+                auc = st.get("auc_oos")
+                msg += f", 已用合并数据重训模型 (OOS AUC {auc:.3f})" if auc else ", 已重训模型"
+            ri = result.get("remote_info") or {}
+            warn = ri.get("feat_version_warn")
+            if warn:
+                msg += f"\n⚠ {warn}"
+            contributors = ri.get("n_contributors")
+            if contributors:
+                msg += f"  ·  远端贡献端 {contributors} 个"
+            self._sync_status.setText(msg)
+            self._sync_status.setStyleSheet(f"color:{theme.C_UP};font-size:9pt;")
+            self._render_model_tab()
+        elif err:
+            self._sync_status.setText(f"⚠ 同步失败: {err}")
+            self._sync_status.setStyleSheet(f"color:{theme.C_DOWN};font-size:9pt;")
 
     def _render_model_tab(self):
         from wyckoff.online_model import MODEL_MIN_AUC, MODEL_MIN_OOS, MODEL_MIN_TRAIN, model_status

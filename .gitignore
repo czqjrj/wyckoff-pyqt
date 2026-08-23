@@ -34,6 +34,10 @@ wx_portfolio.json
 wx_notes.json
 wx_alerts.json
 wx_vsa_thresholds.json
+# 多端同步本机身份 (uuid, 首次运行生成)
+wx_machine_id
+# 同步私有仓克隆 (运行时由 sync 包管理)
+calib_repo/
 
 # 发布资产
 /*.tar.gz

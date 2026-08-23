@@ -384,6 +384,8 @@ DEFAULT_SETTINGS = {
     # 单次播报最大字数: 默认 3000, 覆盖 AI 解读 (600~2000 字) 完整朗读;
     # 超过该值的文本由 tts.py 按句子分块连续朗读, 不再中途截断。
     "tts_max_chars": 3000,
+    # 多用户校准数据同步 (私有 git 仓库, 空=未启用; 见 sync/ 包)
+    "calib_repo_url": "",
     # 界面主题: light=浅色 / dark=深色护眼
     "theme": "light",
     # 分析结论 / AI解读 面板文字字号 (pt)

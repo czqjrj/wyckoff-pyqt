@@ -107,6 +107,25 @@ python wyckoff_desktop.py   # 通用方式
 
 ---
 
+## 🔄 多端协同 (可选)
+
+多台机器 / 多个用户各自积累的校准数据（信号评估记录、阶段带反馈标注）可通过一个**私有 Git 仓库**汇合，合并后自动重训在线模型并回传，所有参与端共享更大的样本覆盖：
+
+```bash
+# GitHub 建一个私有空仓后, 各端执行一次:
+python -m sync setup git@github.com:<user>/<repo>.git
+# 日常同步 (也可在校准中心 → 模型校准 → 数据同步区点击「立即同步」):
+python -m sync sync
+```
+
+- 协议: `pull 远端 → 按键确定性合并 → 合并新增>0 时全量重训 → push`；push 被拒自动重拉合并重推
+- 身份: 首次运行生成 `~/.wyckoff/wx_machine_id`，仅用于贡献统计，无账号体系；仓库 SSH 密钥即身份
+- 模型互采: 仅当特征集版本一致且训练时间更新才采纳对方模型，避免旧系数污染
+
+详见 [docs/plan_multiuser_sync.md](docs/plan_multiuser_sync.md)。
+
+---
+
 ## 📁 项目结构
 
 ```
