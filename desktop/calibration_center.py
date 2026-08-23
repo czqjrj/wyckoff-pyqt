@@ -6,6 +6,7 @@
   - validation: Rank IC / Bootstrap CI / 置换检验 / OOS 验证;
   - online_model: L4 特征级在线 LR 模型 (系数/样本外 AUC/接管状态)。
 """
+import os
 import statistics
 from collections import OrderedDict
 
@@ -28,6 +29,8 @@ from wyckoff.pnf_accuracy import (
     load_latest_report as _pnf_load_latest,
     run_eval as _pnf_run_eval,
 )
+from wyckoff.paths import (ACCURACY_FILE, FEEDBACK_FILE,
+                           SIGNAL_ACCURACY_FILE)
 from wyckoff.signal_accuracy import (
     _fmt_stats, export_signals, load_signals, run_auto_signal_eval,
     signal_stats,
@@ -37,6 +40,9 @@ from wyckoff.storage import (
 )
 
 from . import theme
+
+# 时间线列表渲染上限 (每行 3 个 QWidget, 无上限会拖垮主线程)
+_TL_MAX_ROWS = 400
 
 
 class _EvalThread(QThread):
@@ -113,6 +119,28 @@ def _card(parent=None, accent=None):
     return f
 
 
+class _MtimeCache:
+    """按文件 mtime 失效的只读缓存。
+
+    单次 render_all 流程里同一 JSON (信号库 3MB) 会被多个 tab 各自解析,
+    这里以 mtime 为键共享一份解析结果; 后台评估线程落盘后 mtime 变化自动重载。
+    """
+
+    def __init__(self):
+        self._ent = {}  # key -> (mtime, value)
+
+    def get(self, key, path, loader):
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        ent = self._ent.get(key)
+        if ent is None or ent[0] != mtime:
+            ent = (mtime, loader())
+            self._ent[key] = ent
+        return ent[1]
+
+
 def _card_title(text, size="11pt"):
     lb = QLabel(text)
     lb.setStyleSheet(f"font-weight:bold;font-size:{size};color:{theme.C_TEXT};")
@@ -151,6 +179,11 @@ class CalibrationCenter(QDialog):
         self._eval_thread = None
         self._pnf_th = None
         self._model_th = None
+        # 渲染优化: 文件级 mtime 缓存 + 懒加载 (只渲染可见 tab)
+        self._cache = _MtimeCache()
+        self._acc_stats_memo = None  # (mtime, accuracy_stats 结果)
+        self._dirty_tabs = set()
+        self._lazy_paused = False
 
         # 全局样式: 统一铺底色, 消除白色空隙
         _bg = theme.C_BG
@@ -222,6 +255,32 @@ class CalibrationCenter(QDialog):
         self._build_pnf_tab()
         self._build_timeline_tab()
         self.tabs.setCurrentIndex(0)  # 默认落在模型校准 (校准中心旗舰页)
+        self._dirty_tabs = set(range(self.tabs.count()))
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    # ══════════════════════════════════════════════════════════════════
+    #  缓存读取 (mtime 失效, 单次渲染流程共享一份数据)
+    # ══════════════════════════════════════════════════════════════════
+    def _signals_cached(self):
+        return self._cache.get("signals", SIGNAL_ACCURACY_FILE, load_signals)
+
+    def _accuracy_cached(self):
+        return self._cache.get("accuracy", ACCURACY_FILE, load_accuracy)
+
+    def _feedback_cached(self):
+        return self._cache.get("feedback", FEEDBACK_FILE, load_feedback)
+
+    def _accuracy_stats_cached(self):
+        """accuracy_stats 计算较重 (~0.3s), 按 mtime 记忆化。"""
+        try:
+            mtime = os.path.getmtime(ACCURACY_FILE)
+        except OSError:
+            mtime = None
+        if self._acc_stats_memo and self._acc_stats_memo[0] == mtime:
+            return self._acc_stats_memo[1]
+        stats = accuracy_stats(self._accuracy_cached())
+        self._acc_stats_memo = (mtime, stats)
+        return stats
 
     # ══════════════════════════════════════════════════════════════════
     #  总览卡片
@@ -266,9 +325,9 @@ class CalibrationCenter(QDialog):
             badge.setText("")
 
     def _render_overview(self):
-        acc = accuracy_stats(load_accuracy())
-        sig = signal_stats(load_signals())
-        fb = load_feedback()
+        acc = self._accuracy_stats_cached()
+        sig = signal_stats(self._signals_cached())
+        fb = self._feedback_cached()
         sig_s = sig["summary"]
 
         # 分析准确度卡
@@ -420,7 +479,6 @@ class CalibrationCenter(QDialog):
         self._model_coef_scroll.setWidget(self._model_coef_content)
         lay.addWidget(self._model_coef_scroll, 1)
 
-        self._render_model_tab()
         self.tabs.addTab(page, "模型校准")
 
     def _render_model_tab(self):
@@ -559,18 +617,18 @@ class CalibrationCenter(QDialog):
         self.tabs.addTab(page, "阶段带反馈标注")
 
     def refresh_feedback(self, segs, symbol, datalen, scale, df):
+        """只存数据不渲染 (渲染由 render_all / tab 切换统一调度)。"""
         self._last_segs = segs
         self._last_symbol = symbol or ""
         self._last_datalen = datalen
         self._last_scale = scale
         self._last_df = df
-        self._render_feedback()
 
     def _phase_reliability_text(self):
         """L5 阶段判定可信度: 各阶段标注正确率 (L1 收缩) 一行概览。"""
         try:
-            from wyckoff.storage import phase_reliability, load_feedback
-            rel = phase_reliability(load_feedback())
+            from wyckoff.storage import phase_reliability
+            rel = phase_reliability(self._feedback_cached())
         except Exception:
             return ""
         if not rel:
@@ -588,7 +646,7 @@ class CalibrationCenter(QDialog):
             self._placeholder(self.fb_lay, "请先完成一次分析 (开始分析 或 双击自选股)")
             return
         segs = self._last_segs
-        feedback = load_feedback()
+        feedback = self._feedback_cached()
         fmap = {}
         for r in feedback:
             if r.get("start_dt") and r.get("end_dt"):
@@ -740,7 +798,6 @@ class CalibrationCenter(QDialog):
         self.acc_lay.setSpacing(2)
         self.acc_scroll.setWidget(self.acc_content)
         lay.addWidget(self.acc_scroll, 1)
-        self._render_accuracy()
         self.tabs.addTab(page, "分析准确度")
 
     @staticmethod
@@ -757,8 +814,8 @@ class CalibrationCenter(QDialog):
         return f"{txt['hit']}/{txt['n']} {txt['hit'] / txt['n'] * 100:.0f}%" if txt["n"] else "-"
 
     def _render_accuracy(self):
-        records = load_accuracy()
-        stats = accuracy_stats(records)
+        records = self._accuracy_cached()
+        stats = self._accuracy_stats_cached()
         # 更新筛选器
         codes = sorted({r.get("code") for r in records if r.get("code")})
         cur = self.acc_filter_code.currentData()
@@ -777,9 +834,7 @@ class CalibrationCenter(QDialog):
         self._render_accuracy_list()
 
     def _render_acc_stats(self, stats):
-        waiting = 0
-        records = load_accuracy()
-        waiting = sum(1 for r in records if r.get("waiting"))
+        waiting = sum(1 for r in self._accuracy_cached() if r.get("waiting"))
         self.acc_header.setText(
             f"累计 {stats['total']}  ·  已评估 {stats['evaluated']}  ·  "
             f"待评估 {stats['pending']}  ·  等行情 {waiting}  ·  "
@@ -845,7 +900,7 @@ class CalibrationCenter(QDialog):
 
     def _render_accuracy_list(self):
         _clear(self.acc_lay)
-        records = load_accuracy()
+        records = self._accuracy_cached()
         cur_code = self.acc_filter_code.currentData()
         if cur_code:
             records = [r for r in records if r.get("code") == cur_code]
@@ -1015,7 +1070,6 @@ class CalibrationCenter(QDialog):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 7)
         lay.addWidget(splitter, 1)
-        self._render_signal_accuracy()
         self.tabs.addTab(page, "信号校准")
 
     @staticmethod
@@ -1030,7 +1084,7 @@ class CalibrationCenter(QDialog):
         return ""
 
     def _render_signal_accuracy(self):
-        records = load_signals()
+        records = self._signals_cached()
         stats = signal_stats(records)
         try:
             self.sig_summary.setText(_fmt_stats(stats))
@@ -1038,12 +1092,15 @@ class CalibrationCenter(QDialog):
             self.sig_summary.setText(f"信号追踪: 累计 {stats['summary']['total']} 条")
         self.sig_shrink.setText(self._shrink_summary())
         self.sig_consistency.setText(self._consistency_summary())
-        # 验证
+        # 验证 (三套统计只算一次, lines/verdict 共享)
         try:
-            from wyckoff.validation import validation_lines, validation_verdict
-            vlines = validation_lines(records)
+            from wyckoff.validation import (compute_validation_stats,
+                                            validation_lines,
+                                            validation_verdict)
+            vstats = compute_validation_stats(records)
+            vlines = validation_lines(records, stats=vstats)
             self.sig_validation.setText("\n".join(vlines) if vlines else "")
-            self.sig_verdict.setText(validation_verdict(records))
+            self.sig_verdict.setText(validation_verdict(records, stats=vstats))
         except Exception as e:
             self.sig_validation.setText(f"(验证不可用: {e})")
             self.sig_verdict.setText("")
@@ -1170,7 +1227,7 @@ class CalibrationCenter(QDialog):
 
     def _render_signal_list(self):
         _clear(self.sig_lay)
-        records = load_signals()
+        records = self._signals_cached()
         if not records:
             self._placeholder(self.sig_lay, "(暂无记录, 完成一次分析后自动记录)")
             return
@@ -1300,7 +1357,7 @@ class CalibrationCenter(QDialog):
 
     def _render_timeline(self):
         _clear(self.tl_lay)
-        records = load_signals()
+        records = self._signals_cached()
         if not records:
             self._placeholder(self.tl_lay, "(暂无信号记录, 完成分析后自动收集)")
             return
@@ -1315,16 +1372,23 @@ class CalibrationCenter(QDialog):
                 self.tl_filter.addItem(f"{name} {c}".strip(), c)
         self.tl_filter.blockSignals(False)
         sel = [r for r in records if not cur or r.get("code") == cur]
-        sel.sort(key=lambda r: (str(r.get("code", "")), str(r.get("date", ""))))
+        # 最近优先: 全局按日期降序再按股票分组, 截断时保住最新的记录
+        sel.sort(key=lambda r: str(r.get("date", "")), reverse=True)
         groups = OrderedDict()
         for r in sel:
             groups.setdefault(r.get("code"), []).append(r)
+        n_rows = 0
+        truncated = False
         for code, recs in groups.items():
             name = next((r.get("name") or "" for r in recs), "")
             hd = QLabel(f"<b>{name} {code}</b>  ({len(recs)} 条信号)")
             hd.setStyleSheet(f"color:{theme.C_ACCENT};margin-top:6px;")
             self.tl_lay.addWidget(hd)
-            for r in sorted(recs, key=lambda x: str(x.get("date", ""))):
+            for r in recs:
+                if n_rows >= _TL_MAX_ROWS:
+                    truncated = True
+                    break
+                n_rows += 1
                 row, bs = _row_frame(vertical=True)
                 kind_cn = "事件" if r.get("kind") == "event" else "VSA"
                 head = QLabel(f"{r.get('date', '')[:10]}  {kind_cn} {r.get('type')}")
@@ -1342,6 +1406,13 @@ class CalibrationCenter(QDialog):
                 mt.setStyleSheet(f"color:{theme.C_MUTED};")
                 bs.addWidget(mt)
                 self.tl_lay.addWidget(row)
+            if truncated:
+                break
+        if truncated:
+            note = QLabel(f"(记录过多, 仅显示最近 {_TL_MAX_ROWS} 条 — "
+                          "用右上角股票筛选缩小范围)")
+            note.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+            self.tl_lay.addWidget(note)
         self.tl_lay.addStretch(1)
 
     # ══════════════════════════════════════════════════════════════════
@@ -1449,7 +1520,6 @@ class CalibrationCenter(QDialog):
         self.pnf_scroll.setWidget(self.pnf_content)
         lay.addWidget(self.pnf_scroll, 1)
 
-        self._render_pnf_tab()
         self.tabs.addTab(page, "点数图校准")
 
     def _on_pnf_eval(self):
@@ -1816,15 +1886,47 @@ class CalibrationCenter(QDialog):
         QMessageBox.information(self, "已清空", "已清空全部准确度记录。")
 
     # ── 渲染入口 ──
+    def _tab_renderers(self):
+        """tab index → 渲染方法。渲染开销大, 只在可见/请求时执行。"""
+        return {
+            0: self._render_model_tab,
+            1: self._render_feedback,
+            2: self._render_accuracy,
+            3: self._render_signal_accuracy,
+            4: self._render_pnf_tab,
+            5: self._render_timeline,
+        }
+
+    def _on_tab_changed(self, idx):
+        if self._lazy_paused:
+            return
+        if idx in self._dirty_tabs:
+            self._dirty_tabs.discard(idx)
+            fn = self._tab_renderers().get(idx)
+            if fn:
+                fn()
+
+    def begin_update(self):
+        """暂停懒加载渲染 (批量改数据/切 tab 前调用)。"""
+        self._lazy_paused = True
+
+    def end_update(self):
+        """恢复渲染并刷新总览+当前 tab; 其余 tab 标脏待切换时再渲。"""
+        self._lazy_paused = False
+        self.render_all()
+
     def render_all(self):
+        """总览卡片 + 当前可见 tab 立即渲染, 其余 tab 标脏 (切换时懒渲染)。
+
+        全量渲染 6 个 tab 在主线程要数秒 (验证统计 ~2s + 上万控件重建),
+        懒加载后打开窗口只付当前页成本。
+        """
         self._render_overview()
-        self._render_model_tab()
-        self._render_accuracy()
-        self._render_signal_accuracy()
-        self._render_pnf_tab()
-        self._render_timeline()
-        if self._last_segs:
-            self._render_feedback()
+        cur = self.tabs.currentIndex()
+        self._dirty_tabs = set(range(self.tabs.count())) - {cur}
+        fn = self._tab_renderers().get(cur)
+        if fn:
+            fn()
 
     def _placeholder(self, lay, text):
         lbl = QLabel(text)

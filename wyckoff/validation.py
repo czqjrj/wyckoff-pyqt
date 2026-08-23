@@ -123,19 +123,21 @@ def bootstrap_winrate_ci(rets, n_boot=1000, seed=42, alpha=0.05, direction=0):
 
     direction<0 (标称空头) → 以 ret<0 为命中; 其余 ret>0 为命中。
     返回 {"n", "win", "ci_lo", "ci_hi"} 或 None (样本 < 3)。
+    重采样矩阵分块向量化 (单块 ≈2M 元素封顶), 统计语义与逐次采样一致。
     """
     arr = np.asarray(rets, dtype=float)
     if arr.size < 3:
         return None
-    def _is_hit(v):
-        return bool(v < 0) if direction < 0 else bool(v > 0)
+    hits = (arr < 0) if direction < 0 else (arr > 0)
     rng = np.random.default_rng(seed)
+    step = max(1, 2_000_000 // arr.size)
     boot = np.empty(n_boot)
-    for k in range(n_boot):
-        s = arr[rng.integers(0, arr.size, arr.size)]
-        boot[k] = float(np.mean([_is_hit(v) for v in s]))
+    for k0 in range(0, n_boot, step):
+        k1 = min(n_boot, k0 + step)
+        idx = rng.integers(0, arr.size, size=(k1 - k0, arr.size))
+        boot[k0:k1] = hits[idx].mean(axis=1)
     lo, hi = np.percentile(boot, [100 * alpha / 2, 100 * (1 - alpha / 2)])
-    return {"n": int(arr.size), "win": float(np.mean([_is_hit(v) for v in arr]) * 100),
+    return {"n": int(arr.size), "win": float(hits.mean() * 100),
             "ci_lo": float(lo * 100), "ci_hi": float(hi * 100)}
 
 
@@ -203,10 +205,13 @@ def significance_table(records, kind="event", horizon=20, min_n=8,
         arr = np.asarray(rets, dtype=float)
         n = arr.size
         obs = float(arr.mean())
+        # 置换采样矩阵分块向量化 (单块 ≈2M 元素封顶)
         sims = np.empty(n_perm)
-        for k in range(n_perm):
-            s = pool[rng.integers(0, pool.size, n)]
-            sims[k] = float(s.mean())
+        step = max(1, 2_000_000 // max(1, pool.size))
+        for k0 in range(0, n_perm, step):
+            k1 = min(n_perm, k0 + step)
+            idx = rng.integers(0, pool.size, size=(k1 - k0, n))
+            sims[k0:k1] = pool[idx].mean(axis=1)
         # 方向化 p 值: 多头/中性信号 obs 越大越显著; 空头信号 obs 越小越显著。
         # 旧逻辑一律用 `sims >= obs`, 导致空头信号预测跌但实际跌 (obs 为负)
         # 被误判为"≈随机" (p=1), 反向失败却被误判为"优于随机"。
@@ -275,11 +280,28 @@ def oos_record_loader():
 
 # ───────────────────────── 汇总格式化 (展示用) ──────────────────────────
 
-def validation_lines(records, horizon=20):
-    """把四类验证结果格式化为文本行 (供准确度中心/CLI/周报)。"""
+def compute_validation_stats(records, kind="event", horizon=20):
+    """一次性算齐三套验证统计 (RankIC / Bootstrap CI / 置换检验)。
+
+    validation_lines 与 validation_verdict 需要同一批统计, 传入本结果
+    可避免 UI 渲染时整套重算一遍 (6511 条样本约省 1s)。
+    """
+    return {
+        "ic": rank_ic(records, kind=kind, horizon=horizon),
+        "ci": winrate_ci_table(records, kind=kind, horizon=horizon),
+        "sig": significance_table(records, kind=kind, horizon=horizon),
+    }
+
+
+def validation_lines(records, horizon=20, stats=None):
+    """把四类验证结果格式化为文本行 (供准确度中心/CLI/周报)。
+
+    stats: compute_validation_stats() 的结果; 缺省时现场计算。
+    """
+    st = stats or compute_validation_stats(records, horizon=horizon)
+    ic, ci, sig = st["ic"], st["ci"], st["sig"]
     lines = []
     # 1. Rank IC
-    ic = rank_ic(records, kind="event", horizon=horizon)
     if ic["n"]:
         if ic["insufficient"] or ic["spearman"] is None:
             lines.append(f"置信度IC: 样本 {ic['n']} 不足 (需≥30), 暂不评估打分有效性")
@@ -299,7 +321,6 @@ def validation_lines(records, horizon=20):
                 lines.append(f"  高置信(≥80) vs 低置信(<40) 胜率差 {delta:+.1f}% "
                              f"→ {'打分有区分度' if delta > 0 else '打分反了/无区分'}")
     # 2. Bootstrap CI
-    ci = winrate_ci_table(records, kind="event", horizon=horizon)
     if ci["types"]:
         rows = []
         for t, s in ci["types"].items():
@@ -307,7 +328,6 @@ def validation_lines(records, horizon=20):
             rows.append(f"{t}: {s['win']:.0f}%[{tag}]")
         lines.append(f"事件胜率CI(95%): " + "  ".join(sorted(rows)))
     # 3. 随机入场显著性
-    sig = significance_table(records, kind="event", horizon=horizon)
     if sig:
         lines.append(f"随机入场基准: 全池{sig['pool']['n']}条 均值{sig['pool']['mean']:+.1f}% "
                      f"胜率{sig['pool']['win']:.0f}%")
@@ -322,15 +342,15 @@ def validation_lines(records, horizon=20):
 
 # ───────────────────────── 5. 规则化 AI 解读 ─────────────────────────
 
-def validation_verdict(records, horizon=20, min_conf=80):
+def validation_verdict(records, horizon=20, min_conf=80, stats=None):
     """把四类验证结果"翻译"成通俗结论 (规则化 AI 解读, 无需外部大模型)。
 
     返回 str (多行): 面向普通投资者的准确性结论 + 可依赖的信号类型清单 +
     需要怀疑/样本不足的类型。无记录时返回提示文本。
+    stats: compute_validation_stats() 的结果; 缺省时现场计算。
     """
-    ic = rank_ic(records, kind="event", horizon=horizon)
-    ci = winrate_ci_table(records, kind="event", horizon=horizon)
-    sig = significance_table(records, kind="event", horizon=horizon)
+    st = stats or compute_validation_stats(records, horizon=horizon)
+    ic, ci, sig = st["ic"], st["ci"], st["sig"]
     if ic["n"] == 0:
         return "暂无信号记录, 无法评估信号准确性。完成几次分析后自动积累样本。"
     parts = []
@@ -385,13 +405,14 @@ def validation_ai_interpret(records, settings=None, horizon=20):
     未配置 API Key / 未启用 / 失败 → 回退规则化 validation_verdict (离线可用)。
     返回 {"ai": str|None, "rule": str}。
     """
-    rule = validation_verdict(records, horizon=horizon)
+    stats = compute_validation_stats(records, horizon=horizon)
+    rule = validation_verdict(records, horizon=horizon, stats=stats)
     if not records or not settings:
         return {"ai": None, "rule": rule}
     try:
         from .interpret import interpret_prompt
-        stats = "\n".join(validation_lines(records, horizon=horizon))
-        prompt = _ACCURACY_AI_PROMPT.format(stats=stats, rule=rule)
+        summary = "\n".join(validation_lines(records, horizon=horizon, stats=stats))
+        prompt = _ACCURACY_AI_PROMPT.format(stats=summary, rule=rule)
         ai = interpret_prompt(prompt, settings, min_len=100,
                               max_tokens=1200, temperature=0.3)
         return {"ai": ai, "rule": rule}
