@@ -496,30 +496,45 @@ class CalibrationCenter(QDialog):
         sync_box = QFrame()
         sync_box.setStyleSheet(f"QFrame {{ background:{theme.C_PANEL};"
                                f"border:1px solid {theme.C_BORDER};border-radius:4px; }}")
-        sl = QHBoxLayout(sync_box)
+        sl = QVBoxLayout(sync_box)
         sl.setContentsMargins(10, 6, 10, 6)
-        sl.setSpacing(8)
+        sl.setSpacing(6)
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
         st_title = QLabel("数据同步")
         st_title.setStyleSheet("font-weight:bold;")
-        sl.addWidget(st_title)
+        row1.addWidget(st_title)
         self._sync_url_edit = QLineEdit()
-        from wyckoff.storage import load_settings
-
-        self._sync_url_edit.setText(str(load_settings().get("calib_repo_url") or ""))
         self._sync_url_edit.setPlaceholderText(
             "私有 git 仓库地址, 如 git@github.com:user/wyckoff-calib.git")
         self._sync_url_edit.setToolTip(
             "多台机器各自积累的信号评估/反馈标注通过该仓库合并共享;\n"
             "同步协议: pull → 合并 → 新增时全量重训 → push")
-        sl.addWidget(self._sync_url_edit, 1)
+        row1.addWidget(self._sync_url_edit, 1)
         save_btn = QPushButton("保存地址")
-        save_btn.setToolTip("保存仓库地址并 clone (首次)")
+        save_btn.setToolTip("保存仓库地址 (https 地址可配下面的用户名/密码实现自动鉴权)")
         save_btn.clicked.connect(self._on_sync_setup)
-        sl.addWidget(save_btn)
+        row1.addWidget(save_btn)
         self._sync_btn = QPushButton("⇅ 立即同步")
         self._sync_btn.setToolTip("pull 远端 → 合并进本地 → 有新增则重训模型 → push")
         self._sync_btn.clicked.connect(self._on_sync_now)
-        sl.addWidget(self._sync_btn)
+        row1.addWidget(self._sync_btn)
+        sl.addLayout(row1)
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        self._sync_user_edit = QLineEdit()
+        self._sync_user_edit.setPlaceholderText("https 用户名 (可选)")
+        self._sync_user_edit.setMaximumWidth(220)
+        row2.addWidget(self._sync_user_edit, 1)
+        self._sync_pass_edit = QLineEdit()
+        self._sync_pass_edit.setPlaceholderText("密码 / Token (可选, 自动鉴权)")
+        self._sync_pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._sync_pass_edit.setMaximumWidth(220)
+        row2.addWidget(self._sync_pass_edit, 1)
+        creds_tip = QLabel("https 私有仓库填用户名/密码, 凭据只存本机 (权限600); ssh 无需填写")
+        creds_tip.setStyleSheet(f"color:{theme.C_MUTED};font-size:9pt;")
+        row2.addWidget(creds_tip, 1)
+        sl.addLayout(row2)
         lay.addWidget(sync_box)
         self._sync_status = QLabel("")
         self._sync_status.setWordWrap(True)
@@ -537,7 +552,34 @@ class CalibrationCenter(QDialog):
         lay.addWidget(self._model_coef_scroll, 1)
 
         self.tabs.addTab(page, "模型校准")
+        self.refresh_sync_url()
         self._render_sync_status()
+
+    def refresh_sync_url(self):
+        """自动填充同步仓库地址: 优先 settings, 缺失时从已克隆仓库的 git remote 读取。
+
+        覆盖两种场景: ① CLI `python -m sync setup <url>` 已把 URL 存进 settings;
+        ② 仓库已 clone 但 settings 中 URL 为空/丢失 —— 直接从远端读出, 可立即同步。
+        """
+        url = ""
+        try:
+            from wyckoff.storage import load_settings
+
+            url = str(load_settings().get("calib_repo_url") or "").strip()
+        except Exception:
+            url = ""
+        if not url:
+            try:
+                from sync import transport as sync_transport
+
+                rdir = sync_transport.repo_dir()
+                p = sync_transport._run(["remote", "get-url", "origin"], cwd=rdir)
+                if sync_transport._ok(p) and p.stdout.strip():
+                    url = p.stdout.strip()
+            except Exception:
+                url = ""
+        if url:
+            self._sync_url_edit.setText(url)
 
     def _render_sync_status(self):
         """同步状态行: 上次同步摘要 (读 settings 缓存, 不触发网络)。"""
@@ -572,13 +614,18 @@ class CalibrationCenter(QDialog):
         if not url:
             QMessageBox.warning(self, "数据同步", "请先填写私有仓库地址。")
             return
+        user = self._sync_user_edit.text().strip()
+        password = self._sync_pass_edit.text()
         try:
             from sync import service as sync_service
 
-            sync_service.setup(url)
+            sync_service.setup(url, user, password)
         except Exception as e:
             QMessageBox.critical(self, "数据同步", f"clone 失败:\n{e}")
             return
+        # 凭据已落盘, 清空密码框避免明文滞留界面
+        if user:
+            self._sync_pass_edit.clear()
         self._render_sync_status()
 
     def _on_sync_now(self):
@@ -595,6 +642,18 @@ class CalibrationCenter(QDialog):
         if s.get("calib_repo_url") != url:
             s["calib_repo_url"] = url
             save_settings(s)
+        # 填了用户名/密码则一并写入凭据文件 (自动鉴权), 同步成功后清空密码框
+        user = self._sync_user_edit.text().strip()
+        password = self._sync_pass_edit.text()
+        if user:
+            try:
+                from sync import service as sync_service
+
+                sync_service.save_creds(url, user, password)
+                self._sync_pass_edit.clear()
+            except Exception as e:
+                QMessageBox.critical(self, "数据同步", f"凭据配置失败:\n{e}")
+                return
         btn = self._sync_btn
         btn.setEnabled(False)
         btn.setText("同步中...")

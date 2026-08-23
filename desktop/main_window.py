@@ -9,6 +9,7 @@
 import os
 import re
 import threading
+import time
 import traceback
 
 from PyQt6.QtCore import QEvent, QSize, Qt, QThread, QTimer, pyqtSignal
@@ -498,6 +499,21 @@ class _WatchScanThread(QThread):
         except Exception:
             msgs = []
         self.result.emit((ok, sig_by_code, rich, msgs))
+
+
+class _AutoSyncThread(QThread):
+    """后台校准数据同步: pull → merge → 有新增时重训 → push (git 传输在线程内)。"""
+    result = pyqtSignal(object)
+
+    def __init__(self, work, parent=None):
+        super().__init__(parent)
+        self._work = work
+
+    def run(self):
+        try:
+            self.result.emit(self._work())
+        except Exception as e:
+            self.result.emit({"error": str(e)})
 
 
 class _ScanMarketThread(QThread):
@@ -1555,6 +1571,7 @@ class MainWindow(QMainWindow):
             self._select_watch(self._current_code)
         self._refresh_watch_rt()
         self._schedule_accuracy_eval()
+        self._schedule_auto_sync()
 
     def _add_watch_item(self, code, name):
         from PyQt6.QtCore import QSize
@@ -2744,6 +2761,101 @@ class MainWindow(QMainWindow):
         self._refresh_watch_rt()
         self._schedule_auto_refresh()
 
+    # ── 校准数据自动同步 (变更后去抖) ──
+    def _schedule_auto_sync(self):
+        """周期检查校准数据是否有变更待同步 (auto_sync 开启时调度)。"""
+        self._cancel_auto_sync()
+        if not bool(self.settings.get("auto_sync", False)):
+            return
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._auto_sync_check)
+        timer.start(15 * 1000)
+        self._auto_sync_timer = timer
+
+    def _cancel_auto_sync(self):
+        t = getattr(self, "_auto_sync_timer", None)
+        if t is not None:
+            t.stop()
+        self._auto_sync_timer = None
+
+    def _auto_sync_check(self):
+        """满足条件则后台启动同步: 有待同步变更 + 去抖窗口已过 + 已配置仓库。"""
+        self._cancel_auto_sync()
+        try:
+            if not bool(self.settings.get("auto_sync", False)):
+                return
+            from sync import auto as sync_auto
+
+            if not sync_auto.pending():
+                self._schedule_auto_sync()
+                return
+            th = getattr(self, "_auto_sync_th", None)
+            if th is not None and th.isRunning():
+                self._schedule_auto_sync()
+                return
+            try:
+                debounce = max(15, int(self.settings.get("sync_debounce", 60)))
+            except (TypeError, ValueError):
+                debounce = 60
+            if time.time() - sync_auto.last_change_ts() < debounce:
+                self._schedule_auto_sync()
+                return
+            if not str(self.settings.get("calib_repo_url") or "").strip():
+                # 未配置仓库: 清掉待同步标记, 避免每 15s 空转 (配置后下一次变更会再触发)
+                sync_auto.reset()
+                self._schedule_auto_sync()
+                return
+        except Exception as e:
+            log_exc("自动同步调度失败", e)
+            self._schedule_auto_sync()
+            return
+
+        def _work():
+            from sync import service as sync_service
+
+            r = sync_service.sync()
+            try:
+                r["remote_info"] = sync_service.status()
+            except Exception:
+                pass
+            return r
+
+        th = _AutoSyncThread(_work, self)
+        th.result.connect(lambda res: self._on_auto_sync_done(th, res))
+        self._auto_sync_th = th
+        th.start()
+
+    def _on_auto_sync_done(self, th, result):
+        if getattr(self, "_auto_sync_th", None) is th:
+            self._auto_sync_th = None
+        try:
+            from sync.auto import reset as sync_auto_reset
+
+            sync_auto_reset()
+        except Exception:
+            pass
+        try:
+            if isinstance(result, dict) and result.get("ok"):
+                n_new = (int(result.get("signals_new", 0) or 0)
+                         + int(result.get("feedback_new", 0) or 0))
+                n_upd = (int(result.get("signals_upd", 0) or 0)
+                         + int(result.get("feedback_upd", 0) or 0))
+                msg = f"自动同步完成: 新增 {n_new}, 更新 {n_upd}"
+                if result.get("retrained"):
+                    msg += ", 已重训模型"
+                self.status_ticker.set_messages([(msg, theme.C_MUTED, "")])
+                # 校准中心已打开则刷新其模型/同步状态
+                win = getattr(self, "_ac_win", None)
+                if win is not None and win.isVisible():
+                    win.render_all()
+            elif isinstance(result, dict) and result.get("error"):
+                self.status_ticker.set_messages(
+                    [(f"自动同步失败: {result['error']}", theme.C_AMBER, "")])
+        except Exception as e:
+            log_exc("自动同步结果展示失败", e)
+        self._schedule_auto_sync()
+
     # ── 图表导出 ──
     def _export_current_fig(self):
         idx = self.tabs.currentIndex()
@@ -2842,6 +2954,7 @@ class MainWindow(QMainWindow):
         # 批量改数据/切页期间挂起懒渲染, end_update 统一渲总览+当前页
         win.begin_update()
         try:
+            win.refresh_sync_url()
             win.refresh_feedback(self._last_segs, self._last_symbol,
                                  self._last_datalen, self._last_scale,
                                  self._last_df)
@@ -3342,6 +3455,7 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
             self._apply_theme()
             self._apply_fonts()
             self._apply_chart_font()
+            self._schedule_auto_sync()
             self._status("设置已保存", theme.C_DOWN)
 
     def _apply_fonts(self):
@@ -3446,6 +3560,7 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         self._cancel_auto_refresh()
         self._cancel_accuracy_eval()
         self._cancel_auto_scan()
+        self._cancel_auto_sync()
         try:
             if hasattr(self, "status_ticker"):
                 self.status_ticker.clear()
@@ -3491,6 +3606,9 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         for t in list(st.values() if isinstance(st, dict) else (st or [])):
             if t is not None and hasattr(t, "isRunning") and t.isRunning():
                 t.wait(8000)
+        st = getattr(self, "_auto_sync_th", None)
+        if st is not None and st.isRunning():
+            st.wait(8000)
         for t in list(getattr(self, "_label_ai_threads", {}) or {}):
             if t is not None and t.isRunning():
                 t.wait(5000)

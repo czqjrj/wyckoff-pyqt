@@ -39,6 +39,20 @@ HORIZONS = (5, 10, 20, 40)
 _LOCK = threading.Lock()
 
 
+def _notify_sync_change(kind):
+    """同步通知: 校准数据落盘后置脏, 供 GUI 自动同步调度器消费。
+
+    延迟导入 sync.auto, 避免 wyckoff ↔ sync 循环导入 (sync.bundle 导入
+    wyckoff.storage); sync 包缺失/异常时静默忽略, 不影响核心落盘。
+    """
+    try:
+        from sync.auto import notify_change
+
+        notify_change(kind)
+    except Exception:
+        pass
+
+
 # ── 存取 ──
 def _key(rec):
     return f"{rec.get('symbol')}|{rec.get('scale')}|{rec.get('kind')}|{rec.get('type')}|{rec.get('date')}"
@@ -141,6 +155,7 @@ def save_signals(records):
         # 记录集可达数 MB, 紧凑序列化 (indent=None) 体积 -40%, 落盘更快
         atomic_write_json(SIGNAL_ACCURACY_FILE, records, indent=None)
         invalidate_win_rate_cache()
+        _notify_sync_change("signals")
     except Exception as e:
         from ._log import log_exc
         log_exc("save_signals 落盘失败", e)

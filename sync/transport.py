@@ -4,6 +4,10 @@ canonical 仓库布局 (见 docs/plan_multiuser_sync.md §2):
     signals.json / feedback.json / model.json / meta.json
 
 WYCKOFF_NO_NET=1 时所有网络操作静默跳过 (返回 skipped), 测试离线安全。
+
+HTTPS 自动鉴权: 凭据经 `save_https_creds` 写入本端 git credential store 文件
+(<DATA_DIR>/calib_creds, chmod 600), 每次 git 调用自动附加
+`-c credential.helper=store --file=<该文件>`; URL 本身保持干净, 不嵌入密码。
 """
 import os
 import subprocess
@@ -11,6 +15,7 @@ import subprocess
 from .merge import SCHEMA_VERSION
 
 REPO_DIRNAME = "calib_repo"
+CREDS_FILENAME = "calib_creds"
 CANONICAL_FILES = ("signals.json", "feedback.json", "model.json", "meta.json")
 
 
@@ -34,12 +39,58 @@ def repo_dir(data_dir=None):
     return os.path.join(data_dir, REPO_DIRNAME)
 
 
-def _run(args, cwd=None):
+def creds_path(data_dir=None):
+    """https 凭据 store 文件路径 (本端, 不随仓库 clone)。"""
+    if data_dir is None:
+        from wyckoff.paths import DATA_DIR
+
+        data_dir = DATA_DIR
+    return os.path.join(data_dir, CREDS_FILENAME)
+
+
+def url_host(url):
+    """从 https url 提取 host (用于凭据匹配); 非 https / 解析失败返回空串。"""
     try:
-        p = subprocess.run(
-            ["git", *args], cwd=cwd,
-            capture_output=True, text=True, timeout=120,
-        )
+        from urllib.parse import urlparse
+
+        netloc = urlparse(str(url)).netloc
+        return netloc.split("@")[-1].split(":")[0]
+    except Exception:
+        return ""
+
+
+def save_https_creds(username, password, host):
+    """写入 git credential store 条目, 使 https clone/push 自动鉴权。
+
+    文件权限 600; 内容格式 `https://user:pass@host` (store 助手约定)。
+    密码只落盘在本端凭据文件, 不进入 settings/URL/日志。
+    """
+    if not username or not password or not host:
+        raise SyncError("https 凭据需 username / password / host")
+    p = creds_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(f"https://{username}:{password}@{host}\n")
+    os.replace(tmp, p)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+    return p
+
+
+def _run(args, cwd=None):
+    git_cmd = ["git"]
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"  # 无凭据/凭据错误时快速失败, 绝不挂起等待输入
+    creds = creds_path()
+    if os.path.exists(creds):
+        git_cmd += ["-c", f"credential.helper=store --file={creds}"]
+    git_cmd += list(args)
+    try:
+        p = subprocess.run(git_cmd, cwd=cwd, env=env,
+                           capture_output=True, text=True, timeout=120)
     except FileNotFoundError as e:
         raise SyncError("未找到 git 可执行文件") from e
     except subprocess.TimeoutExpired as e:
@@ -64,10 +115,17 @@ def default_branch(repo):
 
 
 def fetch_repo(rdir):
-    """fetch 远端引用; 失败抛 SyncError。"""
+    """fetch 远端引用; 失败抛 SyncError。空远端 (尚无任何分支) 视为可空 fetch, 不报错。"""
     p = _run(["fetch", "origin", "--prune"], cwd=rdir)
-    if not _ok(p):
-        raise SyncError(f"git fetch 失败: {p.stderr.strip()}")
+    if _ok(p):
+        return
+    err = (p.stderr or "").strip()
+    # 空仓没有远端 HEAD 引用 (首推前 fetch/pull 常见), 属正常状态而非错误
+    if "HEAD" in err and any(k in err for k in ("无法发现远程 HEAD", "remote HEAD",
+                                                 "couldn't find remote ref HEAD",
+                                                 "cannot find remote ref")):
+        return
+    raise SyncError(f"git fetch 失败: {err}")
 
 
 def ensure_repo(url, rdir=None):

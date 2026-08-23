@@ -386,6 +386,9 @@ DEFAULT_SETTINGS = {
     "tts_max_chars": 3000,
     # 多用户校准数据同步 (私有 git 仓库, 空=未启用; 见 sync/ 包)
     "calib_repo_url": "",
+    # 校准数据变更后自动延迟同步 (去抖窗口, 秒; auto_sync 关闭则仅手动同步)
+    "auto_sync": False,
+    "sync_debounce": 60,
     # 界面主题: light=浅色 / dark=深色护眼
     "theme": "light",
     # 分析结论 / AI解读 面板文字字号 (pt)

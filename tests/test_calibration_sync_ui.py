@@ -105,3 +105,36 @@ def test_sync_setup_empty_url_warns(tmp_path, monkeypatch, app):
                         lambda *a, **k: called.setdefault("warned", True))
     dlg._on_sync_setup()
     assert called.get("warned")
+
+
+def test_sync_url_from_settings(tmp_path, monkeypatch, app):
+    """settings 已保存仓库 URL → 打开校准中心自动填入。"""
+    isolate(monkeypatch, tmp_path)
+    s = storage.load_settings()
+    s["calib_repo_url"] = "git@github.com:user/wyckoff-calib.git"
+    storage.save_settings(s)
+    dlg = CalibrationCenter()
+    assert dlg._sync_url_edit.text() == "git@github.com:user/wyckoff-calib.git"
+
+
+def test_sync_url_autofill_from_repo_remote(tmp_path, monkeypatch, app):
+    """settings 无 URL 但数据目录已有 clone 仓库 → 从 git remote 自动填充。"""
+    isolate(monkeypatch, tmp_path)
+    origin = str(tmp_path / "origin.git")
+    subprocess.run(["git", "init", "--bare", origin], check=True, capture_output=True)
+    rdir = os.path.join(str(tmp_path), "calib_repo")
+    subprocess.run(["git", "clone", origin, rdir], check=True, capture_output=True)
+    dlg = CalibrationCenter()
+    assert dlg._sync_url_edit.text() == origin
+
+
+def test_sync_url_refresh_picks_up_later_setup(tmp_path, monkeypatch, app):
+    """窗口已打开后再执行 setup → refresh_sync_url 能把地址补上。"""
+    isolate(monkeypatch, tmp_path)
+    dlg = CalibrationCenter()
+    assert dlg._sync_url_edit.text() == ""
+    s = storage.load_settings()
+    s["calib_repo_url"] = "git@github.com:user/wyckoff-calib.git"
+    storage.save_settings(s)
+    dlg.refresh_sync_url()
+    assert dlg._sync_url_edit.text() == "git@github.com:user/wyckoff-calib.git"

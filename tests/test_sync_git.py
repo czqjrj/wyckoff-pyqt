@@ -174,3 +174,73 @@ def test_cli_sync_without_url_fails():
     from sync.__main__ import main
 
     assert main(["sync"]) == 2  # SyncError → 退出码 2
+
+
+# ── https 自动鉴权 ──
+
+def test_save_https_creds_writes_600_store_file(tmp_path, monkeypatch):
+    """凭据写入 store 文件 (600 权限), URL/settings 保持干净不嵌密码。"""
+    d = str(tmp_path)
+    monkeypatch.setattr(paths, "DATA_DIR", d)
+    p = transport.save_https_creds("czqjrj", "s3cret", "github.com")
+    assert p == os.path.join(d, "calib_creds")
+    with open(p, encoding="utf-8") as f:
+        assert f.read().strip() == "https://czqjrj:s3cret@github.com"
+    assert os.stat(p).st_mode & 0o777 == 0o600
+    # settings 里只有干净 URL, 不含密码
+    storage.save_settings({"calib_repo_url": "https://github.com/u/r.git"})
+    assert "s3cret" not in json.dumps(storage.load_settings())
+
+
+def test_save_https_creds_requires_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "DATA_DIR", str(tmp_path))
+    with pytest.raises(transport.SyncError):
+        transport.save_https_creds("u", "p", "")
+
+
+def test_creds_injected_into_git_run(tmp_path, monkeypatch):
+    """creds 文件存在时 git 调用带 -c credential.helper=store。"""
+    monkeypatch.setattr(paths, "DATA_DIR", str(tmp_path))
+    transport.save_https_creds("u", "p", "github.com")
+    captured = {}
+
+    class _FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **kw):
+        captured["argv"] = argv
+        return _FakeProc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    transport._run(["fetch", "origin"])
+    assert captured["argv"][0] == "git"
+    assert captured["argv"][1] == "-c"
+    assert captured["argv"][2].startswith("credential.helper=store --file=")
+    assert str(tmp_path / "calib_creds") in captured["argv"][2]
+
+
+def test_setup_saves_creds_and_url(tmp_path, monkeypatch):
+    """service.setup 附带凭据时: creds 落盘 + URL 入 settings (WYCKOFF_NO_NET 下跳过 clone)。"""
+    monkeypatch.setenv("WYCKOFF_NO_NET", "1")
+    d = str(tmp_path)
+    monkeypatch.setattr(paths, "DATA_DIR", d)
+    monkeypatch.setattr(storage, "SETTINGS_FILE", os.path.join(d, "wyckoff_settings.json"))
+    r = service.setup("https://github.com/u/r.git", "czqjrj", "tok")
+    assert r["cloned"] is True
+    assert storage.load_settings()["calib_repo_url"] == "https://github.com/u/r.git"
+    with open(os.path.join(d, "calib_creds"), encoding="utf-8") as f:
+        assert f.read().strip() == "https://czqjrj:tok@github.com"
+
+
+def test_cli_setup_accepts_creds_args(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WYCKOFF_NO_NET", "1")
+    d = str(tmp_path)
+    monkeypatch.setattr(paths, "DATA_DIR", d)
+    monkeypatch.setattr(storage, "SETTINGS_FILE", os.path.join(d, "wyckoff_settings.json"))
+    from sync.__main__ import main
+
+    assert main(["setup", "https://github.com/u/r.git",
+                 "--user", "czqjrj", "--password", "tok"]) == 0
+    assert os.path.exists(os.path.join(d, "calib_creds"))

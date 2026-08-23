@@ -36,6 +36,8 @@ wx_alerts.json
 wx_vsa_thresholds.json
 # 多端同步本机身份 (uuid, 首次运行生成)
 wx_machine_id
+# https 自动鉴权凭据 (chmod 600, 含密码/token, 绝不入库)
+calib_creds
 # 同步私有仓克隆 (运行时由 sync 包管理)
 calib_repo/
 

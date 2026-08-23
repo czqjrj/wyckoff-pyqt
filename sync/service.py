@@ -29,11 +29,23 @@ def configured_url():
     return str(_settings().get("calib_repo_url") or "").strip()
 
 
-def setup(url):
-    """保存仓库 URL 并完成首次 clone。返回 status dict。"""
+def save_creds(url, username="", password=""):
+    """仅写入 https 凭据 (无网络操作); 供 UI 在同步前静默持久化。"""
+    if not username:
+        return False
+    host = transport.url_host(url)
+    if not host:
+        raise transport.SyncError("无法从 URL 解析 host (https 凭据需 https 地址)")
+    transport.save_https_creds(username, password, host)
+    return True
+
+
+def setup(url, username="", password=""):
+    """保存仓库 URL 并完成首次 clone。可附带 https 凭据实现自动鉴权。返回 status dict。"""
     url = str(url or "").strip()
     if not url:
         raise transport.SyncError("URL 为空")
+    save_creds(url, username, password)
     rdir, branch = transport.ensure_repo(url)
     s = _settings()
     s["calib_repo_url"] = url

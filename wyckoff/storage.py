@@ -147,8 +147,22 @@ def load_feedback():
 def save_feedback(records):
     try:
         atomic_write_json(FEEDBACK_FILE, records)
+        _notify_sync_change("feedback")
     except Exception as e:
         log_exc("保存阶段带反馈失败", e)
+
+
+def _notify_sync_change(kind):
+    """同步通知: 校准数据落盘后置脏 (见 wyckoff.signal_accuracy._notify_sync_change)。
+
+    延迟导入 sync.auto 避免 wyckoff ↔ sync 循环导入; 异常静默忽略。
+    """
+    try:
+        from sync.auto import notify_change
+
+        notify_change(kind)
+    except Exception:
+        pass
 
 
 # L5 阶段可信度: 按阶段类型统计标注判定正确率 (L1 收缩向全阶段基线回归)。

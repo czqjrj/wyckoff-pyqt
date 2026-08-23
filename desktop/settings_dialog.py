@@ -130,6 +130,22 @@ class SettingsDialog(QDialog):
         sl.addStretch(1)
         f.addRow("", srow)
 
+        self.cb_autosync = QCheckBox("校准数据变更后自动同步 (需先在校准中心配置同步仓库)")
+        self.cb_autosync.setChecked(bool(self._s.get("auto_sync", False)))
+        self.cb_autosync.toggled.connect(lambda on: self.sp_sync_debounce.setEnabled(on))
+        self.sp_sync_debounce = QSpinBox()
+        self.sp_sync_debounce.setRange(15, 3600)
+        self.sp_sync_debounce.setValue(int(self._s.get("sync_debounce", 60)))
+        self.sp_sync_debounce.setSuffix(" 秒")
+        self.sp_sync_debounce.setEnabled(self.cb_autosync.isChecked())
+        syncrow = QWidget()
+        syncl = QHBoxLayout(syncrow)
+        syncl.setContentsMargins(0, 0, 0, 0)
+        syncl.addWidget(self.cb_autosync)
+        syncl.addWidget(self.sp_sync_debounce)
+        syncl.addStretch(1)
+        f.addRow("", syncrow)
+
         g = QGroupBox("界面尺寸")
         gf = QFormLayout(g)
         self.sp_watch_w = QSpinBox()
@@ -360,6 +376,8 @@ class SettingsDialog(QDialog):
             "refresh_interval": self.sp_interval.value(),
             "auto_scan": self.cb_scan.isChecked(),
             "scan_interval": self.sp_scan.value(),
+            "auto_sync": self.cb_autosync.isChecked(),
+            "sync_debounce": self.sp_sync_debounce.value(),
             "confirm_enabled": self.cb_confirm.isChecked(),
             "watch_width": self.sp_watch_w.value(),
             "right_width": self.sp_right_w.value(),
