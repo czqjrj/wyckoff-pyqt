@@ -28,16 +28,30 @@ try:
 except Exception:  # pragma: no cover - 环境缺 sklearn 时降级为不可用
     SGDClassifier = None
 
-MODEL_VERSION = 1
-FEATURE_VERSION = 1
+MODEL_VERSION = 2
+FEATURE_VERSION = 2
 
 # 特征定义 (与 events.event_confidence 捕获的 feat 字段对齐)
+# v2 追加 L5 威科夫语境特征 (wyckoff/context.py enrich 落库):
+#   阶段 one-hot / 交易区间位置·年龄·宽度 / 因果长度 / 量能萎缩比 /
+#   RS 百分位 / 指数相位对齐 / 板块强度百分位 (预留)
 CONT_FEATURES = ["vr", "rw", "cpos", "trend", "pos60", "boll_pct",
-                 "bw_pct", "reson", "conf", "dir"]
+                 "bw_pct", "reson", "conf", "dir",
+                 "ph_acc", "ph_dis", "ph_mup", "ph_mkd",
+                 "tr_pos", "tr_age_n", "tr_wid_n",
+                 "base_len_n", "vol_shrink", "rs_pct", "idx_align", "sec_pct"]
 _EVENT_TYPES = tuple(dict.fromkeys(EVENT_COLORS.keys()))  # 与检测器全集一致 (含 PSY)
 TYPE_FEATURES = [f"type_{t}" for t in _EVENT_TYPES]
 FEATURES = CONT_FEATURES + TYPE_FEATURES
 _FEAT_INDEX = {f: i for i, f in enumerate(FEATURES)}
+
+# 缺失特征的中性填充 (boll_pct 中轨; 其余来自 context.SAFE_FILL)
+try:
+    from .context import SAFE_FILL as _CTX_SAFE_FILL, CONTEXT_FEAT_KEYS as _CTX_KEYS
+    _NEUTRAL_FILL = {"boll_pct": 0.5, **_CTX_SAFE_FILL}
+except Exception:  # pragma: no cover - context 不可用时退回 v1 行为
+    _NEUTRAL_FILL = {"boll_pct": 0.5}
+    _CTX_KEYS = ()
 
 # 接管 conf 的启用开关与门槛 (数据驱动门控)
 USE_MODEL_CONF = True
@@ -55,15 +69,13 @@ _MAX_ITER = 2000
 # ── 特征向量 ──
 
 def feature_vector(e) -> np.ndarray:
-    """把事件/记录 dict 映射为定长特征向量 (缺失特征以安全值填充)。"""
+    """把事件/记录 dict 映射为定长特征向量 (缺失特征以中性值填充)。"""
     x = np.zeros(len(FEATURES), dtype=float)
     f = e.get("feat") or e.get("features") or {}
     for i, name in enumerate(CONT_FEATURES):
         v = f.get(name)
-        if name == "boll_pct" and v is None:
-            v = 0.5  # 布林带缺失 → 中性位置
-        elif v is None or (isinstance(v, float) and not math.isfinite(v)):
-            v = 0.0  # 缺失/NaN (如序列头部 pos60 未满窗) → 安全值填充
+        if v is None or (isinstance(v, float) and not math.isfinite(v)):
+            v = _NEUTRAL_FILL.get(name, 0.0)  # 缺失/NaN → 中性安全值
         if name == "dir" and v == 0:
             v = event_dir(e.get("type", ""))
         x[i] = float(v)
@@ -120,6 +132,18 @@ def labeled_rows(records, horizon=MODEL_HORIZON):
     return out
 
 
+def _n_ctx_labeled(rows):
+    """带 L5 语境特征的已标注样本数 (校准中心展示语境覆盖度)。"""
+    if not _CTX_KEYS:
+        return 0
+    try:
+        return int(sum(
+            1 for r, _, _ in rows
+            if any(k in (r.get("features") or {}) for k in _CTX_KEYS)))
+    except Exception:
+        return 0
+
+
 def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
     """全量重训在线校准模型并保存状态。
 
@@ -135,6 +159,7 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
     if len(rows) < 5:
         state = _load_state()
         state["n_labels"] = len(rows)
+        state["n_ctx_labels"] = _n_ctx_labeled(rows)
         state["n_train"] = 0
         state["trained_at"] = time.time()
         state["ready"] = False
@@ -150,7 +175,8 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
     yt = np.array([1 if ret > 0 else 0 for _, ret, _ in train])
     if len(np.unique(yt)) < 2 or len(train) < 5:
         state = _load_state()
-        state.update({"n_labels": len(rows), "n_train": len(train),
+        state.update({"n_labels": len(rows), "n_ctx_labels": _n_ctx_labeled(rows),
+                      "n_train": len(train),
                       "n_oos": len(oos), "trained_at": time.time(),
                       "ready": False, "note": "训练集无正/负样本区分"})
         _save_state(state)
@@ -186,6 +212,7 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
         "horizon": horizon,
         "trained_at": time.time(),
         "n_labels": len(rows),
+        "n_ctx_labels": _n_ctx_labeled(rows),
         "n_train": len(train),
         "n_oos": len(oos),
         "auc_oos": round(float(auc_oos), 4) if auc_oos is not None else None,
@@ -194,6 +221,7 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
         "intercept": float(clf.intercept_[0]),
         "coef": [float(v) for v in coef],
         "ready": _ready(state_ready_check={
+            "feat_version": FEATURE_VERSION,
             "n_train": len(train), "n_oos": len(oos), "auc_oos": auc_oos}),
     }
     _save_state(state)
@@ -201,7 +229,12 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
 
 
 def _ready(state_ready_check):
-    """接管门槛判定 (与 apply_model_conf 一致)。"""
+    """接管门槛判定 (与 apply_model_conf 一致)。
+
+    额外要求状态文件的 feat_version 与当前代码一致: 特征集升级后旧模型
+    系数维度失配, 必须静默失效等待重训, 绝不能用旧系数配新特征向量。"""
+    if int(state_ready_check.get("feat_version", 0) or 0) != FEATURE_VERSION:
+        return False
     n_train = int(state_ready_check.get("n_train", 0))
     n_oos = int(state_ready_check.get("n_oos", 0))
     auc = state_ready_check.get("auc_oos")

@@ -16,6 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # 必须在导入 wyckoff.* 之前设置: paths.py 在 import 时读取该环境变量
 _TMP_DATA = tempfile.mkdtemp(prefix="wyckoff_test_data_")
 os.environ["WYCKOFF_DATA_DIR"] = _TMP_DATA
+# 语境特征 (context.enrich) 的指数拉取在测试环境一律离线降级, 防止慢网络拖垮全量回归
+os.environ["WYCKOFF_NO_NET"] = "1"
 
 import pytest
 

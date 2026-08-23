@@ -125,3 +125,34 @@ def test_train_takeover_conf_direction(tmp_path, monkeypatch):
     ev3 = {"type": "SOS", "conf": 3, "feat": _full_feat(2.5)}
     assert om.apply_model_conf([ev3]) == 0
     assert ev3["conf"] == 3
+
+def test_feature_vector_v2_context_fills():
+    """v2 语境特征: 缺失按中性填充, 存在则原样映射。"""
+    ev = {"type": "SOS", "conf": 70}
+    x = om.feature_vector(ev)
+    assert x.shape == (len(om.FEATURES),)
+    assert x[om._FEAT_INDEX["tr_pos"]] == 0.5
+    assert x[om._FEAT_INDEX["rs_pct"]] == 0.5
+    assert x[om._FEAT_INDEX["sec_pct"]] == 0.5
+    assert x[om._FEAT_INDEX["vol_shrink"]] == 0.25
+    assert x[om._FEAT_INDEX["idx_align"]] == 0.0
+    ev2 = {"type": "Spring", "conf": 70,
+           "feat": {"dir": 1, "ph_acc": 1.0, "tr_pos": 0.2}}
+    x2 = om.feature_vector(ev2)
+    assert x2[om._FEAT_INDEX["ph_acc"]] == 1.0
+    assert x2[om._FEAT_INDEX["tr_pos"]] == 0.2
+
+
+def test_stale_feat_version_blocks_takeover(tmp_path, monkeypatch):
+    """旧特征集版本的状态文件必须静默失效, 等待 v2 重训。"""
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m3.json"))
+    st = {"version": 1, "feat_version": 1, "features": ["legacy"],
+          "n_train": 500, "n_oos": 50, "auc_oos": 0.9,
+          "intercept": 0.1, "coef": [0.0] * len(om.FEATURES),
+          "trained_at": 0.0, "horizon": 20, "ready": True,
+          "n_labels": 550, "acc_oos": 0.7}
+    om._save_state(st)
+    ev = {"type": "SOS", "conf": 80, "feat": {"dir": 1}}
+    assert om.model_status()["ready"] is False
+    assert om.apply_model_conf([ev]) == 0
+    assert ev["conf"] == 80

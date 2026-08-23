@@ -192,21 +192,33 @@ def build_feedback_record(symbol, datalen, scale, df, a, e, key, label):
     """把一个阶段带存为可校准的标注记录, 附带用于调阈值的特征。
 
     记录带起始/结束时间 (start_dt/end_dt), 用于跨 datalen 窗口关联标注。
+    特征对四类阶段带统一落库: lo1/lo2 (前后半段最低) + hi1/hi2 (前后半段
+    最高) 及派生比值 low_defense/high_cap —— 此前只给吸筹/派发写特征,
+    markup/markdown 与过短段全为空, 导致校准样本大量缺特征无法训练。
     """
     cl = df["close"].values
     lo = df["low"].values
     hi = df["high"].values
     net = float(cl[e] / cl[a] - 1) if cl[a] else 0.0
-    mid = (a + e) // 2
+    mid = max(a + 1, (a + e) // 2)
     feat = {}
-    if key == "accumulation" and mid < e:
-        feat["lo1"] = float(lo[a:mid + 1].min())
-        feat["lo2"] = float(lo[mid + 1:e + 1].min())
-        feat["low_defense"] = round(feat["lo2"] / feat["lo1"], 4) if feat["lo1"] else 1.0
-    elif key == "distribution" and mid < e:
-        feat["hi1"] = float(hi[a:mid + 1].max())
-        feat["hi2"] = float(hi[mid + 1:e + 1].max())
-        feat["high_cap"] = round(feat["hi2"] / feat["hi1"], 4) if feat["hi1"] else 1.0
+    try:
+        if e <= a:  # 单根段: 前后半段同为该根
+            feat["lo1"] = feat["lo2"] = round(float(lo[a]), 4)
+            feat["hi1"] = feat["hi2"] = round(float(hi[a]), 4)
+        else:
+            feat["lo1"] = float(lo[a:mid + 1].min())
+            feat["lo2"] = float(lo[mid + 1:e + 1].min()) if mid < e else float(lo[e])
+            feat["hi1"] = float(hi[a:mid + 1].max())
+            feat["hi2"] = float(hi[mid + 1:e + 1].max()) if mid < e else float(hi[e])
+            for k in ("lo1", "lo2", "hi1", "hi2"):
+                feat[k] = round(feat[k], 4)
+        if feat.get("lo1"):
+            feat["low_defense"] = round(feat["lo2"] / feat["lo1"], 4)
+        if feat.get("hi1"):
+            feat["high_cap"] = round(feat["hi2"] / feat["hi1"], 4)
+    except Exception:
+        feat = {}
     return {
         "symbol": symbol,
         "datalen": datalen,

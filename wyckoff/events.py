@@ -526,6 +526,11 @@ def detect_all(df: pd.DataFrame, pivots):
     scored = event_confidence(ctx, merged)
     _apply_empirical_calibration(scored)
     try:
+        from .context import enrich
+        enrich(df, pivots, scored)
+    except Exception:
+        pass
+    try:
         from .online_model import apply_model_conf
         apply_model_conf(scored)
     except Exception:

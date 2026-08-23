@@ -526,6 +526,16 @@ class CalibrationCenter(QDialog):
             self._model_cards["gate"][1].setText(
                 f"混合权重 {st.get('blend', 0) * 100:.0f}% · "
                 f"训练于 {_time.strftime('%Y-%m-%d %H:%M', _time.localtime(st.get('trained_at', 0)))}")
+        # L5 语境特征覆盖度 + 特征集版本过期提示
+        from wyckoff.online_model import FEATURE_VERSION as _CUR_FV
+        n_ctx = int(st.get("n_ctx_labels", 0) or 0)
+        if n_ctx:
+            self._model_cards["labels"][1].setText(
+                f"其中 {n_ctx} 条带 L5 语境特征")
+        fv = int(st.get("feat_version", 0) or 0)
+        if fv and fv != _CUR_FV and not ready:
+            self._model_cards["gate"][1].setText(
+                f"特征集 v{fv} 已过时 (当前 v{_CUR_FV}) — 请重新训练")
 
         # 系数表
         _clear(self._model_coef_lay)
