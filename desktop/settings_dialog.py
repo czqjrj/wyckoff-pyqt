@@ -8,10 +8,12 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFontComboBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -29,15 +31,15 @@ class SettingsDialog(QDialog):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
-        self.setMinimumSize(520, 420)
+        self.setMinimumSize(560, 500)
         self._s = dict(settings)
 
         tabs = QTabWidget(self)
-        tabs.addTab(self._tab_general(), "基本")
-        tabs.addTab(self._tab_chart(), "图表")
-        tabs.addTab(self._tab_backtest(), "回测与风控")
-        tabs.addTab(self._tab_ai(), "AI")
-        tabs.addTab(self._tab_tts(), "语音播报")
+        tabs.addTab(self._wrap_scroll(self._tab_general()), "基本")
+        tabs.addTab(self._wrap_scroll(self._tab_chart()), "图表")
+        tabs.addTab(self._wrap_scroll(self._tab_backtest()), "回测与风控")
+        tabs.addTab(self._wrap_scroll(self._tab_ai()), "AI")
+        tabs.addTab(self._wrap_scroll(self._tab_tts()), "语音播报")
         # 已有 Key 但开关未开 (如旧版本只填了 Key) → 打开设置即自动补齐开关,
         # 避免"填了 Key 却报 AI 不可用"的困惑; 用户仍可手动取消。
         if (self._s.get("ai_api_key") or "").strip():
@@ -53,6 +55,21 @@ class SettingsDialog(QDialog):
         lay.addWidget(tabs)
         lay.addWidget(btns)
         self._collect_tabs(tabs)
+
+    def _wrap_scroll(self, w):
+        """将 tab 页包进可滚动区, 内容较多时 (如『基本』) 不会被裁剪。
+
+        滚动区/视图与内容容器设为透明, 透出主题底色, 避免默认白色视口破坏主题。
+        """
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QFrame.Shape.NoFrame)
+        sa.setStyleSheet(
+            "QScrollArea, QAbstractScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+        sa.setWidget(w)
+        return sa
 
     def _collect_tabs(self, tabs):
         self._pages = []

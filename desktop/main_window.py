@@ -1090,10 +1090,19 @@ class MainWindow(QMainWindow):
         self.tab_screener = QWidget()
         self._build_screener_tab()
         self.tabs.addTab(self.tab_screener, "综合选股")
+
+        # 校准中心: 内嵌 Tab, 固定在「综合选股」之后 (懒渲染, 首次显示才渲)
+        self._ac_win = CalibrationCenter(None, settings=self.settings)
+        self.tabs.addTab(self._ac_win, "校准中心")
+
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self._on_tab_close)
-        for i in range(self.tabs.count() - 1):
-            self.tabs.tabBar().setTabButton(i, QTabBar.ButtonPosition.RightSide, None)
+        scr_idx = self.tabs.indexOf(self.tab_screener)
+        ac_idx = self.tabs.indexOf(self._ac_win)
+        for i in range(self.tabs.count()):
+            if i not in (scr_idx, ac_idx):
+                self.tabs.tabBar().setTabButton(
+                    i, QTabBar.ButtonPosition.RightSide, None)
 
         # 右面板
         self._section_htmls = []
@@ -2948,12 +2957,21 @@ class MainWindow(QMainWindow):
 
     # ── 校准中心 ──
     def open_accuracy_center(self, select=0):
-        if getattr(self, "_ac_win", None) is None:
-            self._ac_win = CalibrationCenter(self, settings=self.settings)
-        win = self._ac_win
+        """切换到主窗口内嵌的校准中心 Tab (select 为其内部页索引)。"""
+        win = getattr(self, "_ac_win", None)
+        if win is None:  # 兜底: 重建场景下重新挂载
+            win = CalibrationCenter(None, settings=self.settings)
+            self._ac_win = win
+        idx = self.tabs.indexOf(win)
+        if idx < 0:
+            anchor = self.tabs.indexOf(self.tab_screener) if self.tab_screener else -1
+            idx = self.tabs.insertTab(anchor + 1, win, "校准中心")
+            self.tabs.tabBar().setTabButton(
+                idx, QTabBar.ButtonPosition.RightSide, None)
         # 批量改数据/切页期间挂起懒渲染, end_update 统一渲总览+当前页
         win.begin_update()
         try:
+            self.tabs.setCurrentIndex(idx)
             win.refresh_sync_url()
             win.refresh_feedback(self._last_segs, self._last_symbol,
                                  self._last_datalen, self._last_scale,
@@ -2961,9 +2979,6 @@ class MainWindow(QMainWindow):
             win.tabs.setCurrentIndex(max(0, min(5, int(select))))
         finally:
             win.end_update()
-        win.show()
-        win.raise_()
-        win.activateWindow()
 
     def _refresh_accuracy_window(self):
         win = getattr(self, "_ac_win", None)
@@ -3058,6 +3073,11 @@ class MainWindow(QMainWindow):
             self.tab_screener.deleteLater()
             self.tab_screener = None
             self.screener_widget = None  # 已销毁, 防主题切换时访问野指针
+        elif self._ac_win is not None and widget is self._ac_win:
+            # 关闭校准中心 Tab: 销毁并置空, 下次 Ctrl+Shift+A 重新挂载
+            self.tabs.removeTab(index)
+            widget.deleteLater()
+            self._ac_win = None
 
     # ── 批量扫描 ──
     def scan_watchlist(self):
@@ -3499,6 +3519,13 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
                 sw.apply_theme()
         except Exception:
             pass
+        # 校准中心 Tab 随主题重刷 (深色护眼/浅色)
+        try:
+            ac = getattr(self, "_ac_win", None)
+            if ac is not None:
+                ac.apply_theme()
+        except Exception:
+            pass
         # 批量更新: 4图表重渲染 + 主题刷新合并为一次重绘
         self.setUpdatesEnabled(False)
         try:
@@ -3674,6 +3701,9 @@ def main():
     qInstallMessageHandler(_qt_msg_handler)
     app = QApplication(sys.argv)
     app.setApplicationName("WyckoffClient")
+    # Windows 原生样式 (windowsvista/windows11) 不遵循 QSS 绘制滚动条, 深色护眼
+    # 下会露出白色系统滚动条; 强制 Fusion 样式以完整响应 QSS 换肤。
+    app.setStyle("Fusion")
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

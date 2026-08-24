@@ -13,7 +13,6 @@ import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -182,14 +181,16 @@ def _card_sub(text):
     return lb
 
 
-class CalibrationCenter(QDialog):
-    """校准中心: 分层校准 (L1 收缩 / L2 OOS / L4 模型) 的观测与操作入口。"""
+class CalibrationCenter(QWidget):
+    """校准中心: 分层校准 (L1 收缩 / L2 OOS / L4 模型) 的观测与操作入口。
+
+    作为主窗口的嵌入式 Tab (紧跟「综合选股」), 不再是独立对话框。
+    """
 
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
-        self.setWindowTitle("校准中心")
-        self.resize(1200, 780)
-        self.setMinimumSize(900, 560)
+        self.setMinimumSize(680, 420)
+        self._rendered_once = False
         self._settings = settings or {}
         self._fb_bands = []
         self._last_segs = None
@@ -208,26 +209,8 @@ class CalibrationCenter(QDialog):
         self._dirty_tabs = set()
         self._lazy_paused = False
 
-        # 全局样式: 统一铺底色, 消除白色空隙
-        _bg = theme.C_BG
-        _panel = theme.C_PANEL
-        _border = theme.C_BORDER
-        _btn_bg = theme.C.get("btn", _panel)
-        _btn_hv = theme.C.get("btn_hover", _btn_bg)
-        self.setStyleSheet(f"""
-            CalibrationCenter {{ background:{_bg}; }}
-            QScrollArea {{ background:{_bg}; border:none; }}
-            QScrollArea > QWidget > QWidget {{ background:{_bg}; }}
-            QSplitter::handle {{ background:{_border}; height:3px; }}
-            QTabWidget::pane {{ border:1px solid {_border}; background:{_bg}; }}
-            QComboBox {{ background:{_panel}; border:1px solid {_border};
-                         border-radius:3px; padding:2px 6px; }}
-            QPushButton {{ background:{_btn_bg}; border:1px solid {_border};
-                           border-radius:4px; padding:4px 10px; }}
-            QPushButton:hover {{ background:{_btn_hv}; }}
-            QFrame#row {{ background:{_panel}; border:1px solid {_border};
-                          border-radius:4px; }}
-        """)
+        # 全局样式: 统一铺底色, 消除白色空隙 (随主题重建, 见 apply_theme)
+        self.setStyleSheet(self._build_stylesheet())
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
@@ -239,12 +222,14 @@ class CalibrationCenter(QDialog):
         strip = QLabel()
         strip.setFixedSize(5, 20)
         strip.setStyleSheet(f"background:{theme.C_ACCENT};border-radius:2px;")
+        self._head_strip = strip  # 主题切换时重刷 (accent 两套不同)
         head.addWidget(strip)
         t = QLabel("校准中心")
         t.setStyleSheet("font-weight:bold;font-size:14pt;")
         head.addWidget(t)
         t2 = QLabel("分层校准  ·  L1 贝叶斯收缩  ·  L4 在线模型  ·  每日自动收集  ·  定期提醒校准")
         t2.setStyleSheet(f"color:{theme.C_MUTED};font-size:10pt;")
+        self._head_sub = t2
         head.addWidget(t2)
         head.addStretch(1)
         btn_eval = QPushButton("⚡ 立即评估")
@@ -280,6 +265,61 @@ class CalibrationCenter(QDialog):
         self.tabs.setCurrentIndex(0)  # 默认落在模型校准 (校准中心旗舰页)
         self._dirty_tabs = set(range(self.tabs.count()))
         self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def showEvent(self, event):
+        """首次作为 Tab 显示时渲染 (懒加载; begin_update 期间挂起)。"""
+        super().showEvent(event)
+        if not self._rendered_once and not self._lazy_paused:
+            self.render_all()
+
+    def _build_stylesheet(self):
+        """按当前主题生成全局样式表 (构造与 apply_theme 时重建)。"""
+        _bg = theme.C_BG
+        _panel = theme.C_PANEL
+        _border = theme.C_BORDER
+        _btn_bg = theme.C.get("btn", _panel)
+        _btn_hv = theme.C.get("btn_hover", _btn_bg)
+        return f"""
+            CalibrationCenter {{ background:{_bg}; }}
+            QScrollArea {{ background:{_bg}; border:none; }}
+            QScrollArea > QWidget > QWidget {{ background:{_bg}; }}
+            QSplitter::handle {{ background:{_border}; height:3px; }}
+            QTabWidget::pane {{ border:1px solid {_border}; background:{_bg}; }}
+            QComboBox {{ background:{_panel}; border:1px solid {_border};
+                         border-radius:3px; padding:2px 6px; }}
+            QPushButton {{ background:{_btn_bg}; border:1px solid {_border};
+                           border-radius:4px; padding:4px 10px; }}
+            QPushButton:hover {{ background:{_btn_hv}; }}
+            QFrame#row {{ background:{_panel}; border:1px solid {_border};
+                          border-radius:4px; }}
+        """
+
+    def _retheme_charts(self):
+        """重刷 4 个 pyqtgraph 图表背景 (构造期烧入的配色在主题切换后会残留)。"""
+        for name in ("acc_chart", "sig_chart",
+                     "pnf_chart_tiers", "pnf_chart_calib"):
+            chart = getattr(self, name, None)
+            if chart is None:
+                continue
+            try:
+                chart.setBackground(theme.C_BG)
+                chart.getViewBox().setBackgroundColor(pg.mkColor(theme.C_BG))
+            except Exception:
+                pass
+
+    def apply_theme(self):
+        """主题切换后重建本 Tab 样式并重渲染 (深色护眼/浅色互换)。"""
+        self.setStyleSheet(self._build_stylesheet())
+        try:
+            self._head_strip.setStyleSheet(
+                f"background:{theme.C_ACCENT};border-radius:2px;")
+            self._head_sub.setStyleSheet(
+                f"color:{theme.C_MUTED};font-size:10pt;")
+        except Exception:
+            pass
+        self._retheme_charts()
+        if self._rendered_once:
+            self.render_all()
 
     # ══════════════════════════════════════════════════════════════════
     #  缓存读取 (mtime 失效, 单次渲染流程共享一份数据)
@@ -2160,6 +2200,7 @@ class CalibrationCenter(QDialog):
         全量渲染 6 个 tab 在主线程要数秒 (验证统计 ~2s + 上万控件重建),
         懒加载后打开窗口只付当前页成本。
         """
+        self._rendered_once = True
         self._render_overview()
         cur = self.tabs.currentIndex()
         self._dirty_tabs = set(range(self.tabs.count())) - {cur}
