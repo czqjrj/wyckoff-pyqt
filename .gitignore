@@ -35,3 +35,31 @@ debian/
 /*.tar.gz
 # GIMP 源文件 (图标工作稿, 只提交导出的 png)
 *.xcf
+
+# ── 根目录一次性调试/修复脚本 (非应用源码, 勿入库) ──
+/check_*.py
+/fix_*.py
+/add_*.py
+/apply_*.py
+/clear_*.py
+/extract_*.py
+/find_*.py
+/rebuild_*.py
+/repair_*.py
+/modify_*.py
+/debug_*.py
+/analyze_structure.py
+/test_*.py
+/compile_*.bat
+/run_iscc.cmd
+/_commit_docs.bat
+/*.iss
+/*.nsi
+/*.txt
+/wyckoff_*.png
+/calib_repo/
+
+# ── 运行时用户数据/状态 (勿入库) ──
+/wx_*.json
+/wx_machine_id
+/wyckoff_watchlist.json
