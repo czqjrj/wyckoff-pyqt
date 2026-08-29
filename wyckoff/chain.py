@@ -93,12 +93,10 @@ def board_strength():
             return c[1]
     names = []
     for pn in range(1, 7):
-        r = _em_get("/api/qt/clist/get",
-                    {"pn": str(pn), "pz": "100", "po": "1", "np": "1",
-                    "fltt": "2", "invt": "2", "fid": "f62",
-                    "fs": "m:90+t:2", "fields": "f12,f14,f3,f62"},
-                   {"User-Agent": "Mozilla/5.0",
-                    "Referer": "https://quote.eastmoney.com/"})
+        from .fundamental import _EM_UT, _clist_get
+        r = _clist_get({"pn": str(pn), "pz": "100", "po": "1", "np": "1",
+                        "fltt": "2", "invt": "2", "ut": _EM_UT, "fid": "f62",
+                        "fs": "m:90+t:2", "fields": "f12,f14,f3,f62"})
         if r is None:
             break
         try:

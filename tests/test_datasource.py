@@ -179,6 +179,142 @@ def test_source_health_tracking():
     assert datasource.source_health() == {}
 
 
+def test_fetch_board_constituents_strips_quoteid_prefix(monkeypatch):
+    """成份股获取: board_bk_code 返回的 "90.BKxxxx" QuoteID 前缀 (用于 fflow
+    secid) 不适用于 clist 的 fs=b: 过滤, 必须剥成裸 BK 码, 否则东财返回空 →
+    产业链面板"成份股获取失败"。"""
+    from wyckoff import fundamental
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=4, retries=1,
+                 cache_fail=True):
+        seen["fs"] = params.get("fs")
+        payload = {"data": {"diff": [
+            {"f12": "600104", "f14": "上汽集团", "f2": 15.5, "f3": 1.2},
+            {"f12": "002594", "f14": "比亚迪", "f2": 245.0, "f3": -0.5},
+        ]}}
+        r = type("Resp", (), {})()
+        r.json = lambda: payload
+        return r
+
+    monkeypatch.setattr(fundamental, "_get", fake_get)
+    fundamental._BOARD_CACHE.clear()
+
+    rows = fundamental.fetch_board_constituents("90.BK1262", limit=10)
+    assert seen["fs"] == "b:BK1262"          # 前缀已剥掉, fs 过滤有效
+    assert rows == [("sh600104", "上汽集团", 15.5),
+                    ("sz002594", "比亚迪", 245.0)]
+    # 裸 BK 码也兼容
+    fundamental.fetch_board_constituents("BK1262", limit=10)
+    assert seen["fs"] == "b:BK1262"
+    # 非 BK 输入直接短路归 []
+    assert fundamental.fetch_board_constituents(None) == []
+    fundamental._BOARD_CACHE.clear()
+
+
+def test_fetch_board_constituents_akshare_fallback(monkeypatch):
+    """东财裸 clist 失败时, 走 akshare 东财成分股接口 (stock_board_industry_cons_em,
+    按 BK 码) 兜底, 保证产业链面板在推不上东财 push2 时仍能加载成份股。"""
+    from wyckoff import fundamental
+
+    monkeypatch.setattr(fundamental, "_get", lambda *a, **k: None)  # 东财不可达
+    # 板块名→BK码映射可正常解析 (来源如 akshare stock_board_industry_name_em)
+    monkeypatch.setattr(fundamental, "_load_board_map",
+                        lambda: {"汽车零部件": "BK1262"})
+    fundamental._BOARD_CACHE.clear()
+
+    fake_df = pd.DataFrame({
+        "代码": ["600104", "002594"],
+        "名称": ["上汽集团", "比亚迪"],
+        "最新价": [15.5, 245.0],
+    })
+
+    class _FakeAk:
+        def stock_board_industry_cons_em(self, symbol):
+            assert symbol == "BK1262"
+            return fake_df
+
+    monkeypatch.setitem(sys.modules, "akshare", _FakeAk())
+
+    # 只有板块名 (bk=None): 经映射表补 BK 码后走 akshare
+    rows = fundamental.fetch_board_constituents(None, limit=10, name="汽车零部件")
+    assert rows == [("sh600104", "上汽集团", 15.5),
+                    ("sz002594", "比亚迪", 245.0)]
+    # akshare 缺失/异常时优雅降级
+    fundamental._BOARD_CACHE.clear()
+    monkeypatch.setitem(sys.modules, "akshare", None)
+    rows = fundamental.fetch_board_constituents(None, limit=10, name="汽车零部件")
+    assert rows == []
+    fundamental._BOARD_CACHE.clear()
+
+
+def test_board_map_request_sends_ut_token(monkeypatch):
+    """板块名→BK码映射请求必须带 ut 令牌 + Accept: application/json。
+
+    东财 clist 缺 ut 会回 rc:102, data:null → 映射表被写成空 {} → 产业链成分股
+    拿不到 BK 码 (成分股列表为空)。映射表是成分股链路的根, 必须锁定该参数。"""
+    import os as _os
+    import tempfile
+
+    from wyckoff import fundamental
+    fundamental.BOARD_MAP_FILE = _os.path.join(
+        tempfile.mkdtemp(), "test_board_map.json")  # 避免污染真实映射文件
+    seen = {}
+
+    def fake_get(url, params=None, headers=None, timeout=4, retries=1,
+                 cache_fail=True):
+        seen["params"] = params
+        seen["headers"] = headers or {}
+        payload = {"data": {"diff": [
+            {"f12": "BK1262", "f14": "汽车零部件"},
+            {"f12": "BK1036", "f14": "电池"},
+        ]}}
+        r = type("Resp", (), {})()
+        r.json = lambda: payload
+        return r
+
+    monkeypatch.setattr(fundamental, "_get", fake_get)
+    fundamental._BOARD_CACHE.clear()
+
+    bmap = fundamental._load_board_map()
+    assert bmap == {"汽车零部件": "BK1262", "电池": "BK1036"}
+    assert seen["params"].get("ut") == fundamental._EM_UT
+    assert (seen["headers"].get("Accept") or "").lower() == "application/json"
+    fundamental._BOARD_CACHE.clear()
+
+
+def test_board_map_built_via_akshare_when_em_fails(monkeypatch):
+    """东财裸 clist 返回空 (rc:102) 时, 用 akshare stock_board_industry_name_em
+    重建"板块名→BK码"映射表, 否则产业链成分股拿不到 BK 码。"""
+    import os as _os
+    import tempfile
+
+    from wyckoff import fundamental
+    fundamental.BOARD_MAP_FILE = _os.path.join(
+        tempfile.mkdtemp(), "test_board_map_ak.json")
+    monkeypatch.setattr(fundamental, "_get", lambda *a, **k: None)  # 东财不可达
+    fundamental._BOARD_CACHE.clear()
+
+    class _FakeAk:
+        def stock_board_industry_name_em(self):
+            return pd.DataFrame({
+                "板块名称": ["汽车零部件", "电池", "白酒Ⅱ"],
+                "板块代码": ["BK1262", "BK1036", "BK0489"],
+            })
+
+    monkeypatch.setitem(sys.modules, "akshare", _FakeAk())
+
+    bmap = fundamental._load_board_map()
+    assert bmap == {"汽车零部件": "BK1262", "电池": "BK1036", "白酒Ⅱ": "BK0489"}
+    # akshare 缺失时优雅降级为空 (换新磁盘文件, 避免读到上次落盘的映射)
+    fundamental._BOARD_CACHE.clear()
+    fundamental.BOARD_MAP_FILE = _os.path.join(
+        tempfile.mkdtemp(), "test_board_map_ak2.json")
+    monkeypatch.setitem(sys.modules, "akshare", None)
+    assert fundamental._load_board_map() == {}
+    fundamental._BOARD_CACHE.clear()
+
+
 def test_fetch_kline_records_source_health(monkeypatch):
     """fetch_kline 成功/失败都要记录源健康度。"""
     datasource.reset_source_health()

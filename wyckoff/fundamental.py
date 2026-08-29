@@ -17,6 +17,40 @@ import pandas as pd
 from ._shared import atomic_write_json, http_session
 from .paths import ALL_STOCKS_FILE, BOARD_MAP_FILE
 
+# 东财 push2 clist 必需参数/头: 缺少 ut 或 Accept: application/json 时, 东财会
+# 拒绝请求并返回 rc:102, data:null (次生: 板块码映射表被写成空 {} → 产业链成分股
+# 拿不到 BK 码)。ut 为东财公开行情列表校验令牌, 与 pinyin 全市场索引同源。
+_EM_UT = "bd1d9ddb04089700cf9c27f6f7426281"
+_EM_CLIST_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://quote.eastmoney.com/",
+    "Accept": "application/json",
+}
+# 东财行情列表主机 (按顺序回退): 某些网络会屏蔽 push2 而放行 push2delay,
+# 与 pinyin 全市场索引同源策略。任一主机拿不到即试下一个。
+_EM_CLIST_URLS = (
+    "https://push2.eastmoney.com/api/qt/clist/get",
+    "https://push2delay.eastmoney.com/api/qt/clist/get",
+)
+
+
+def _clist_get(params, timeout=4, retries=1):
+    """东财行情列表请求: 依次尝试多个主机, 任一成功 (HTTP 200 且有 data) 即返回。
+    全部失败返回 None。"""
+    for url in _EM_CLIST_URLS:
+        r = _get(url, params, _EM_CLIST_HEADERS, timeout=timeout, retries=retries)
+        if r is None:
+            continue
+        try:
+            data = r.json().get("data") or {}
+            diff = data.get("diff") or []
+        except (ValueError, KeyError):
+            continue
+        if not diff:
+            continue
+        return r
+    return None
+
 _FUND_CACHE = {}
 _FUND_TTL = 900  # 基本面 15分钟
 _FLOW_CACHE = {}
@@ -285,11 +319,9 @@ def _load_board_map():
         pass
     bmap = {}
     for pn in range(1, 7):
-        r = _get("https://push2.eastmoney.com/api/qt/clist/get",
-                 {"pn": str(pn), "pz": "100", "po": "1", "np": "1",
-                  "fltt": "2", "invt": "2", "fid": "f62",
-                  "fs": "m:90+t:2", "fields": "f12,f14"},
-                 {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"})
+        r = _clist_get({"pn": str(pn), "pz": "100", "po": "1", "np": "1",
+                        "fltt": "2", "invt": "2", "ut": _EM_UT, "fid": "f62",
+                        "fs": "m:90+t:2", "fields": "f12,f14"})
         if r is None:
             break
         try:
@@ -303,6 +335,9 @@ def _load_board_map():
                 bmap[b["f14"]] = b["f12"]
         if len(diff) < 100:
             break
+    # 东财裸 clist 拿不到 (rc:102/data:null) → akshare 东财板块名单兜底构建映射表
+    if not bmap:
+        bmap = _board_map_via_akshare()
     try:
         atomic_write_json(BOARD_MAP_FILE, bmap)
     except Exception:
@@ -310,6 +345,38 @@ def _load_board_map():
     with _LOCK:
         _BOARD_CACHE["__map__"] = (time.time(), bmap)
     return bmap
+
+
+def _board_map_via_akshare():
+    """用 akshare 东财行业板块名单重建"板块名→BK码"映射 (兜底)。
+
+    东财裸 clist 请求 (push2) 在某些网络/环境会回 rc:102, data:null, 导致
+    映射表被写成空 {} → 产业链成分股拿不到 BK 码。akshare 内部请求方式已验证
+    可用, 作为映射表兜底。返回 {板块名: BK代码}; akshare 缺失/异常返回 {}。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_board_industry_name_em()
+    except Exception:
+        return {}
+    if df is None or len(df) == 0:
+        return {}
+    bmap = {}
+    for _, row in df.iterrows():
+        name = (_str(row.get("板块名称") or row.get("板块") or "")
+                or _str(row.get("行业名称") or ""))
+        code = (_str(row.get("板块代码") or "")
+                or _str(row.get("代码") or ""))
+        if name and code.startswith("BK"):
+            bmap[name] = code
+    return bmap
+
+
+def _str(v):
+    if v is None:
+        return ""
+    v = str(v).strip()
+    return "" if v.lower() == "nan" else v
 
 
 def _suggest_board(name: str):
@@ -397,12 +464,56 @@ def fetch_board_flow_by_code(bk_code: str):
     return out
 
 
-def fetch_board_constituents(bk_code: str, limit: int = 80):
+def fetch_board_constituents(bk_code: str, limit: int = 80, name: str = ""):
     """获取板块 BK代码 的成份股列表, 按成交额降序取前 limit 只。
-    返回 [(代码, 名称, 最新价), ...] 或 []。东财 push2 clist, fs=b:BKxxxx。
-    缓存 30 分钟 (板块成份股变动极慢)。"""
+    返回 [(代码, 名称, 最新价), ...] 或 []。
+
+    数据源 (按可用性降序):
+    1. 东财 push2 clist, fs=b:BKxxxx (主源, 快速)。
+    2. akshare 东财兜底 stock_board_industry_cons_em (需 BK 码; 当东财裸请求
+       被拒 rc:102 或用 name 反查映射表补齐 BK 码后使用)。
+    缓存 30 分钟 (板块成份股变动极慢)。
+
+    东财 bk_code 兼容两种形态:
+    - 裸代码 "BK1262"
+    - 东财 QuoteID "90.BK1262" (board_bk_code/_suggest_board 返回的 secid 前缀
+      仅用于 fflow 的 secid 参数, 不适用于 clist 的 fs=b: 过滤, 需剥掉 NN. 前缀)。
+    name 可选: 东财失败时用板块名经映射表补 BK 码 (akshare 兜底需要 BK 码)。
+    """
+    bk_variants = _em_bk_variants(bk_code)
+    # 若只有板块名 (bk 缺失/为空), 先尝试用映射表补 BK 码
+    if not bk_variants and name:
+        resolved = _load_board_map().get(name)
+        if resolved:
+            bk_variants = [resolved]
+    for candidate in bk_variants:
+        if not candidate:
+            continue
+        stocks = _fetch_constituents_em(candidate, limit)
+        if stocks:
+            return stocks
+    # 东财裸请求失败 → akshare 东财成分股接口兜底 (仅当安装 akshare; 需 BK 码)
+    for candidate in bk_variants:
+        stocks = _fetch_constituents_akshare(candidate, limit)
+        if stocks:
+            return stocks
+    return []
+
+
+def _em_bk_variants(bk_code):
+    """把传入的板块码归一成东财裸 BK 码候选 (剥掉 'NN.' 前缀)。"""
     if not bk_code:
         return []
+    raw = str(bk_code).strip()
+    if "." in raw:
+        raw = raw.split(".", 1)[-1].strip()
+    if not raw.startswith("BK"):
+        return []
+    return [raw]
+
+
+def _fetch_constituents_em(bk_code: str, limit: int):
+    """东财 push2 clist 拉板块成分股 (裸 BK 码)。返回 [(code, name, price)]。"""
     cache_key = f"__const_{bk_code}_{limit}"
     now = time.time()
     with _LOCK:
@@ -410,27 +521,64 @@ def fetch_board_constituents(bk_code: str, limit: int = 80):
         if c and now - c[0] < _MARKET_TTL:
             return c[1]
     stocks = []
-    r = _get("https://push2.eastmoney.com/api/qt/clist/get",
-             {"pn": "1", "pz": str(limit), "po": "1", "np": "1",
-              "fltt": "2", "invt": "2", "fid": "f6",
-              "fs": f"b:{bk_code}", "fields": "f12,f14,f2,f3"},
-             {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"})
+    r = _clist_get({"pn": "1", "pz": str(limit), "po": "1", "np": "1",
+                    "fltt": "2", "invt": "2", "ut": _EM_UT, "fid": "f6",
+                    "fs": f"b:{bk_code}", "fields": "f12,f14,f2,f3"})
     if r is not None:
         try:
             diff = ((r.json().get("data") or {}).get("diff")) or []
             for d in diff:
                 code = d.get("f12", "")
-                name = d.get("f14", "")
+                nm = d.get("f14", "")
                 price = d.get("f2")
-                if code and name:
+                if code and nm:
                     prefix = "sh" if code.startswith(("6", "9")) else "sz"
                     if code.startswith(("8", "4")):
                         prefix = "bj"
-                    stocks.append((f"{prefix}{code}", name, float(price or 0)))
+                    stocks.append((f"{prefix}{code}", nm, float(price or 0)))
         except (ValueError, KeyError):
             pass
+    if stocks:
+        with _LOCK:
+            _BOARD_CACHE[cache_key] = (time.time(), stocks)
+    return stocks
+
+
+def _fetch_constituents_akshare(bk_code: str, limit: int):
+    """akshare 东财成分股兜底: stock_board_industry_cons_em(symbol=BK码)。
+    东财裸 clist 被拒 (rc:102) 时用, 需要东财 BK 码。
+    返回 [(code, name, price)] 或 []。akshare 缺失/异常/无数据时返回 []。"""
+    cache_key = f"__const_ak_{bk_code}_{limit}"
+    now = time.time()
     with _LOCK:
-        _BOARD_CACHE[cache_key] = (time.time(), stocks)
+        c = _BOARD_CACHE.get(cache_key)
+        if c and now - c[0] < _MARKET_TTL:
+            return c[1]
+    try:
+        import akshare as ak
+        df = ak.stock_board_industry_cons_em(symbol=bk_code)
+    except Exception:
+        return []
+    if df is None or len(df) == 0:
+        return []
+    stocks = []
+    for _, row in df.iterrows():
+        code = str(row.get("代码") or row.get("code") or "").strip()
+        nm = str(row.get("名称") or row.get("name") or "").strip()
+        if not (code.isdigit() and len(code) == 6 and nm):
+            continue
+        try:
+            price = float(row.get("最新价") or row.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        prefix = "sh" if code.startswith(("6", "9")) else \
+            "bj" if code.startswith(("8", "4")) else "sz"
+        stocks.append((f"{prefix}{code}", nm, price))
+        if len(stocks) >= limit:
+            break
+    if stocks:
+        with _LOCK:
+            _BOARD_CACHE[cache_key] = (time.time(), stocks)
     return stocks
 
 
@@ -515,12 +663,10 @@ def _fetch_board_stats_em(bmap):
     返回 stats 列表 或 []。"""
     if not bmap:
         return []
-    r = _get("https://push2.eastmoney.com/api/qt/clist/get",
-             {"pn": "1", "pz": "600", "po": "0", "np": "1",
-              "fltt": "2", "invt": "2", "fid": "f62",
-              "fs": f"b:{','.join(list(bmap.values())[:300])}",
-              "fields": "f12,f14,f2,f3,f62"},
-             {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"})
+    r = _clist_get({"pn": "1", "pz": "600", "po": "0", "np": "1",
+                    "fltt": "2", "invt": "2", "ut": _EM_UT, "fid": "f62",
+                    "fs": f"b:{','.join(list(bmap.values())[:300])}",
+                    "fields": "f12,f14,f2,f3,f62"})
     if r is None:
         return []
     code_to_name = {v: k for k, v in bmap.items()}

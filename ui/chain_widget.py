@@ -62,7 +62,7 @@ class _ConstThread(QThread):
             from wyckoff.chain import board_bk_code
             from wyckoff.fundamental import fetch_board_constituents
             bk = board_bk_code(self._name)
-            rows = fetch_board_constituents(bk, limit=30) if bk else []
+            rows = fetch_board_constituents(bk, limit=30, name=self._name)
             self.got.emit(self._name, rows)
         except Exception:
             self.got.emit(self._name, [])
