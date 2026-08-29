@@ -46,7 +46,7 @@ def no_pinyin_network(monkeypatch):
     的 wyckoff_stock_names.json (bundle 资源文件)。
     """
     try:
-        import desktop.main_window as mw
+        import ui.main_window as mw
         import wyckoff.pinyin as pinyin
     except Exception:
         return
