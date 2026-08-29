@@ -76,6 +76,18 @@ class Backtest(_Base):
     RISK_MIN_RR = "risk_min_rr"
 
 
+# ── 模拟盘 (自动筛选/下单/卖出/统计) ────────────────────────
+class Paper(_Base):
+    INIT_CASH = "paper_init_cash"
+    MAX_POS = "paper_max_pos"
+    HOLD_BARS = "paper_hold_bars"
+    STOP_LOSS = "paper_stop_loss"
+    TAKE_PROFIT = "paper_take_profit"
+    COST = "paper_cost"
+    MIN_CONF = "paper_min_conf"
+    SCAN_INTERVAL = "paper_scan_interval"
+
+
 class Watch(_Base):
     MOVE_THRESHOLD = "watch_move_threshold"
     MOVE_NOTIFY = "watch_move_notify"
@@ -117,6 +129,7 @@ class S:
     Chart = Chart
     Auto = Auto
     Backtest = Backtest
+    Paper = Paper
     AI = AI
     TTS = TTS
     Watch = Watch
@@ -131,6 +144,7 @@ ALL_KEYS = {
     **{f"Chart.{k.name}": k.value for k in Chart},
     **{f"Auto.{k.name}": k.value for k in Auto},
     **{f"Backtest.{k.name}": k.value for k in Backtest},
+    **{f"Paper.{k.name}": k.value for k in Paper},
     **{f"AI.{k.name}": k.value for k in AI},
     **{f"TTS.{k.name}": k.value for k in TTS},
     **{f"Watch.{k.name}": k.value for k in Watch},
@@ -185,6 +199,14 @@ DEFAULTS = {
     Backtest.PORTFOLIO_VALUE: 0,
     Backtest.RISK_PCT: 0.02,
     Backtest.RISK_MIN_RR: 3.0,
+    Paper.INIT_CASH: 1_000_000,
+    Paper.MAX_POS: 3,
+    Paper.HOLD_BARS: 20,
+    Paper.STOP_LOSS: 0.05,
+    Paper.TAKE_PROFIT: 0.15,
+    Paper.COST: 0.004,
+    Paper.MIN_CONF: 90,
+    Paper.SCAN_INTERVAL: 1800,
     AI.FALSIFY_ENABLED: False,
     AI.INTERPRET_ENABLED: False,
     AI.API_KEY: "",

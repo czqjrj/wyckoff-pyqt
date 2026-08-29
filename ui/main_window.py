@@ -384,6 +384,7 @@ class MainWindow(QMainWindow):
         # 工具: 持仓/对比 + 信号验证 + 本地数据维护
         t = m.addMenu("工具")
         t.addAction("我的持仓 (盈亏跟踪)", self.open_portfolio)
+        t.addAction("模拟盘 (自动交易)", self.open_paper_win)
         t.addAction("多股票对比", self.open_compare)
         t.addSeparator()
         t.addAction("校准中心", "Ctrl+Shift+A", lambda: self.open_accuracy_center())
@@ -2925,6 +2926,13 @@ class MainWindow(QMainWindow):
         """打开我的持仓 (个人持仓簿, 盈亏/止损跟踪)。"""
         self._show_win("_portfolio_win",
                        lambda: PortfolioWindow(self, on_load=self._load_code))
+
+    def open_paper_win(self):
+        """打开模拟盘 (自动筛选→下单→卖出→统计)。"""
+        from .paper_window import PaperWindow
+        self._show_win("_paper_win",
+                       lambda: PaperWindow(self, on_load=self._load_code),
+                       refresh=True)
 
     def open_alerts(self):
         """打开自选股预警管理窗口。"""

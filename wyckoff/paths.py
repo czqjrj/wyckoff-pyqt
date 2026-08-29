@@ -44,6 +44,8 @@ CANDIDATES_FILE = os.path.join(DATA_DIR, "wyckoff_candidates.json")
 BOARD_MAP_FILE = os.path.join(DATA_DIR, "wyckoff_board_map.json")
 PORTFOLIO_FILE = os.path.join(DATA_DIR, "wx_portfolio.json")
 NOTES_FILE = os.path.join(DATA_DIR, "wx_notes.json")
+# 模拟盘账户 (自动筛选/下单/卖出/统计), 见 paper.py
+PAPER_FILE = os.path.join(DATA_DIR, "wx_paper.json")
 
 # SQLite 行情持久缓存 (K线 / 复权因子), 跨会话复用
 CACHE_DB = os.path.join(DATA_DIR, "wyckoff_cache.db")

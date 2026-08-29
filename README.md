@@ -46,6 +46,7 @@
 
 - **自选股管理** + 键盘精灵（全市场 A 股代码/名称/拼音搜索，本地索引离线命中）
 - **我的持仓**：盈亏跟踪
+- **模拟盘（自动交易）**：自动筛选（全市场强多头事件 + conf 门槛 + 同持上限）→ 自动下单（滑点/费用模拟撮合）→ 自动卖出（止盈 /5% 止损 / 结构位破位 / 20 根到期）→ 收益统计（胜率 / 盈亏比 / 净值 / 最大回撤 / 分事件类型），支持手动或每 30 分钟定时执行一个周期（工具 → 模拟盘）
 - **资金监测**：国家队持仓透视（汇金/证金/社保）、国家队 ETF 三因子跟踪
 - **多股票对比**、指数行情（上证/深成/创业板/科创50…）
 - **自选股预警**、个股备注、分析报告导出、图表导出
@@ -128,11 +129,13 @@ python -m sync sync
 │   ├── kline_widget.py   #   K线图 · pnf_widget.py 点数图
 │   ├── ind_widget.py     #   技术指标八宫格 · mkt_widget.py 资金透视
 │   ├── extra_windows.py  #   综合选股 / 扫描中心 / 国家队等次级窗口
+│   ├── paper_window.py   #   模拟盘面板 (持仓/已平仓/候选/订单/统计)
 │   └── theme.py          #   浅色/深色双主题 (图纸墨水风浅色)
 ├ wyckoff/              # 纯 Python 分析内核 (无 GUI 依赖, 可独立复用)
 │   ├── analysis.py       #   run_analysis 完整流水线
 │   ├── events.py phases.py vsa.py fusion.py structure.py
 │   ├── screener.py backtest.py calibration.py online_model.py
+│   ├── paper.py          #   模拟盘引擎 (选股/撮合/卖出/统计/存储)
 │   └── datasource.py     #   东财/新浪/腾讯 行情接口 + 缓存
 └── docs/help.html        # 内置使用手册
 ```

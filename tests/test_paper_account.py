@@ -1,0 +1,283 @@
+"""模拟盘引擎测试 (wyckoff.paper): 保存/选股/撮合/卖出/统计闭环。
+
+全部离线: monkeypatch datasource/indicators/events 注入合成数据与确定性事件,
+不访问网络。数据目录由 conftest.py 重定向到临时目录。
+"""
+import os
+
+import numpy as np
+import pandas as pd
+import pytest
+
+import wyckoff.paper as paper
+
+
+def _mk(closes, wob=0.05):
+    closes = np.asarray(closes, dtype=float)
+    n = len(closes)
+    dates = pd.date_range("2024-01-02", periods=n, freq="B")
+    c = closes + np.sin(np.arange(n) / 9.0) * wob
+    return pd.DataFrame({"day": dates, "open": c, "close": c,
+                         "high": c + 0.06, "low": c - 0.06,
+                         "volume": np.full(n, 8e5)})
+
+
+def _candidate(code="sh600001", type_="Spring", conf=95, last=10.0, idx=299):
+    return {"code": code, "name": "测试股", "type": type_, "conf": conf,
+            "last": last, "idx": idx}
+
+
+@pytest.fixture(autouse=True)
+def clean_paper_file():
+    """避免测试间共享持久化账户状态 (conftest 只隔离目录, 不隔离单文件)。"""
+    if os.path.exists(paper.PAPER_FILE):
+        os.remove(paper.PAPER_FILE)
+    yield
+    if os.path.exists(paper.PAPER_FILE):
+        os.remove(paper.PAPER_FILE)
+
+
+# ───────────────────────── 保存/读取 ─────────────────────────
+def test_save_load_roundtrip():
+    st = paper._new_state()
+    st["cash"] = 42.5
+    st["meta"]["v"] = 1
+    assert paper.save_state(st)
+    got = paper.load_state()
+    assert got["cash"] == 42.5
+    assert got["meta"]["v"] == 1
+
+
+def test_load_state_bad_file():
+    import os
+    if os.path.exists(paper.PAPER_FILE):
+        os.remove(paper.PAPER_FILE)
+    got = paper.load_state()
+    assert got["cash"] == paper.INIT_CASH
+    assert got["positions"] == []
+
+
+# ───────────────────────── 选股筛选 ─────────────────────────
+def test_pick_candidates_filter_and_sort(monkeypatch):
+    df = _mk(np.linspace(10.0, 10.5, 400))
+    # 两只股票: A 有新 Spring95 + 旧 LPS92(应丢弃); B 有 Spring88(整只入池)
+    events_a = [
+        _candidate(code="sh600001", type_="Spring", conf=95, idx=395),
+        _candidate(code="sh600001", type_="LPS", conf=92, idx=200),
+        _candidate(code="sh600001", type_="UTAD", conf=97, idx=396),
+    ]
+    events_b = [
+        _candidate(code="sh600002", type_="Spring", conf=88, idx=390),
+    ]
+
+    def fake_detect(dfit, piv):
+        sym = dfit["sym"].iloc[-1]
+        return events_a if sym == "sh600001" else events_b
+
+    def fake_annotate(df, symbol=None, **k):
+        df["sym"] = symbol
+        return df
+
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline",
+                        lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", fake_annotate)
+    monkeypatch.setattr("wyckoff.indicators.find_pivots", lambda *a, **k: [])
+    monkeypatch.setattr("wyckoff.events.detect_all", fake_detect)
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    out = paper.pick_candidates(universe=["sh600001", "sh600002"],
+                                max_codes=10, min_conf=85)
+    assert len(out) == 2
+    confs = sorted(e["conf"] for e in out)
+    assert confs == [88, 95]
+    # A 取最新 Spring95 (旧的 LPS92 丢弃), B 整只入池
+    by_code = {e["code"]: e["type"] for e in out}
+    assert by_code["sh600001"] == "Spring"
+    assert by_code["sh600002"] == "Spring"
+
+
+def test_pick_candidates_no_net_grace(monkeypatch):
+    """universe 拉取失败时走兜底并无人为抛错。"""
+    df = _mk(np.linspace(8.0, 9.0, 300))
+    monkeypatch.setattr("wyckoff.fundamental.fetch_market_universe",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("net down")))
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline", lambda *a, **k: df)
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
+    monkeypatch.setattr("wyckoff.indicators.find_pivots", lambda *a, **k: [])
+    monkeypatch.setattr("wyckoff.events.detect_all",
+                        lambda *a, **k: [_candidate(idx=295)])
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    out = paper.pick_candidates(max_codes=5)
+    assert isinstance(out, list)
+
+
+# ───────────────────────── 订单/撮合 ─────────────────────────
+def test_make_order_lot_sizing():
+    order = paper._make_order("sh600001", "", "Spring", 90, 10.0, 0,
+                              cash=10_000_000)
+    assert order["qty"] % 100 == 0
+    assert order["price"] == round(10.0 * (1 + paper.SLIP_BUY), 3)
+    assert order["side"] == "buy"
+    # 金额不足一手 → None
+    assert paper._make_order("sh600001", "", "Spring", 90, 10.0, 0,
+                             cash=1_000) is None
+
+
+def test_place_buy_and_equity(monkeypatch):
+    monkeypatch.setattr("wyckoff.paper.execute_date", lambda c: "2024-05-01")
+    st = paper._new_state()
+    order2 = paper._make_order("sh600001", "", "Spring", 95, 10.0, 5, st["cash"])
+    paper.fill_buy(st, order2)
+    assert len(st["positions"]) == 1
+    pos = st["positions"][0]
+    assert pos["qty"] > 0 and pos["buy_px"] == order2["price"]
+    assert st["cash"] < paper.INIT_CASH
+    df = _mk([10.0, 10.2, 10.4])
+    last = float(df["close"].iloc[-1])
+    eq = paper.equity(st, {"sh600001": df})
+    assert eq == pytest.approx(st["cash"] + pos["qty"] * last, rel=1e-9)
+
+
+def test_step_fills_pending():
+    st = paper._new_state()
+    o = paper._make_order("sh600002", "", "LPS", 90, 20.0, 0, st["cash"])
+    st["pending"].append(o)
+    df = _mk([20.0, 20.5, 21.0])
+    assert st["positions"] == []
+    paper.step(st, {"sh600002": df})
+    # 保单按最近收盘+滑点成交
+    assert len(st["positions"]) == 1
+    assert st["pending"] == []
+    last = float(df["close"].iloc[-1])
+    assert st["positions"][0]["buy_px"] == round(last * (1 + paper.SLIP_BUY), 3)
+
+
+# ───────────────────────── 卖出条件 ─────────────────────────
+def _state_with_position(cash=paper.INIT_CASH, entry=10.0, bars=5):
+    st = paper._new_state()
+    st["cash"] = cash
+    st["positions"].append({
+        "symbol": "sh600001", "name": "测试", "type": "Spring", "conf": 95,
+        "qty": 10000, "buy_px": entry, "cost": 40.0,
+        "entry_ts": "2024-03-01 10:00:00", "entry_bars": bars, "staged": False,
+    })
+    return st
+
+
+def test_step_take_profit_closes(monkeypatch):
+    monkeypatch.setattr("wyckoff.paper.execute_date", lambda c: "2024-05-02")
+    st = _state_with_position(entry=10.0)
+    df = _mk([11.0, 12.0])  # +20% ≥ +15% 止盈
+    paper.step(st, {"sh600001": df})
+    assert st["positions"] == []
+    assert st["closed"][0]["reason"] == "止盈"
+    assert st["closed"][0]["ret"] > 0.15
+    assert st["cash"] > paper.INIT_CASH
+
+
+def test_step_stop_loss_closes():
+    st = _state_with_position(entry=10.0)
+    df = _mk([9.4, 9.2])  # 跌破买价 -6%, 触发 -5% 止损
+    paper.step(st, {"sh600001": df})
+    assert st["closed"][0]["reason"] == "止损"
+    # 止损限价 = 买入价*(1-5%), 卖出价再扣滑点
+    assert st["closed"][0]["sell_px"] < 9.5
+    assert st["closed"][0]["ret"] < 0
+
+
+def test_step_expiry_closes():
+    st = _state_with_position(entry=10.0, bars=paper.HOLD_BARS)
+    df = _mk([10.3, 10.2])  # 未触发止盈/止损/破位
+    paper.step(st, {"sh600001": df})
+    assert st["closed"][0]["reason"] == "到期"
+
+
+def test_step_no_close_when_flat():
+    st = _state_with_position(entry=10.0)
+    df = _mk([10.2, 10.3, 10.1])  # 均在止损/止盈间
+    paper.step(st, {"sh600001": df})
+    assert st["positions"]  # 未平仓
+    assert st["closed"] == []
+
+
+# ───────────────────────── 收益统计 ─────────────────────────
+def _closed(type_, ret, reason):
+    return {"symbol": "s", "name": "", "type": type_, "conf": 90,
+            "qty": 1000, "buy_px": 10.0, "sell_px": round(10.0 * (1 + ret), 3),
+            "ret": round(ret, 4), "reason": reason,
+            "entry_ts": "t", "close_ts": "t", "bars": 5}
+
+
+def test_stats_aggregation():
+    st = paper._new_state()
+    st["closed"] = [
+        _closed("Spring", 0.20, "止盈"),
+        _closed("Spring", 0.10, "止盈"),
+        _closed("LPS", -0.05, "止损"),
+    ]
+    s = paper.stats(st)
+    assert s["n_closed"] == 3
+    assert s["win_rate"] == pytest.approx(2 / 3, abs=1e-3)
+    assert s["pl_ratio"] == pytest.approx(0.15 / 0.05, rel=0.1)
+    assert s["by_type"]["Spring"]["n"] == 2
+    assert s["by_type"]["Spring"]["win"] == pytest.approx(1.0, abs=1e-3)
+    assert s["by_reason"]["止盈"]["n"] == 2
+    assert s["avg_ret"] == pytest.approx((0.20 + 0.10 - 0.05) / 3, abs=1e-3)
+
+
+def test_stats_empty():
+    s = paper.stats(paper._new_state())
+    assert s["win_rate"] is None
+    assert s["n_closed"] == 0
+
+
+# ───────────────────────── 全周期闭环 ─────────────────────────
+def test_expiry_after_hold_bars_cycles(monkeypatch):
+    """平价横盘下, 经过 HOLD_BARS 个周期后因到期平仓。"""
+    import wyckoff.datasource as ds
+    monkeypatch.setattr(ds, "fetch_kline",
+                        lambda *a, **k: _mk([10.0] * 60))
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
+    monkeypatch.setattr(paper, "pick_candidates",
+                        lambda **k: [_candidate(type_="Spring", conf=95)],
+                        raising=True)
+
+    while True:
+        s = paper.run_cycle()
+        if s["n_closed"] == 1:
+            break
+        assert s["n_positions"] == 1
+    st = paper.load_state()
+    assert st["closed"][0]["reason"] == "到期"
+    assert st["closed"][0]["bars"] == paper.HOLD_BARS
+
+
+def test_run_cycle_end_to_end(monkeypatch, tmp_path):
+    """筛选→下单→持仓→步进→止盈卖出→统计 全链路。
+
+    fetch_kline 按调用次数返回递进行情: 第1次建仓, 第2次(+40%)触发止盈。
+    """
+    import wyckoff.datasource as ds
+    calls = {"n": 0}
+
+    def fake_fetch(code, datalen=None, scale=None):
+        calls["n"] += 1
+        if calls["n"] <= 1:
+            return _mk([10.0, 10.1, 10.2])
+        return _mk([12.0, 13.0, 14.0])
+
+    monkeypatch.setattr(ds, "fetch_kline", fake_fetch)
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
+    monkeypatch.setattr(paper, "pick_candidates",
+                        lambda **k: [_candidate(type_="Spring", conf=96)])
+    # 第一周期: 建仓
+    s1 = paper.run_cycle()
+    assert s1["n_positions"] == 1
+    # 第二周期: 持仓股已 +40%, 触发止盈平仓
+    monkeypatch.setattr(paper, "pick_candidates", lambda **k: [])
+    s2 = paper.run_cycle()
+    assert s2["n_closed"] == 1
+    assert s2["n_positions"] == 0
+    st = paper.load_state()
+    assert st["closed"][0]["reason"] == "止盈"
+    assert st["closed"][0]["type"] == "Spring"
+    assert st["closed"][0]["conf"] == 96
