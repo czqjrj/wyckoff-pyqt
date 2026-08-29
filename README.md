@@ -72,7 +72,7 @@
 - 每批样本落库后自动重算先验, 使阶段→方向映射随真实行情演进自适应
 - 阶段→方向判定同向率：markup 81.9% + markdown 81.6% + accumulation 66.7% + distribution 71.4%
 
-完整数据、方法论与改进建议见 [docs/accuracy_report.md](docs/accuracy_report.md)，信号复盘周报见 [docs/signal_review.md](docs/signal_review.md)。
+完整数据、方法论与改进建议见 [docs/accuracy_report.md](docs/accuracy_report.md)，信号复盘周报见 [docs/signal_review.md](docs/signal_review.md)，可盈利性回测见 [docs/profitability_bt.md](docs/profitability_bt.md)。
 
 ### 最新增强（2026-08-29）
 
