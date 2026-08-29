@@ -8,7 +8,7 @@ build/
 wx_feedback_export.json
 wyckoff_settings.json
 wyckoff_candidates.json
-wyckoff_desktop_test*.png
+wyckoff_ui_test*.png
 wyckoff_board_map.json
 wx_scan_*.csv
 wx_candidates_*.csv
@@ -24,16 +24,14 @@ wx_report_*.txt
 wx_*.log
 wyckoff_cache.db*
 wyckoff_all_stocks.json
-# 在线校准模型运行时状态 (每轮训练后由代码生成, 非源码)
-wx_online_model.json
-# 扫描中心导出 (每次扫描生成)
-wx_scancenter_*.csv
-# 用户数据文件 (含持仓/笔记/预警/阈值等隐私数据)
-wyckoff_watchlist.json
-wx_portfolio.json
-wx_notes.json
-wx_alerts.json
-wx_vsa_thresholds.json
-
+# 阶段带续变方向实测先验 (accuracy.update_fb_prior 落盘, 非源码)
+wx_fb_prior.json
+# 打包产物 (deb 发布目录)
+wyckoff.egg-info/
+debian/
+# opencode 本地配置
+.opencode/
 # 发布资产
 /*.tar.gz
+# GIMP 源文件 (图标工作稿, 只提交导出的 png)
+*.xcf
