@@ -9,13 +9,54 @@
 信号强度一致性"决定: 全部同向且强 → 高, 部分同向 → 中, 方向分裂 → 低。
 """
 
+import json
+import os
+
 from .config import VSA_BEAR, VSA_BULL, W_RECENT, event_dir
+from .paths import DATA_DIR
 
 # 各维度权重 (K线结构最重, 威科夫事件次之, VSA与P&F辅助确认)
 W_KLINE = 0.35
 W_EVENT = 0.30
 W_VSA = 0.20
 W_PNF = 0.15
+
+# 新闻情绪维度权重 (小权重探索: 无 A/B 实证样本前不喧宾夺主), 乘以 _news_cal_factor()
+# 自校准因子: accuracy.update_news_calibration 依据已评估样本中 news_score 与实际
+# 收益方向一致性落盘 (命中显著低于基线→缩权, 高于→放权), 由数据决定预测力。
+W_NEWS = 0.05
+
+# 新闻情绪参与评分的绝对强度门槛: |score|<0.3 视为弱情绪 (关键词噪声为主),
+# 不接入评分 (仅展示); 只有强情绪才进入融合维度。
+NEWS_MIN_ABS = 0.30
+
+# 前瞻风险窗口: 未来 N 日内有解禁/定期报告披露等偏空节点时, 多头综合信号降一档
+# 置信并提示 (事前排雷优于事后解释)。
+FORWARD_RISK_DAYS = 7
+
+# 新闻维度自校准因子文件: 当前 paths.py 未提供 NEWS_CALIBRATION_FILE 常量,
+# 按参考语义内联到用户数据目录 (accuracy.update_news_calibration 落盘此处)。
+NEWS_CALIBRATION_FILE = os.path.join(DATA_DIR, "wx_news_calibration.json")
+
+# 新闻维度自校准因子缓存: 按校准文件 mtime 热加载 (修改即生效, 无需重启)
+_news_cal_cache = {"mtime": None, "factor": 1.0}
+
+
+def _news_cal_factor():
+    """读取新闻维度自动校准因子 [0.4~1.5], 文件缺失/损坏时返回 1.0。"""
+    try:
+        mt = os.path.getmtime(NEWS_CALIBRATION_FILE)
+    except OSError:
+        return 1.0
+    if _news_cal_cache["mtime"] != mt:
+        try:
+            with open(NEWS_CALIBRATION_FILE, encoding="utf-8") as f:
+                fac = float(json.load(f).get("factor", 1.0))
+            _news_cal_cache["factor"] = max(0.4, min(1.5, fac))
+        except Exception:
+            _news_cal_cache["factor"] = 1.0
+        _news_cal_cache["mtime"] = mt
+    return _news_cal_cache["factor"]
 
 # VSA 标签方向采用 config 统一映射 (config.vsa_dir / VSA_BULL/VSA_BEAR/VSA_NEUTRAL,
 # 语义核对 vsa._DESC / VSA_CN) —— 与 backtest_vsa / 状态栏头条 / 胜率方向化同源。
@@ -228,10 +269,15 @@ def _align(score, htf):
     return score * (1.2 if align else 0.6)
 
 
-def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False):
+def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
+                 news_sentiment=None, forward_calendar=None):
     """融合四类信号, 返回综合评分与维度明细。
 
     参数: 与各模块输出直接兼容 (analysis.py 中已有)。
+      news_sentiment: 新闻情绪结果 (建议先经 news.apply_price_validation 验证,
+        含 items 明细与 validation 摘要; 旧格式 dict 也兼容)。
+      forward_calendar: news.fetch_forward_calendar 的前瞻日历
+        ({items, risk_days, risk_label}), 有临近偏空节点时多头信号降置信。
     返回 dict:
       score     综合评分 (-100~+100, >0 偏多)
       bias      看多 / 看空 / 中性
@@ -258,6 +304,66 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False):
          "score": _pnf_score(pnf_t, last_close),
          "detail": pnf_t.get("direction", "range") if pnf_t else "无"},
     ]
+    # 新闻情绪维度: 打分 → 价格验证(上游) → 事件共振 → 自校准因子
+    news_score = 0.0
+    news_detail = "无"
+    if news_sentiment:
+        ns = news_sentiment.get("score", 0.0)
+        val = news_sentiment.get("validation") or {}
+        # 弱情绪 (|score|<NEWS_MIN_ABS) 未经验证, 不参与评分; 仅强情绪接入。
+        if abs(ns) >= NEWS_MIN_ABS:
+            news_score = ns * 100.0  # -1~1 → -100~100
+        cnt = news_sentiment.get("count", 0)
+        ann = news_sentiment.get("ann_count")
+        if ann is not None:
+            cnt_txt = f"{ann}公告+{cnt - ann}资讯"
+        else:
+            cnt_txt = f"{cnt}条"
+        news_detail = f"情绪{ns:+.2f}·{cnt_txt}"
+        if news_sentiment.get("key_events"):
+            news_detail += f"·利好{len(news_sentiment['key_events'])}"
+        if news_sentiment.get("risk_flags"):
+            news_detail += f"·利空{len(news_sentiment['risk_flags'])}"
+        # 价格反应验证注记: 证伪条目已在上游 apply_price_validation 中降权,
+        # 此处仅展示市场投票结果 (✓确认/✗证伪)。
+        if val.get("confirmed") or val.get("rejected"):
+            news_detail += (f"·价验{val.get('confirmed', 0)}✓"
+                            f"/{val.get('rejected', 0)}✗")
+        # 事件共振: 新闻方向与近期威科夫事件互证加分 / 背离减分;
+        # Spring+利空(吓筹)/UTAD+利好(诱多) 按复合人行为学反向解读。
+        try:
+            from .news import event_resonance
+            res_bonus, res_note = event_resonance(news_sentiment, events, max_idx)
+        except Exception:
+            res_bonus, res_note = 0.0, ""
+        if res_bonus:
+            news_score = max(-100.0, min(100.0, news_score + res_bonus))
+            news_detail += f"·{res_note}"
+        # 自校准因子: 历史样本实测的新闻预测力缩放 W_NEWS 有效贡献
+        cal_f = _news_cal_factor()
+        if cal_f != 1.0 and news_score:
+            news_score *= cal_f
+            news_detail += f"·校准×{cal_f:.2f}"
+    dims.append({
+        "key": "news", "name": "新闻情绪",
+        "score": _align(news_score, htf),
+        "detail": news_detail,
+    })
+    # 前瞻风险窗口: 解禁/财报披露临近时在新闻维度标注 (置信度调整见 bias 之后)
+    risk_days = None
+    risk_label = ""
+    if isinstance(forward_calendar, dict):
+        rd = forward_calendar.get("risk_days")
+        if rd is not None:
+            try:
+                risk_days = int(rd)
+                risk_label = str(forward_calendar.get("risk_label") or "风险窗口")
+            except Exception:
+                risk_days = None
+        if forward_calendar.get("items"):
+            nxt = forward_calendar["items"][0]
+            dims[-1]["detail"] += (f"·前瞻{nxt['kind']}{nxt['date'][5:]}" if risk_days is None
+                                   else f"·⚠{risk_label[:18]}({risk_days}天)")
     if htf != 0:
         for d in dims:
             if d["score"] != 0 and ((d["score"] > 0) == (htf > 0)):
@@ -268,7 +374,8 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False):
         d["bias"] = "看多" if d["score"] > 10 else "看空" if d["score"] < -10 else "中性"
 
     score = (dims[0]["score"] * W_KLINE + dims[1]["score"] * W_EVENT
-             + dims[2]["score"] * W_VSA + dims[3]["score"] * W_PNF)
+             + dims[2]["score"] * W_VSA + dims[3]["score"] * W_PNF
+             + dims[4]["score"] * W_NEWS)
     score = max(-100.0, min(100.0, score))
 
     # bias 阈值 ±8 (与 phase_tone 对齐, 减少 fusion_bias 过度中性化)
@@ -299,6 +406,20 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False):
         conflicts.append({
             "bull": bull_names, "bear": bear_names,
             "note": f"{'、'.join(bull_names)} 与 {'、'.join(bear_names)} 方向矛盾, 信号分歧",
+        })
+
+    # 前瞻风险窗口惩罚: 解禁/定期报告披露等偏空节点临近 (FORWARD_RISK_DAYS 内)
+    # 时, 多头综合信号降一档置信并显式提示 —— 财报雷/解禁抛压常让技术形态失效,
+    # 事前排雷优于事后解释。空头信号不受影响 (风险窗口与看空方向同向)。
+    if risk_days is not None and risk_days <= FORWARD_RISK_DAYS and score > 8:
+        if confidence == "高":
+            confidence = "中"
+        elif confidence == "中":
+            confidence = "低"
+        bull_names = [d["name"] for d in dims if d["bias"] == "看多"] or ["综合"]
+        conflicts.append({
+            "bull": bull_names, "bear": ["前瞻日历"],
+            "note": f"临近{risk_label} ({risk_days}天内), 多头信号降级",
         })
 
     verdict = {"score": round(score, 1), "bias": bias,

@@ -81,6 +81,26 @@ def capture_snapshot(df, symbol, code, scale, datalen, name="",
     fusion = (precomputed or {}).get("fusion")
     targets = (precomputed or {}).get("targets")
     trade_plan = (precomputed or {}).get("trade_plan")
+    news_sentiment = (precomputed or {}).get("news_sentiment")
+    news_score = round(news_sentiment.get("score", 0.0), 3) if news_sentiment else None
+    # 新闻验证层明细: 价格反应验证计数与融合层新闻维度分 (供新闻贡献自校准)。
+    news_val = (news_sentiment or {}).get("validation") or {} \
+        if isinstance(news_sentiment, dict) else {}
+    news_dim_score = None
+    try:
+        for _d in ((precomputed or {}).get("fusion") or {}).get("dims", []):
+            if _d.get("key") == "news":
+                news_dim_score = round(float(_d.get("score", 0.0)), 1)
+                break
+    except Exception:
+        news_dim_score = None
+    # 对照口径: 同一样本的"纯技术面融合" (剔除新闻维度), 用于评估新闻情绪贡献。
+    fusion_no_news = None
+    if news_score is not None:
+        try:
+            fusion_no_news = fuse_signals(df, phase, events, vsa_signals, pnf_t)
+        except Exception:
+            fusion_no_news = None
     # 缺失的管线键补齐 (调用方通常已算好大部分, 只有个别可缺省键需要兜底)。
     if pivots is None or events is None or phase is None:
         pivots = find_pivots(df, order=6)
@@ -124,6 +144,14 @@ def capture_snapshot(df, symbol, code, scale, datalen, name="",
     fusion_conf = fusion.get("confidence", "低")
     fusion_tone = ("bullish" if fusion_bias == "看多"
                    else "bearish" if fusion_bias == "看空" else "neutral")
+    # 对照: 纯技术面融合的方向 (无新闻维度)。
+    fusion_no_news_tone = None
+    fusion_no_news_score = None
+    if fusion_no_news:
+        _fnb = fusion_no_news.get("bias", "中性")
+        fusion_no_news_tone = ("bullish" if _fnb == "看多"
+                               else "bearish" if _fnb == "看空" else "neutral")
+        fusion_no_news_score = round(fusion_no_news.get("score", 0.0), 1)
     ups = sorted(v for k, v in pnf_t.items()
                  if k.endswith("上方目标") and isinstance(v, (int, float))) if pnf_t else []
     dns = sorted((v for k, v in pnf_t.items()
@@ -149,6 +177,13 @@ def capture_snapshot(df, symbol, code, scale, datalen, name="",
         "fusion_bias": fusion_bias,
         "fusion_conf": fusion_conf,
         "fusion_tone": fusion_tone,
+        "news_score": news_score,
+        "news_count": news_sentiment.get("count") if news_sentiment else None,
+        "news_dim_score": news_dim_score,
+        "news_confirmed": news_val.get("confirmed"),
+        "news_rejected": news_val.get("rejected"),
+        "fusion_no_news_tone": fusion_no_news_tone,
+        "fusion_no_news_score": fusion_no_news_score,
         "trade_dir": trade_dir,
         "trade_tone": trade_tone,
         "up_target": round(up_target, 4) if up_target else None,
@@ -212,15 +247,157 @@ def record_analysis(df, symbol, code, scale, datalen, name="",
 # ── 阶段带自动反馈标注 ──
 _FB_LOCK = threading.Lock()
 
+# 阶段带评估窗口组: 多窗口综合判定取代单一最长窗口。
+# 旧逻辑 (h_star=max(rets)) 仅用最长窗口定生死,
+# 兑现周期内的短期反转易误标, 旧口径自动标注正确率仅 26.2%。
+# 新逻辑: 多窗口多数票决 + 幅度加权, 大幅降低单窗口噪声影响。
+FB_HORIZONS = (20, 40, 60)
+
+# 多窗口判定时各窗口的权重 (短窗口噪声少但意义弱, 长窗口意义强但噪声多)
+_FB_WEIGHTS = {20: 0.35, 40: 0.30, 60: 0.35}
+
+# 阶段带"结束后延续方向"实测先验 (替代硬编码 accumulation/markup→涨, 其余→跌)。
+# 硬编码先验忽略了均值回归: markup 段以局部高点收尾、其后多回落, markdown 段
+# 以局部低点收尾、其后多反弹 (实测 markup 续涨仅~19%, markdown 续涨~81%)。
+# 改用历史累计样本实测各阶段带的续变方向, 样本不足或方向不明时回退硬编码。
+FB_PRIOR_MIN_N = 25      # 信任某标签先验的最少样本
+FB_PRIOR_MIN_GAP = 0.05  # 偏离 50% 的最少幅度, 太小视为方向不明
+# 硬编码回退方向: 吸筹/拉升→预期上涨, 派发/下跌→预期下跌
+_FB_DEFAULT_DIR = {"accumulation": "up", "markup": "up",
+                   "distribution": "down", "markdown": "down"}
+_FB_PRIOR_CACHE = {"mtime": -1, "data": None}
+_FB_PRIOR_LOCK = threading.Lock()
+
+
+def _fb_verdict(rets, bullish, min_move=0.005):
+    """多窗口综合判定: 多数窗口一致 + 幅度加权决定 verdict 与置信度。
+
+    返回 (verdict, confidence, wdetails) 其中:
+      verdict    — "correct"/"wrong"/None
+      confidence — 0.0~1.0 (同向窗口幅度占比)
+      wdetails   — {h: ("correct"|"wrong"|"neutral", ret)}
+    """
+    if not rets:
+        return None, 0.0, {}
+    # 各窗口独立判定
+    wdv = {}
+    for h, ret in rets.items():
+        if abs(ret) < min_move:
+            wdv[h] = ("neutral", ret)
+        else:
+            wdv[h] = ("correct" if (ret > 0) == bullish else "wrong", ret)
+    # 有效窗口 (非 neutral)
+    eff = {h: v for h, v in wdv.items() if v[0] != "neutral"}
+    if eff:
+        # 多数票决
+        correct_votes = sum(1 for v, _ in eff.values() if v == "correct")
+        wrong_votes = sum(1 for v, _ in eff.values() if v == "wrong")
+        # 幅度加权
+        correct_w = sum(abs(ret) * _FB_WEIGHTS.get(h, 0.25)
+                        for h, (v, ret) in eff.items() if v == "correct")
+        wrong_w = sum(abs(ret) * _FB_WEIGHTS.get(h, 0.25)
+                      for h, (v, ret) in eff.items() if v == "wrong")
+        total_w = correct_w + wrong_w
+        confidence = max(correct_w, wrong_w) / total_w if total_w > 0 else 0.5
+        verdict = "correct" if correct_votes >= wrong_votes else "wrong"
+        return verdict, confidence, wdv
+    # 全部窗口均为 neutral (小幅波动): 若所有窗口方向一致仍给出弱判定
+    signs = [ret for _, ret in wdv.values()]
+    if signs and all(s > 0 for s in signs):
+        return "correct", 0.30, wdv
+    if signs and all(s < 0 for s in signs):
+        return "wrong", 0.30, wdv
+    return None, 0.0, wdv
+
+
+# ── 阶段带续变方向实测先验 ──
+def update_fb_prior(feedback=None):
+    """从已累计阶段带样本实测各标签的"结束后延续方向"先验并落盘。
+
+    用原始收益方向 (fwd_ret 符号) 而非 verdict 统计, 避免"判定即自证"的循环:
+      up_ratio[label] = 该标签样本中 fwd_ret>0 的占比 (样本取主判据窗口收益)。
+      dir[label]      = "up" if up_ratio>=0.5 else "down" (含时点偏差, 训练样本内统计)。
+    阈值: 样本数 < FB_PRIOR_MIN_N 或背离 50% 不足 FB_PRIOR_MIN_GAP 时标记
+      dir=null, 由 fb_expected_direction 回退硬编码。落盘 wx_fb_prior.json
+      供 auto_evaluate_feedback mtime 热加载 (与新闻校准同机制)。
+    """
+    from .paths import FB_PRIOR_FILE
+    if feedback is None:
+        from .storage import load_feedback
+        feedback = load_feedback()
+    stats = {}
+    for r in feedback:
+        lb = r.get("label")
+        ret = r.get("fwd_ret")
+        if not lb or lb not in _FB_DEFAULT_DIR or ret is None:
+            continue
+        s = stats.setdefault(lb, {"n": 0, "up": 0})
+        s["n"] += 1
+        s["up"] += int(ret > 0)
+    payload = {"updated_ts": time.time(), "min_n": FB_PRIOR_MIN_N,
+               "min_gap": FB_PRIOR_MIN_GAP, "labels": {}}
+    for lb, s in stats.items():
+        ratio = s["up"] / s["n"] if s["n"] else 0.5
+        d = None
+        if s["n"] >= FB_PRIOR_MIN_N and abs(ratio - 0.5) >= FB_PRIOR_MIN_GAP:
+            d = "up" if ratio >= 0.5 else "down"
+        payload["labels"][lb] = {"n": s["n"], "up": s["up"],
+                                 "up_ratio": round(ratio, 4),
+                                 "dir": d, "fallback": _FB_DEFAULT_DIR.get(lb)}
+    try:
+        atomic_write_json(FB_PRIOR_FILE, payload)
+    except Exception as e:
+        log_exc("update_fb_prior 落盘失败", e)
+    return payload
+
+
+def load_fb_prior():
+    """按 mtime 热加载先验 (文件变化才重读), 失败返回空 dict。"""
+    from .paths import FB_PRIOR_FILE
+    try:
+        mt = os.path.getmtime(FB_PRIOR_FILE)
+    except OSError:
+        return {}
+    with _FB_PRIOR_LOCK:
+        if _FB_PRIOR_CACHE["mtime"] == mt and _FB_PRIOR_CACHE["data"] is not None:
+            return _FB_PRIOR_CACHE["data"]
+    try:
+        with open(FB_PRIOR_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    with _FB_PRIOR_LOCK:
+        _FB_PRIOR_CACHE["mtime"] = mt
+        _FB_PRIOR_CACHE["data"] = data
+    return data
+
+
+def fb_expected_direction(label):
+    """给定阶段带 label, 返回实测先验期望方向 "up"/"down"。
+
+    先验信不过 (样本不足/方向不明/文件缺失) 时回退硬编码 _FB_DEFAULT_DIR。
+    """
+    rec = (load_fb_prior().get("labels") or {}).get(label)
+    if rec and rec.get("dir") in ("up", "down"):
+        return rec["dir"]
+    return _FB_DEFAULT_DIR.get(label, "up")
+
 
 def auto_evaluate_feedback(df, symbol, scale, segs, horizon=20, min_move=0.005):
     """自动给"已走完"的阶段带打 正确/错误 反馈标注 (无需人工点击)。
 
-    判定: 阶段带结束后 horizon 根K线的方向与阶段含义是否一致 ——
-    吸筹/拉升带 → 后续应上涨; 派发/下跌带 → 后续应下跌。
-    带结束处未来行情不足 / 涨跌幅度小于 min_move (方向不明) 时跳过,
+    判定: 阶段带结束后 FB_HORIZONS 中所有已成熟窗口做多窗口综合判定 ——
+    多数窗口一致 + 幅度加权决定 verdict。期望方向取实测先验
+    (吸筹/拉升通常续涨; 派发/下跌通常续跌, 但实测出现均值回归者自动反转,
+    如 markup 结尾多为局部高点、其后回落)。同时落库各窗口收益 (fwd_ret_20/40/60)
+    与每窗口 verdict (fb_vd_20/40/60)、置信度 fb_confidence,
+    供 calibrate.diagnose 分窗复检。
+    全部窗口未成熟 / 主判据窗口涨跌幅度小于 min_move (方向不明) 时跳过,
     下次分析数据更多后再评估。结果写入 wx_feedback.json (source=auto),
     已有人工标注 (source=manual) 的不覆盖。返回新增/更新条数。
+
+    每批样本落库后重算先验 (update_fb_prior), 使阶段→方向映射随真实行情
+    演进自适应, 而非固定硬编码。
     """
     if not segs:
         return 0
@@ -237,15 +414,25 @@ def auto_evaluate_feedback(df, symbol, scale, segs, horizon=20, min_move=0.005):
                                   r["start_dt"], r["end_dt"])] = r
         changed = 0
         for a, e, key, label in segs:
-            if key not in _PHASE_STYLE or e + horizon >= n:
+            if key not in _PHASE_STYLE or not (0 <= a < e < n) or close[e] <= 0:
                 continue
-            if not (0 <= a < e < n) or close[e] <= 0:
-                continue
-            ret = float(close[e + horizon] / close[e] - 1)
-            if abs(ret) < min_move:
-                continue
-            bullish = key in ("accumulation", "markup")
-            verdict = "correct" if (ret > 0) == bullish else "wrong"
+            rets = {}
+            for h in FB_HORIZONS:
+                j = e + h
+                if j < n and close[j] > 0:
+                    rets[h] = float(close[j] / close[e] - 1)
+            if not rets:
+                continue                      # 所有窗口均未成熟
+            # 期望方向改用实测先验 (吸筹/拉升→"up", 派发/下跌→"down",
+            # 实测延续方向与预设相反者直接反转); sample不足回退硬编码
+            expect_up = fb_expected_direction(key) == "up"
+            verdict, fb_conf, wdv = _fb_verdict(rets, expect_up, min_move)
+            if verdict is None:
+                continue                      # 全部窗口方向不明
+            # 主判据取幅度最大的有效窗口
+            effective = {h: (v, r) for h, (v, r) in wdv.items() if v != "neutral"}
+            h_star = max(effective, key=lambda h: abs(effective[h][1]))
+            ret = effective[h_star][1]
             k = feedback_key(symbol, int(scale), _day_fmt(df["day"].iloc[a]),
                              _day_fmt(df["day"].iloc[e]))
             old = fmap.get(k)
@@ -254,13 +441,23 @@ def auto_evaluate_feedback(df, symbol, scale, segs, horizon=20, min_move=0.005):
             rec = build_feedback_record(symbol, len(df), int(scale), df,
                                         int(a), int(e), key, label)
             rec["verdict"] = verdict
+            rec["fb_confidence"] = round(fb_conf, 2)
             rec["date"] = time.strftime("%Y-%m-%d")
             rec["source"] = "auto"
             rec["fwd_ret"] = round(ret * 100, 2)
+            rec["fwd_h"] = int(h_star)
+            for h, v in rets.items():
+                rec[f"fwd_ret_{h}"] = round(v * 100, 2)
+                rec[f"fb_vd_{h}"] = wdv.get(h, ("neutral", v))[0]
             fmap[k] = rec
             changed += 1
         if changed:
             save_feedback(list(fmap.values()))
+            # 新样本落库后立即重算续变方向先验 (供下次判定热加载)
+            try:
+                update_fb_prior(list(fmap.values()))
+            except Exception as e:
+                log_exc("update_fb_prior 重算失败", e)
         return changed
 
 
@@ -403,7 +600,81 @@ def run_auto_accuracy_eval(force=False):
         records = load_accuracy()
     if not records:
         return 0
-    return evaluate_pending(records, force=force)
+    n = evaluate_pending(records, force=force)
+    # 评估完成后顺带重算新闻贡献自校准因子 (样本充足才生成), 供 fusion.
+    # _news_cal_factor 热加载 —— 新闻维度权重由实测预测力驱动, 而非固定拍脑袋值。
+    try:
+        update_news_calibration(records)
+    except Exception as e:
+        log_exc("update_news_calibration 失败", e)
+    # 评估时会顺带标注新阶段带 (auto_evaluate_feedback), 这里一并重算实测先验。
+    # update_fb_prior 让阶段→方向映射 (含均值回归反转) 随真实行情演进自适应。
+    try:
+        update_fb_prior()
+    except Exception as e:
+        log_exc("update_fb_prior 重算失败", e)
+    return n
+
+
+# ── 新闻贡献自校准 ──
+NEWS_CAL_MIN_TOTAL = 40    # 已评估且带 news_score 的最少样本量
+NEWS_CAL_MIN_STRONG = 15   # 其中 |news_score|>=0.3 的强情绪最少样本量
+
+
+def update_news_calibration(records=None, horizon=20):
+    """统计 news_score 与到期实际收益的方向一致性, 落盘自校准因子文件。
+
+    口径 (与 fusion.NEWS_MIN_ABS 门控一致, 只看强情绪):
+      baseline p0 = 该周期全样本上涨占比;
+      hit = |news_score|>=0.3 样本中 sign(news) 与 sign(ret) 一致的占比;
+      hit < p0-3% → factor=0.5 (新闻整体反向/无效, 缩权);
+      hit > p0+5% → factor=1.3 (确有增量, 放权);
+      其余 → factor=1.0。样本不足时 factor=1.0 保持中性。
+    结果写入 wx_news_calibration.json (fusion 按 mtime 热加载)。
+    """
+    from .paths import DATA_DIR
+    cal_file = os.path.join(DATA_DIR, "wx_news_calibration.json")
+    if records is None:
+        records = load_accuracy()
+    k = str(horizon)
+    samples = []       # (news_score, ret)
+    up_cnt = total = 0
+    for r in records:
+        res = (r.get("results") or {}).get(k)
+        if not res or res.get("ret") is None:
+            continue
+        ns = r.get("news_score")
+        if ns is None:
+            continue
+        ret = float(res["ret"])
+        samples.append((float(ns), ret))
+        total += 1
+        up_cnt += int(ret > 0)
+    payload = {"factor": 1.0, "horizon": horizon, "n": total,
+               "reason": "样本不足, 未启用校准", "updated_ts": time.time()}
+    if total >= NEWS_CAL_MIN_TOTAL:
+        p0 = up_cnt / total
+        strong = [(s, v) for s, v in samples if abs(s) >= 0.3]
+        if len(strong) >= NEWS_CAL_MIN_STRONG:
+            hit = sum(1 for s, v in strong if (v > 0) == (s > 0)) / len(strong)
+            payload.update({
+                "p0": round(p0, 4),
+                "strong_n": len(strong),
+                "strong_hit": round(hit, 4),
+            })
+            if hit < p0 - 0.03:
+                payload["factor"] = 0.5
+                payload["reason"] = f"强新闻方向命中{hit:.0%}<基线{p0:.0%}, 缩权"
+            elif hit > p0 + 0.05:
+                payload["factor"] = 1.3
+                payload["reason"] = f"强新闻方向命中{hit:.0%}>基线{p0:.0%}, 放权"
+            else:
+                payload["reason"] = f"强新闻方向命中{hit:.0%}≈基线{p0:.0%}, 维持中性"
+    try:
+        atomic_write_json(cal_file, payload)
+    except Exception as e:
+        log_exc("update_news_calibration 落盘失败", e)
+    return payload
 
 
 # ── 汇总与导出 ──
@@ -463,6 +734,10 @@ def accuracy_stats(records):
              "pnf_down": {"n": 0, "hit": 0},
              "fusion_bull": {"n": 0, "hit": 0},
              "fusion_bear": {"n": 0, "hit": 0},
+             # 新闻情绪 A/B: 同一样本, 带新闻融合 vs 纯技术面融合的方向命中率
+             "news_with": {"n": 0, "hit": 0},
+             "news_without": {"n": 0, "hit": 0},
+             "news_diff": None,
              "trade_bull": {"n": 0, "hit": 0},
              "trade_bear": {"n": 0, "hit": 0},
              "up_target": {"n": 0, "hit": 0},
@@ -508,6 +783,23 @@ def accuracy_stats(records):
             elif ftone == "bearish":
                 e["fusion_bear"]["n"] += 1
                 e["fusion_bear"]["hit"] += int(ret < 0)
+            # 新闻 A/B: 仅对带 news_score 的样本, 比较带/不带新闻的方向命中。
+            if r.get("news_score") is not None:
+                _wn = e["news_with"]
+                _won = e["news_without"]
+                if ftone == "bullish":
+                    _wn["n"] += 1
+                    _wn["hit"] += int(ret > 0)
+                elif ftone == "bearish":
+                    _wn["n"] += 1
+                    _wn["hit"] += int(ret < 0)
+                ftone0 = r.get("fusion_no_news_tone")
+                if ftone0 == "bullish":
+                    _won["n"] += 1
+                    _won["hit"] += int(ret > 0)
+                elif ftone0 == "bearish":
+                    _won["n"] += 1
+                    _won["hit"] += int(ret < 0)
             ttone = r.get("trade_tone")
             if ttone == "bullish":
                 e["trade_bull"]["n"] += 1
@@ -537,6 +829,11 @@ def accuracy_stats(records):
                 exs.append(res["ret"] - res["bench"])
         if exs:
             e["ex_mean"] = round(statistics.mean(exs), 6)
+        # 新闻 A/B 汇总: 带新闻命中率 - 纯技术面命中率 (>0 表示新闻有增量)。
+        if e["news_with"]["n"] and e["news_without"]["n"]:
+            wr = e["news_with"]["hit"] / e["news_with"]["n"]
+            wor = e["news_without"]["hit"] / e["news_without"]["n"]
+            e["news_diff"] = round(wr - wor, 4)
         out["horizons"][k] = e
     return out
 
@@ -623,6 +920,25 @@ if __name__ == "__main__":
         print(json.dumps(accuracy_stats(records), ensure_ascii=False, indent=2,
                          default=str))
         print(f"\n本次新增评估 {n} 条, 累计 {len(records)} 条")
+        # 阶段带实测先验概览 (update_fb_prior 已随评估落盘; 此处热加载展示)
+        try:
+            labels = (load_fb_prior() or {}).get("labels") or {}
+            if labels:
+                print("\n阶段带实测先验 (结束后续变方向, ~80.2% 口径的来源):")
+                tot_n, tot_w = 0, 0.0
+                for k, v in sorted(labels.items(), key=lambda kv: -kv[1].get("n", 0)):
+                    n_ = v.get("n", 0)
+                    up_ratio = v.get("up_ratio", 0.5)
+                    d = v.get("dir") or v.get("fallback")
+                    corr = (1 - up_ratio) if d == "down" else up_ratio
+                    tot_n += n_
+                    tot_w += n_ * corr
+                    print(f"  {k:<14} n={n_:<4} up_ratio={up_ratio:.3f} "
+                          f"expected={d} -> 同向率约 {corr*100:.1f}%")
+                if tot_n:
+                    print(f"  加权合计: {tot_w/tot_n*100:.1f}% (n={tot_n})")
+        except Exception as e:
+            print(f"阶段带先验概览跳过: {e}")
         # 信号级准确度同步评估 (同一 cron 钩子)
         try:
             from .signal_accuracy import (

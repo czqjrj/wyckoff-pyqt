@@ -163,9 +163,23 @@ def _locate(df, date_str):
 
 
 def _eval_against(df, idx, rec):
-    """用 df 中 idx 之后的真实行情评估缺失周期。返回是否有新增评估。"""
+    """用 df 中 idx 之后的真实行情评估缺失周期。返回是否有新增评估。
+
+    双口径 (与 docs/accuracy_report.md §P0-1 一致):
+      ret   = 事件 bar 起算的历史可比收益;
+      ret_c = 确认后首根可交易 bar (avail_idx/avail_date) 起算, 剔除前视。
+    无确认信息 (avail 缺失) 时只写 ret, 不写 ret_c。
+    """
     c = df["close"].values
     n = len(df)
+    # 确认 bar 定位: 优先按日期 (跨 datalen 稳健), 回退存储索引。
+    avail = rec.get("avail_idx")
+    if rec.get("avail_date"):
+        avail = _locate(df, str(rec["avail_date"])) or avail
+    try:
+        avail = int(avail)
+    except (TypeError, ValueError):
+        avail = None
     results = dict(rec.get("results") or {})
     changed = False
     for h in HORIZONS:
@@ -175,7 +189,10 @@ def _eval_against(df, idx, rec):
         if idx is not None and idx + h < n:
             base = float(c[idx])
             if base > 0:
-                results[k] = {"ret": round(c[idx + h] / base - 1, 6)}
+                r = {"ret": round(c[idx + h] / base - 1, 6)}
+                if avail is not None and avail > 0 and c[avail] > 0 and avail + h < n:
+                    r["ret_c"] = round(c[avail + h] / c[avail] - 1, 6)
+                results[k] = r
                 changed = True
     rec["results"] = results
     done = len(results) >= len(HORIZONS)
@@ -209,6 +226,7 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
                          datalen=datalen, kind="event", type=e.get("type", "?"),
                          idx=e.get("idx"), date=str(e.get("date")),
                          conf=int(e.get("conf", 50)), price=float(e.get("price", 0)),
+                         avail_idx=e.get("avail_idx"), avail_date=str(e.get("avail_date", "")),
                          features=e.get("feat"),
                          created_ts=time.time(), last_eval_ts=0, status="pending",
                          eval_fails=0, results={}))

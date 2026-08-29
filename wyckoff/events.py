@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from .config import EVENT_COLORS, event_dir
+from .config import EVENT_COLORS, confirm_dir, event_dir
 
 USE_EMPIRICAL_CONF = True
 # 经验校准混合权重: 历史类型胜率对原 conf 的覆盖比例。
@@ -490,7 +490,7 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
 
     idx = np.array([e["idx"] for e in events])
     types = np.array([e["type"] for e in events])
-    dirs = np.array([event_dir(t) for t in types])
+    dirs = np.array([confirm_dir(t) for t in types])
 
     out = []
     for j, e in enumerate(events):
@@ -502,9 +502,16 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
         else:
             fut_close = close[i + 1:i + 1 + window]
             if d > 0:
-                ne["confirmed"] = bool(np.any(fut_close > high[i]))
+                cond = fut_close > high[i]
             else:
-                ne["confirmed"] = bool(np.any(fut_close < low[i]))
+                cond = fut_close < low[i]
+            ne["confirmed"] = bool(np.any(cond))
+            if ne["confirmed"]:
+                # 确认后首根可交易 bar (剔除前视, 与 signal_accuracy.ret_c 同口径):
+                # 记录可用进场点, 供"确认后命中率"评估与入场检索 (entries.avail_idx)。
+                av = int(i + 1 + np.argmax(cond))
+                ne["avail_idx"] = av
+                ne["avail_date"] = str(df["day"].iloc[av])
         out.append(ne)
     return out
 

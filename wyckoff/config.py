@@ -183,6 +183,23 @@ def event_dir(typ):
     return 0
 
 
+# 中性高潮事件的实际"反转"方向 (仅用于"确认后"可交易口径, 不改 event_dir 评分):
+# SC = 恐慌抛售(卖出高潮)→ 顶部恐慌, 之后倾向反弹 → 看多确认;
+# BC = 增持高潮(买入高潮)→ 顶部狂热, 之后倾向回落 → 看空确认。
+# AR/PSY 结构含义随阶段变化, 保留中性 (无方向确认)。
+_REVERSAL_CONFIRM_DIR = {"SC": 1, "BC": -1}
+
+
+def confirm_dir(typ):
+    """事件确认方向: 方向事件沿用 event_dir; 中性高潮 (SC/BC) 按反转方向,
+    用于 confirm_events 产出 avail_idx (确认后首根可交易 bar) 与 ret_c 方向化命中。
+    """
+    d = event_dir(typ)
+    if d != 0:
+        return d
+    return _REVERSAL_CONFIRM_DIR.get(typ, 0)
+
+
 _PHASE_STYLE = {
     "markdown":     ("Markdown 下跌", "#c92a2a", 0.10, "下跌"),
     "accumulation": ("Accumulation 吸筹", "#2b8a3e", 0.13, "吸筹"),

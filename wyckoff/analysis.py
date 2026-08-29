@@ -11,6 +11,8 @@ from .counterevidence import counter_evidence
 from .datasource import data_source_of, fetch_kline, fetch_name, merge_realtime_bar
 from .events import detect_all
 from .falsify import falsify_structure
+from .news import (apply_price_validation, fetch_forward_calendar,
+                   fetch_market_news_sentiment, fetch_news_sentiment)
 from .filters import (
     chip_analysis,
     flow_gate,
@@ -369,6 +371,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
             daily_phase = None
         mf = multi_tf_analysis(df, daily_phase=daily_phase)
     market_env = market_series = fund = flow = holder = None
+    news_sentiment = None
     s_name = s_flow = None
     if scale == 240:
         from concurrent.futures import ThreadPoolExecutor
@@ -379,8 +382,28 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
             f_flow = ex.submit(fetch_main_flow, symbol, 120) if confirm_enabled else None
             f_holder = ex.submit(fetch_holder_history, code) if confirm_enabled else None
             f_sector = ex.submit(fetch_sector_flow, symbol) if confirm_enabled else None
+            # 新闻情绪始终抓取 (仅公开标题, 轻量): 让 accuracy 快照持续记录 news_score,
+            # 否则新闻 A/B 评估 (accuracy.py 的 news_with/news_without) 永远无样本可评。
+            f_news = ex.submit(fetch_news_sentiment, symbol, 7)
+            f_mnews = ex.submit(fetch_market_news_sentiment)
+            f_cal = ex.submit(fetch_forward_calendar, symbol)
             market_env = f_env.result()
             market_series = f_series.result()
+            if market_env and f_mnews:
+                mnews = f_mnews.result()
+                if mnews and mnews.get("count"):
+                    market_env = {**market_env, "news": mnews}
+            news_sentiment = f_news.result() if f_news else None
+            # 价格反应验证 (effort-vs-result): 用发布后量价修正每条新闻权重,
+            # 并挂上前瞻事件日历 (解禁/业绩预告/财报披露窗口)。
+            try:
+                if news_sentiment:
+                    news_sentiment = apply_price_validation(news_sentiment, df)
+                    cal = f_cal.result() if f_cal else None
+                    if cal:
+                        news_sentiment = {**news_sentiment, "forward_calendar": cal}
+            except Exception:
+                pass
             if confirm_enabled:
                 fund = f_fund.result()
                 flow = f_flow.result()
@@ -423,7 +446,10 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
 
     # ── 多维度信号融合: K线结构 / 威科夫事件 / VSA / P&F → 统一多空评分
     #    (mf 高周期方向注入融合权重: 顺周/月线趋势的信号加权, 逆势信号降权)
-    fusion = fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=mf)
+    fusion = fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=mf,
+                          news_sentiment=news_sentiment,
+                          forward_calendar=(news_sentiment or {}).get("forward_calendar")
+                          if news_sentiment else None)
     if scale == 240 and confirm_enabled:
         # 基本面/资金流确认融入: 强多空时若资金反向, 降一档置信
         flow_net = float(flow.tail(20)["main"].sum()) if flow is not None \
@@ -439,6 +465,30 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                 fusion["conflicts"].append({
                     "bull": ["资金流"], "bear": ["K线结构", "威科夫事件", "VSA", "P&F"],
                     "note": "综合偏空但主力资金净流入, 谨慎"})
+        # 新闻情绪融入: 强多空时若新闻反向, 降一档置信; 新闻强烈同向时提升置信。
+        # (fail-soft: news 缺失/异常不影响主流程, news_score 回退 0 与中性一致)
+        try:
+            news_score = news_sentiment.get("score", 0.0) if news_sentiment else 0.0
+            if fusion["confidence"] in ("高", "中"):
+                if fusion["score"] > 0 and news_score < -0.3:
+                    fusion["confidence"] = "低"
+                    fusion["conflicts"].append({
+                        "bull": ["K线结构", "威科夫事件", "VSA", "P&F"],
+                        "bear": ["新闻情绪"], "note": f"综合偏多但新闻情绪偏空({news_score:.2f}), 谨慎"})
+                elif fusion["score"] < 0 and news_score > 0.3:
+                    fusion["confidence"] = "低"
+                    fusion["conflicts"].append({
+                        "bull": ["新闻情绪"], "bear": ["K线结构", "威科夫事件", "VSA", "P&F"],
+                        "note": f"综合偏空但新闻情绪偏多({news_score:.2f}), 谨慎"})
+            if fusion["confidence"] == "低":
+                if fusion["score"] > 0 and news_score > 0.5:
+                    fusion["confidence"] = "中"
+                    fusion["resonances"].append(["新闻情绪", "技术面共振"])
+                elif fusion["score"] < 0 and news_score < -0.5:
+                    fusion["confidence"] = "中"
+                    fusion["resonances"].append(["新闻情绪", "技术面共振"])
+        except Exception:
+            pass
 
     trade_plan = build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr,
                                   float(df["close"].iloc[-1]))
@@ -512,6 +562,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
         market["fund"] = fund
         market["flow"] = flow
         market["sector"] = sector
+        market["news_sentiment"] = news_sentiment
     title = f"{name} ({symbol})  威科夫分析 [{period_txt}]  |  区间 {df['day'].iloc[0]} ~ {df['day'].iloc[-1]}  |  {len(df)}根"
     segs = phase_segments(df, pivots, events)
     if kline_engine == "pyqtgraph":
@@ -563,6 +614,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                 "pivots": pivots, "events": events, "phase": phase,
                 "pnf_t": pnf_t, "vsa_signals": vsa_signals, "fusion": fusion,
                 "targets": targets, "trade_plan": trade_plan, "vsa_bt": vsa_bt,
+                "news_sentiment": news_sentiment,
             }
             precomputed_cb(df, symbol, code, scale, datalen, name,
                            phase_label, conf_q, precomputed)

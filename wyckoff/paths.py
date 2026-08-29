@@ -38,6 +38,8 @@ SIGNAL_ACCURACY_FILE = os.path.join(DATA_DIR, "wx_signal_accuracy.json")
 ONLINE_MODEL_FILE = os.path.join(DATA_DIR, "wx_online_model.json")
 # 阶段带"结束后延续方向"实测先验 (accuracy.update_fb_prior 落盘, auto_evaluate_feedback 热加载)
 FB_PRIOR_FILE = os.path.join(DATA_DIR, "wx_fb_prior.json")
+# 入场跟踪 (entries 确认后入场 + entry_journal 观察期命中) — 见 entry_journal.py
+ENTRY_JOURNAL_FILE = os.path.join(DATA_DIR, "wx_entry_journal.json")
 CANDIDATES_FILE = os.path.join(DATA_DIR, "wyckoff_candidates.json")
 BOARD_MAP_FILE = os.path.join(DATA_DIR, "wyckoff_board_map.json")
 PORTFOLIO_FILE = os.path.join(DATA_DIR, "wx_portfolio.json")
