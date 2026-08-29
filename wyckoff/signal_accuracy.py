@@ -231,10 +231,31 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
                          created_ts=time.time(), last_eval_ts=0, status="pending",
                          eval_fails=0, results={}))
     for s in vsa_signals:
+        vtype = s.get("label", "?")
+        # VSA 置信度: 用历史方向化命中率 (L1 贝叶斯收缩值) 作实证先验,
+        # 缺失样本回退 50 (中性)。修复旧版恒 0 → 无法排序/过滤的问题。
+        vconf = round(win_rate_of("vsa", vtype, 20) * 100)
+        # 让在线模型也校准 VSA conf (模型 ready 时轻度接管):
+        try:
+            from .online_model import apply_model_conf
+            _cand = {"kind": "vsa", "type": vtype, "conf": vconf,
+                     **dict(s.get("features") or {})}
+            apply_model_conf([_cand])
+            vconf = int(_cand["conf"])
+        except Exception:
+            pass
+        # 类型实证天花板封顶 (弱 VSA 标签高分幻觉修复):
+        try:
+            from .events import _cap_to_ceiling
+            _cand = {"kind": "vsa", "type": vtype, "conf": vconf}
+            _cap_to_ceiling([_cand])
+            vconf = int(_cand["conf"])
+        except Exception:
+            pass
         recs.append(dict(symbol=symbol, code=str(code)[-6:], name=name, scale=scale,
-                         datalen=datalen, kind="vsa", type=s.get("label", "?"),
+                         datalen=datalen, kind="vsa", type=vtype,
                          idx=s.get("idx"), date=str(s.get("date")),
-                         conf=0, price=0.0, created_ts=time.time(),
+                         conf=vconf, price=0.0, created_ts=time.time(),
                          last_eval_ts=0, status="pending", eval_fails=0, results={},
                          features=s.get("features")))
     if not recs:
@@ -305,7 +326,7 @@ def _evaluate_one(rec):
     return _eval_against(df, idx, rec)
 
 
-def evaluate_pending(records, force=False, min_interval=3600, max_records=20):
+def evaluate_pending(records, force=False, min_interval=3600, max_records=60):
     """对缺评估周期的记录补评估, 返回新增评估条数。"""
     from ._shared import run_pending_eval
     return run_pending_eval(records, _evaluate_one, HORIZONS,

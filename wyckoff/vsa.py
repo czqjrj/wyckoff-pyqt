@@ -102,6 +102,9 @@ _PRIORITY = {
     "ER": 40, "EF": 40,     # 宽幅无结果
 }
 
+# 检测器全集标签 (feature_vector 类型 one-hot 用; 与 _PRIORITY key 一致)
+ALL_VSA_LABELS = tuple(_PRIORITY.keys())
+
 _DESC = {
     "SC": "收于低位 → 卖出高潮", "BC": "收于高位 → 买入高潮",
     "SV": "宽幅中收 → 停止量", "UT": "上冲后收弱 → 上冲量",

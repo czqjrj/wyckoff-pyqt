@@ -32,6 +32,48 @@ def _empirical_reliability(type_, d=0):
         return None
 
 
+# 类型实证 conf 天花板: 高分信号若类型历史命中差 (Wilson CI 上界 < 60%),
+# 把 conf 封在 ci_hi 附近 — 防止弱类型 (SOS/JOC/BC/AR/PSY/BU) 被打分/模型
+# 抬到 80-100 档 (实测该档弱类型命中率越低反而越高置信, 反向亏钱)。
+# 强类型 (Spring ci_hi≈88, Shakeout≈88) 天花板高, 不受影响。
+CONF_CI_FLOOR = 0.60   # 仅当 ci_hi < 该值才封顶 (弱类型门)
+CONF_CEIL_MARGIN = 0.04  # 天花板 = ci_hi + margin, 给低样本少量余量
+
+
+def expected_conf(type_, d=0, kind="event"):
+    """某类型可给到的最高 conf (类型实证天花板)。无样本时返回 None → 不封顶。
+
+    弱类型 (ci_hi < CONF_CI_FLOOR) 封到 ci_hi×100; 强/中性类型不封。
+    返回 [0,100] 整数上限或 None。"""
+    if not USE_EMPIRICAL_CONF:
+        return None
+    try:
+        from .signal_accuracy import load_win_rates
+        rates = load_win_rates(20)
+        rec = rates.get((kind, str(type_)))
+        if not rec or not rec.get("ci_hi"):
+            return None
+        ci_hi = rec["ci_hi"]
+        if ci_hi >= CONF_CI_FLOOR:
+            return None  # 有实证强边缘 → 不封顶
+        return int(round(min(100.0, (ci_hi + CONF_CEIL_MARGIN) * 100)))
+    except Exception:
+        return None
+
+
+def _cap_to_ceiling(events):
+    """把超过类型实证天花板的 conf 压回天花板 (弱类型高分幻觉修复)。"""
+    for e in events:
+        conf = e.get("conf")
+        if not isinstance(conf, (int, float)) or conf <= 5:
+            continue
+        cap = expected_conf(e.get("type", ""), event_dir(e.get("type", "")),
+                            kind=e.get("kind", "event"))
+        if cap is not None and conf > cap:
+            e["conf"] = cap
+    return events
+
+
 def _apply_empirical_calibration(events):
     for e in events:
         if not USE_EMPIRICAL_CONF:
@@ -539,6 +581,11 @@ def detect_all(df: pd.DataFrame, pivots):
     try:
         from .online_model import apply_model_conf
         apply_model_conf(scored)
+    except Exception:
+        pass
+    # 类型实证天花板封顶: 防止弱类型被启发式/模型抬到高分档 (高分反向亏钱)。
+    try:
+        _cap_to_ceiling(scored)
     except Exception:
         pass
     return confirm_events(df, scored)

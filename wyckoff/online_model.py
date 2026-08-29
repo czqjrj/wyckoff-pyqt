@@ -27,8 +27,8 @@ try:
 except Exception:  # pragma: no cover - 环境缺 sklearn 时降级为不可用
     SGDClassifier = None
 
-MODEL_VERSION = 2
-FEATURE_VERSION = 2
+MODEL_VERSION = 3
+FEATURE_VERSION = 3
 
 # 特征定义 (与 events.event_confidence 捕获的 feat 字段对齐)
 # v2 追加 L5 威科夫语境特征 (wyckoff/context.py enrich 落库):
@@ -40,7 +40,16 @@ CONT_FEATURES = ["vr", "rw", "cpos", "trend", "pos60", "boll_pct",
                  "tr_pos", "tr_age_n", "tr_wid_n",
                  "base_len_n", "vol_shrink", "rs_pct", "idx_align", "sec_pct"]
 _EVENT_TYPES = tuple(dict.fromkeys(EVENT_COLORS.keys()))  # 与检测器全集一致 (含 PSY)
-TYPE_FEATURES = [f"type_{t}" for t in _EVENT_TYPES]
+
+# VSA 标签 (与 vsa.py 检测器全集对齐): 纳入类型 one-hot, 让模型能区分 VSA 类型。
+try:
+    from .vsa import ALL_VSA_LABELS as _VSA_TYPES
+except Exception:  # pragma: no cover - 不可用时回退内置全集
+    _VSA_TYPES = ("ND", "NS", "SC", "BC", "SV", "UT", "SPR", "ER", "EF",
+                  "DEM", "SUP", "ABS", "CHOC", "EVR",
+                  "UPT", "TEST", "ETR", "ETF", "TRU", "TRD")
+TYPE_FEATURES = [f"type_{t}" for t in _EVENT_TYPES] + \
+                [f"vtype_{t}" for t in _VSA_TYPES]
 FEATURES = CONT_FEATURES + TYPE_FEATURES
 _FEAT_INDEX = {f: i for i, f in enumerate(FEATURES)}
 
@@ -69,7 +78,10 @@ _MAX_ITER = 2000
 # ── 特征向量 ──
 
 def feature_vector(e) -> np.ndarray:
-    """把事件/记录 dict 映射为定长特征向量 (缺失特征以中性值填充)。"""
+    """把事件/记录 dict 映射为定长特征向量 (缺失特征以中性值填充)。
+
+    VSA 记录 (kind=vsa) 用 vtype_ one-hot 区分类型; 事件记录用 type_ one-hot。
+    """
     x = np.zeros(len(FEATURES), dtype=float)
     f = e.get("feat") or e.get("features") or {}
     for i, name in enumerate(CONT_FEATURES):
@@ -77,11 +89,17 @@ def feature_vector(e) -> np.ndarray:
         if v is None or (isinstance(v, float) and not math.isfinite(v)):
             v = _NEUTRAL_FILL.get(name, 0.0)  # 缺失/NaN → 中性安全值
         if name == "dir" and v == 0:
-            v = event_dir(e.get("type", ""))
+            v = _record_dir(e)
         x[i] = float(v)
-    ti = _FEAT_INDEX.get(f"type_{e.get('type', '?')}")
-    if ti is not None:
-        x[ti] = 1.0
+    etype = e.get("type", "?")
+    if e.get("kind") == "vsa":
+        ti = _FEAT_INDEX.get(f"vtype_{etype}")
+        if ti is not None:
+            x[ti] = 1.0
+    else:
+        ti = _FEAT_INDEX.get(f"type_{etype}")
+        if ti is not None:
+            x[ti] = 1.0
     x[_FEAT_INDEX["conf"]] = float(e.get("conf", 50)) / 100.0
     return x
 
@@ -115,11 +133,24 @@ def _sig_date_ts(r):
         return None
 
 
+def _record_dir(r):
+    """记录标称方向: 事件用 event_dir, VSA 用 vsa_dir; 缺省按类型推断。"""
+    kind = r.get("kind", "event")
+    try:
+        if kind == "vsa":
+            from .config import vsa_dir
+            return vsa_dir(str(r.get("type", "")))
+        from .config import event_dir
+        return event_dir(str(r.get("type", "")))
+    except Exception:
+        return 0
+
+
 def labeled_rows(records, horizon=MODEL_HORIZON):
-    """筛选带特征 + 已评估标签的事件信号记录。"""
+    """筛选带特征 + 已评估标签的信号记录 (事件 + VSA)。"""
     out = []
     for r in records or []:
-        if r.get("kind") != "event":
+        if r.get("kind") not in ("event", "vsa"):
             continue
         if not r.get("features"):
             continue
@@ -285,7 +316,8 @@ def apply_model_conf(events):
             continue
         z = float(feature_vector(e) @ coef) + intercept
         p = 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, z))))
-        d = event_dir(e.get("type", ""))
+        # 模型学习的是 P(up); 对空头信号反向取"看跌可信度" (方向化命中)。
+        d = _record_dir(e)
         rel = p if d > 0 else (1.0 - p if d < 0 else 0.5)
         new_conf = int(round(min(100, max(0, conf * (1.0 - w) + rel * 100 * w))))
         if new_conf != conf:

@@ -55,7 +55,7 @@ def _climax_events(sub_df, sub_pivots_unused=None):
         return []
 
 
-def backfill_one_signal(rec, kline_df, index_df=None):
+def backfill_one_signal(rec, kline_df, index_df=None, symbol=None):
     """回填单条 event 记录的语境特征。返回 True 表示已写回。
 
     kline_df 为该标的日线全量 (含指标列); 内部按信号日前缀切片重算,
@@ -80,6 +80,19 @@ def backfill_one_signal(rec, kline_df, index_df=None):
     got = {k: out.get(k) for k in CONTEXT_FEAT_KEYS}
     if not any(v is not None for v in got.values()):
         return False
+    # sec_pct 板块强度: 用信号日前的产业强度快照无偏回填 (P4), 而非今天的值。
+    # 板块名缺省 (个股不详) 或快照断档 → 保持缺省, 由安全填充兜底。
+    if out.get("sec_pct") is None:
+        try:
+            from .chain import strength_at
+            from .fundamental import fetch_sector
+            bname = fetch_sector(symbol or rec.get("symbol", ""))
+            if bname:
+                sv = strength_at(bname, rec.get("date", ""))
+                if sv is not None:
+                    got["sec_pct"] = sv
+        except Exception:
+            pass
     feats_in.update(got)
     rec["features"] = feats_in
     return True

@@ -201,7 +201,10 @@ def record_analysis(df, symbol, code, scale, datalen, name="",
                     phase_label=None, conf_q=None, precomputed=None):
     """记录一次分析预测 (去重: 同 symbol+scale+时点 覆盖; 近1小时同标的快照合并)。
 
-    precomputed: 复用调用方已算好的管线中间结果, 避免整条管线重复计算。"""
+    写入前会用当次 df 对库内同 symbol+scale 的待评估记录做一次"立即评估"——
+    分析拉到的 df 通常比记录 ref_dt 更新, 走满周期的旧记录借此即时出结果,
+    不依赖准确性窗口/cron 的触发时机。precomputed: 复用调用方管线中间结果。
+    """
     rec = capture_snapshot(df, symbol, code, scale, datalen, name=name,
                            phase_label=phase_label, conf_q=conf_q,
                            precomputed=precomputed)
@@ -222,8 +225,27 @@ def record_analysis(df, symbol, code, scale, datalen, name="",
     except Exception as e:
         from ._log import log_exc
         log_exc(f"auto_evaluate_feedback({symbol}) 失败", e)
+    change = 0
     with _LOCK:
         records = load_accuracy()
+        # 立即评估: 同 symbol+scale 的待评估记录, 若 ref_dt 在当前 df 内已走过
+        # 周期 (历史信号在今天拉到的更长序列里), 用本次 df 就地补齐缺失评估,
+        # 避免等后台定时任务才出结果。单次最多评估 10 条, 防刷新风暴。
+        changed = True
+        for r in records:
+            if r.get("symbol") != symbol or int(r.get("scale", 240)) != int(scale):
+                continue
+            if r.get("results"):
+                continue
+            try:
+                if _evaluate_against_df(r, df):
+                    change += 1
+            except Exception:
+                continue
+            if change >= 10:
+                break
+        if change:
+            save_accuracy(records)
         key = _key(rec)
         for i, r in enumerate(records):
             if _key(r) == key:
@@ -242,6 +264,37 @@ def record_analysis(df, symbol, code, scale, datalen, name="",
         records.append(rec)
         save_accuracy(records)
         return rec
+
+
+def _evaluate_against_df(rec, df):
+    """用传入 df 立即评估单条分析记录缺失周期 (可评估即补, 无则 False)。
+
+    ref_dt 定位成功且未来周期已走满才落结果; 不触发网络抓取。
+    返回是否产生了新评估。"""
+    scale = int(rec.get("scale", 240))
+    if int(rec.get("scale", 240)) != scale:
+        return False
+    idx = _locate_ref(df, rec.get("ref_dt", ""))
+    if idx is None:
+        return False
+    results = dict(rec.get("results") or {})
+    changed = False
+    for h in HORIZONS:
+        k = str(h)
+        if k in results:
+            continue
+        if idx + h < len(df):
+            r = _horizon_result(df, idx, h, rec, bench=None)
+            if r is not None:
+                results[k] = r
+                changed = True
+    if not changed:
+        return False
+    rec["results"] = results
+    rec["status"] = "done" if len(results) >= len(HORIZONS) else "pending"
+    rec["waiting"] = False
+    rec["last_eval_ts"] = time.time()
+    return True
 
 
 # ── 阶段带自动反馈标注 ──
@@ -558,7 +611,7 @@ def _evaluate_one(rec):
     return changed
 
 
-def evaluate_pending(records, force=False, min_interval=3600, max_records=15):
+def evaluate_pending(records, force=False, min_interval=3600, max_records=60):
     """对未完成的记录评估缺失周期, 返回新增评估条数。评估期间不持文件锁 (网络可能慢)。"""
     return run_pending_eval(records, _evaluate_one, HORIZONS,
                             load_accuracy, save_accuracy, _key, _LOCK,

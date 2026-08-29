@@ -427,6 +427,16 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                       "main20": float(s_flow.tail(20)["main"].sum())}
         conf_q, conf_items = build_confirm_section(phase, df, fund, flow, holder, sector,
                                                    events=events)
+        # P4: 把当前板块强度百分位写入近期事件的 sec_pct 特征 (context 预留钩子),
+        # 补上模型缺失的市场环境维度; 板块名缺失 → chain 返回 None, 保持缺省。
+        if s_name:
+            try:
+                from .chain import apply_sector_strength, sector_strength_pct
+                _sp = sector_strength_pct(s_name)
+                if _sp is not None:
+                    apply_sector_strength(events, _sp, len(df))
+            except Exception:
+                pass
     if conf_q == "high":
         phase_label = f"高置信 {phase}"
     elif conf_q == "caution":
