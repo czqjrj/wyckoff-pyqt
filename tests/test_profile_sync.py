@@ -132,6 +132,44 @@ def test_no_net_guards_git_ops():
     assert ps._git(["status"]) == ("", 0)
 
 
+def test_first_sync_settings_default_not_override_remote(tmp_path):
+    """新设备首次同步: 本地默认 UI 值不得覆盖云端真实配置。
+
+    回归背景: 影子为空(首次)时, 本地每个 settings 键都被打上当前时间戳,
+    导致 LWW 合并时本地默认值(时间新)胜过云端真实配置, 新设备拉不到已配置的
+    UI 设置 (如深色主题)。修复后: 影子无记录的键若本地值仍是出厂默认,
+    用保守 ts=0, 让云端值在合并中胜出。
+    """
+    m = _reload_modules(tmp_path)
+    # 云端 bundle: 用户已配置 theme=dark
+    remote = {
+        "schema": m.SCHEMA,
+        "types": {"settings": {"items": {
+            "theme": {"v": "dark", "ts": 100},
+        }}},
+    }
+    # 本地新设备: 默认值 light (未改过), 首 collect 无影子
+    st = m._collect_type("settings")
+    assert st["theme"]["v"] == "light", "本地默认应为 light"
+    assert st["theme"]["ts"] == 0.0, "默认值首同步应打保守时间戳"
+
+    # 合并后云端 dark 胜出
+    rt = remote["types"]["settings"]["items"]
+    merged = m._merge_items(st, rt)
+    assert merged["theme"]["v"] == "dark"
+
+    # 用户已改过非默认值: 首同步应打 now 时间戳(能上云)
+    m2 = _reload_modules(tmp_path)
+    import importlib
+    storage = importlib.import_module("wyckoff.storage")
+    s = storage.load_settings()
+    s["theme"] = "custom-solarized"
+    storage.save_settings(s)
+    st2 = m2._collect_type("settings")
+    assert st2["theme"]["v"] == "custom-solarized"
+    assert st2["theme"]["ts"] > 0, "用户改过的值首同步应打当前时间戳"
+
+
 def test_pull_merge_preserves_local_delete(tmp_path):
     """「从云下载」不能盲目用远端覆盖本地删除。
 

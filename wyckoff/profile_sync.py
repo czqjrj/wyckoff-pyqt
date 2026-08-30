@@ -73,6 +73,15 @@ def _read_settings_state():
             if k in SETTINGS_WHITELIST and not _sensitive(k)}
 
 
+def _is_default(k, v):
+    """settings 键当前的本地值是否等于出厂默认 (用户未主动改过)。"""
+    try:
+        from .config import DEFAULT_SETTINGS
+        return v is None or v == DEFAULT_SETTINGS.get(k)
+    except Exception:
+        return False
+
+
 def _write_settings_state(state):
     s = storage.load_settings()
     changed = False
@@ -244,7 +253,13 @@ def _collect_type(tname):
             entry = per_type.get(k)
             if v is not None:
                 if entry is None or entry.get("v") != v:
-                    ts = now
+                    # 首次(影子无记录)时, 若本地值仍是默认值(用户未改过),
+                    # 用保守 ts=0, 让云端真实配置在 LWW 中胜出, 避免新设备
+                    # 首同步时默认 UI 覆盖云端配置。
+                    if entry is None and _is_default(k, v):
+                        ts = 0.0
+                    else:
+                        ts = now
                 else:
                     ts = entry.get("ts", 0.0)
                 state[k] = {"v": v, "ts": ts}
