@@ -23,22 +23,56 @@ from .config import (
 )
 
 
+def _vol_pct_median(df, window: int = 20) -> float:
+    """计算最近 window 根 K 线的收盘价波动率中位数 (%): 
+    以中位而非均值，避免极端行情 (黑天鹅/封 ST) 污染。
+    若数据不足窗口，自动收窄至可用根数。"""
+    close = df["close"].values.astype(float)
+    win = min(window, len(close))
+    if win < 3:
+        return 0.02  # 极少数据回退最小阈值
+    # 逐根 True Range (最高-最低, 以及之和前收盘价的绝对差)
+    tr = np.zeros(len(close))
+    tr[0] = max(df["high"].iloc[0], df["close"].iloc[0]) - min(df["low"].iloc[0], df["close"].iloc[0])
+    for i in range(1, len(close)):
+        tr[i] = max(
+            df["high"].iloc[i] - df["low"].iloc[i],
+            abs(df["high"].iloc[i] - df["close"].iloc[i-1]),
+            abs(df["low"].iloc[i] - df["close"].iloc[i-1])
+        )
+    median_close = np.median(close[-win:])
+    if median_close <= 0:
+        return 0.03  # 防止零价位误判
+    atr_pct = np.median(tr[-win:]) / median_close * 100.0
+    return float(atr_pct)
+
+
+def _adapt_min_rec(vol_pct: float, base: float = 0.03, alpha: float = 0.5) -> float:
+    """基于波动率自适应回升阈值: base(3%) + 波动系数。
+    波动率 10% 时: 3% + 10%*0.5 = 3.5%; 波动率 40% 时: 3% + 40%*0.5 = 5%.
+    上限不超过 6% (避免高波动市放宽过度)。"""
+    return min(0.06, base + vol_pct * alpha)
+
+
 def _bottom_turning(df, pivots, events, rtypes, low_win=60, min_rec=0.04,
                     ma_win=120):
     """下跌末段是否已现"低点防守 + 回升"的筑底迹象。
 
-    三项判断:
-    - 回升: 收盘自近期 (low_win) 低点回升 ≥ min_rec;
-    - 低点防守: 收盘守住最近枢轴低点 (高于其 2%);
-    - 确认: 吸筹事件 (Spring/ST/SOS/JOC/SC) 或 站上 MA20 或 MA20 斜率向上。
-    后两项至少满足其一, 防止只凭一根反抽就过早抄底。"""
+    相比旧版固定 min_rec=4%, 改用基于近期波动率的自适应阈值:
+    - 高波动股 (波动率 > 30%): 阈值放宽至 ~5%, 避免把正常波动当作反转信号;
+    - 低波动股 (波动率 < 10%): 阈值收窄至 ~3%, 提高敏感度;
+    - 普通市 (波动率 10-30%): 介于 3-5% 之间。
+    保持原有三项判断不变: 回升、低点防守、确认(事件/MA站上)。"""
     n = len(df)
     if n < 30:
         return False
     close = df["close"].values
+    # 自适应波动率
+    vol_pct = _vol_pct_median(df, window=low_win)
+    min_rec_ad = _adapt_min_rec(vol_pct, base=0.03, alpha=0.5)
     w = df.tail(low_win)
     recent_lo = float(w["low"].min())
-    if recent_lo <= 0 or close[-1] <= recent_lo * (1 + min_rec):
+    if recent_lo <= 0 or close[-1] <= recent_lo * (1 + min_rec_ad):
         return False
     lows = [p for p in pivots if p["type"] == "low" and p["idx"] >= n - ma_win]
     held_low = False
@@ -93,17 +127,21 @@ def _bull_confirmed(df, back=8):
 def _top_turning(df, events, rtypes, hi_win=60, min_dn=0.04, ma_win=120):
     """上升趋势末段是否已现"冲高回落 + 破位"的见顶迹象。
 
-    - 回落: 收盘自近期 (hi_win) 高点回落 ≥ min_dn;
-    - 破位: 收盘跌破 MA20;
-    - 确认: 派发事件 (UTAD/BC/LPSY/SOW) 或 MA20 斜率向下。
-    回落 + (破位 + 确认至少其一) 才判顶, 避免强趋势中正常回调误判。"""
+    相比旧版固定 min_dn=4%, 改用基于近期波动率的自适应阈值:
+    - 高波动股 (波动率 > 30%): 阈值放宽至 ~5%, 避免把正常回调当作见顶;
+    - 低波动股 (波动率 < 10%): 阈值收窄至 ~3%, 提高敏感度;
+    - 普通市 (波动率 10-30%): 介于 3-5% 之间。
+    保持原有三项判断不变: 回落、破位 MA20、确认(事件/MA斜率向下)。"""
     n = len(df)
     if n < 30:
         return False
     close = df["close"].values
+    # 自适应波动率 (复用 _vol_pct_median 与 _adapt_min_rec)
+    vol_pct = _vol_pct_median(df, window=hi_win)
+    min_dn_ad = _adapt_min_rec(vol_pct, base=0.03, alpha=0.5)
     w = df.tail(hi_win)
     recent_hi = float(w["high"].max())
-    if recent_hi <= 0 or close[-1] >= recent_hi * (1 - min_dn):
+    if recent_hi <= 0 or close[-1] >= recent_hi * (1 - min_dn_ad):
         return False
     ma20 = df["price_ma20"].values
     if not (np.isfinite(ma20[-1]) and close[-1] < ma20[-1]):
