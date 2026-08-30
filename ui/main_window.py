@@ -382,7 +382,6 @@ class MainWindow(QMainWindow):
         # 工具: 持仓/对比 + 信号验证 + 本地数据维护
         t = m.addMenu("工具")
         t.addAction("我的持仓 (盈亏跟踪)", self.open_portfolio)
-        t.addAction("模拟盘 (自动交易)", self.open_paper_win)
         t.addAction("多股票对比", self.open_compare)
         t.addSeparator()
         t.addAction("校准中心", "Ctrl+Shift+A", lambda: self.open_accuracy_center())
@@ -696,6 +695,8 @@ class MainWindow(QMainWindow):
         self._ac_container = None
         # 今日入场点: 懒创建 Tab (恒置于最后, on_scan_entries 触发创建)
         self.entry_tab = None
+        # 模拟盘: 常驻固定 Tab (_ensure_paper_tab 建立, 不可关闭)
+        self.paper_tab = None
 
         # ── 业务接线 (自旧 *_build_*_tab 迁移) ──
         # K线: 图层状态恢复 + 右键菜单 + VSA 标签点击解释
@@ -762,6 +763,9 @@ class MainWindow(QMainWindow):
 
         # 标签页关闭: 仅「综合选股 / 校准中心」可关 (view 已摘除其余关闭按钮)
         self.tabs.tabCloseRequested.connect(self._on_tab_close)
+
+        # 模拟盘: 常驻固定 Tab (不可关闭)
+        self._ensure_paper_tab()
 
         # 右面板: 节切换 + TTS + 初始空渲染
         self._section_htmls = []
@@ -1810,6 +1814,20 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.entry_tab, "今日入场点")
         idx = self.tabs.count() - 1
         self.tabs.setCurrentIndex(idx)
+
+    def _ensure_paper_tab(self):
+        """建立自动模拟盘 Tab (常驻, 不可关闭)。"""
+        if self.paper_tab is not None:
+            return
+        from .paper_window import PaperWindow
+        # PaperWindow 是 QDialog, 直接作为中央固定 Tab 嵌入.
+        self.paper_tab = PaperWindow(self, settings=self.settings,
+                                     on_load=self._load_code)
+        self.tabs.addTab(self.paper_tab, "模拟盘")
+        # 固定 Tab: 去掉关闭按钮 (同 K线图 等分析页), 不可被关闭.
+        self.tabs.tabBar().setTabButton(
+            self.tabs.indexOf(self.paper_tab),
+            self.tabs.tabBar().ButtonPosition.RightSide, None)
 
     def _load_code(self, code):
         self._current_code = code
@@ -3133,14 +3151,6 @@ class MainWindow(QMainWindow):
         """打开我的持仓 (个人持仓簿, 盈亏/止损跟踪)。"""
         self._show_win("_portfolio_win",
                        lambda: PortfolioWindow(self, on_load=self._load_code))
-
-    def open_paper_win(self):
-        """打开模拟盘 (自动筛选→下单→卖出→统计)。"""
-        from .paper_window import PaperWindow
-        self._show_win("_paper_win",
-                       lambda: PaperWindow(self, settings=self.settings,
-                                           on_load=self._load_code),
-                       refresh=True)
 
     def open_alerts(self):
         """打开自选股预警管理窗口。"""

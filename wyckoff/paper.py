@@ -120,6 +120,7 @@ def load_state():
             st.setdefault("equity_hist", []) #        qty, ret, reason, type, close_ts}
             st.setdefault("candidates", [])  # 最新候选快照
             st.setdefault("pending", [])     # 等待下一根开盘买入的委托
+            st.setdefault("conditions", [])  # 条件单: 价格触发/止盈止损/追踪止损
             st.setdefault("meta", {})
             return st
     except Exception:
@@ -136,6 +137,7 @@ def _new_state():
         "equity_hist": [],
         "candidates": [],
         "pending": [],
+        "conditions": [],
         "meta": {},
     }
 
@@ -153,7 +155,7 @@ def save_state(st):
         return False
 
 
-# ── 选股: 全市场自动筛选 ────────────────────────────────
+# ── 选股: 全市场自动筛选并自动生成条件单 ─────────────────────
 def pick_candidates(universe=None, max_codes=60, min_conf=None,
                     cancel_event=None):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
@@ -161,6 +163,10 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
     每只股票只留"最近 N 根内最新"的强多头事件; conf 由 event 的 conf 字段
     (启发式 + online model 校准 + 类型封顶后) 提供。universe 为空用全市场。
     min_conf 缺省取当前生效参数 (apply_paper_params 设置或模块默认 90)。
+
+    新增: 遇到强多头事件时自动添加价格买入条件单 (buy_price),
+    触发价设为最近收盘价，触发条件为 "≥ 达上破" (above)。
+    条件单将被写入状态, 供后续 _check_conditions 轮询触发。
     """
     if min_conf is None:
         min_conf = _CUR["min_conf"]
@@ -224,6 +230,19 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
             except Exception:
                 pass
             out.append(latest)
+
+            # 【新增】遇到强多头事件时自动添加价格买入条件单
+            # 条件单种类: buy_price (价跌买入), trigger="above" (≥ 达上破)
+            # 触发价设为最近收盘价的微小突破位，防止即时成交而留作待触发
+            try:
+                cond_price = round(float(latest["last"]) * 1.002, 3)  # 当前价的 0.2% 上方
+                st = load_state()  # 获取/创建状态
+                add_condition(st, kind="buy_price",
+                              symbol=code, price=cond_price,
+                              trigger="above",
+                              reason=f"自动:{latest['type']}({latest.get('conf',0)})")
+            except Exception:
+                pass  # 若配置有误或环境未准备则静默跳过，不影响选股主流程
         except Exception:
             continue
     out.sort(key=lambda e: -(int(e.get("conf", 0) or 0)))
@@ -306,6 +325,241 @@ def _enqueue_buy(st, code, name, type_, conf, price):
     return order
 
 
+# ── 条件单 (价格触发 / 止盈止损 / 追踪止损) ─────────────────
+# kind:
+#   "buy_price"   价格买入条件单: 现价 满足 trigger 与 price 时买入
+#   "sell_price"  价格卖出条件单: 现价 满足 trigger 与 price 时卖出
+#   "take_profit" 止盈: 浮盈 ≥ pct 时卖出
+#   "stop_loss"   止损: 浮亏 ≥ pct 时卖出
+#   "trailing"    追踪止损: 从持仓期内最高价回撤 pct 时卖出
+# trigger: "above"(≥) / "below"(≤)  (仅 buy_price/sell_price 用)
+_COND_KINDS = ("buy_price", "sell_price", "take_profit", "stop_loss", "trailing")
+
+
+def _cond(kind, symbol, price=None, pct=None, trigger="above", qty=0,
+          name="", reason="", amount=None):
+    """构造一条条件单记录 (status="active")。"""
+    c = {
+        "cid": f"cond-{int(time.time() * 1_000_000)}",
+        "kind": kind, "symbol": symbol, "name": name,
+        "price": round(float(price), 3) if price is not None else None,
+        "pct": float(pct) if pct is not None else None,
+        "trigger": trigger, "qty": int(qty or 0), "amount": amount,
+        "reason": reason,
+        "status": "active", "created_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "matched_ts": "", "matched_price": None,
+        "peak": None, "correct": None,  # correct: True/False/None(未评估)
+    }
+    return c
+
+
+def add_condition(st, kind, symbol, price=None, pct=None, trigger="above",
+                  qty=0, name="", reason="", save=True):
+    """添加一条条件单到状态并落盘 (save=True)。返回 (cond, msg)。"""
+    if kind not in _COND_KINDS:
+        return None, f"不支持的条件单类型: {kind}"
+    if kind in ("buy_price", "sell_price") and price is None:
+        return None, "价格条件单需指定触发价"
+    if kind in ("take_profit", "stop_loss", "trailing") and pct is None:
+        return None, "止盈/止损/追踪条件单需指定百分比"
+    c = _cond(kind, symbol, price=price, pct=pct, trigger=trigger,
+              qty=qty, name=name, reason=reason)
+    st.setdefault("conditions", []).append(c)
+    if save:
+        save_state(st)
+    return c, "已添加条件单"
+
+
+def place_condition(kind, symbol, price=None, pct=None, trigger="above",
+                    qty=0, name="", reason=""):
+    """独立入口: 加载状态并添加条件单。返回 (cond, msg)。"""
+    st = load_state()
+    with _LOCK:
+        return add_condition(st, kind, symbol, price=price, pct=pct,
+                             trigger=trigger, qty=qty, name=name,
+                             reason=reason, save=True)
+
+
+def cancel_condition(st, cid, save=True):
+    """取消一条条件单 (status → "cancelled")。返回是否命中。"""
+    for c in st.get("conditions", []):
+        if c.get("cid") == cid and c.get("status") == "active":
+            c["status"] = "cancelled"
+            c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if save:
+                save_state(st)
+            return True
+    return False
+
+
+def _match_trigger(trigger, price, cond_price):
+    """价格条件比较: above 表示 ≥, below 表示 ≤。"""
+    if trigger == "below":
+        return price <= cond_price
+    return price >= cond_price
+
+
+def _check_conditions(st, df_by_code):
+    """周期推进时检查条件单: 以最新收盘价判断是否触发。
+
+    触发动作:
+      - buy_price / sell_price: 现价满足 trigger 与 price 时执行买卖。
+      - take_profit / stop_loss: 持仓浮盈/浮亏达到 pct 时平仓。
+      - trailing: 持仓期内最高价回撤 pct 时平仓 (无持仓时触发作废)。
+    返回触发的条件单数量。
+    """
+    triggered = 0
+    for c in list(st.get("conditions", [])):
+        if c.get("status") != "active":
+            continue
+        sym = c["symbol"]
+        df = df_by_code.get(sym)
+        if df is None or len(df) == 0:
+            continue
+        last = float(df["close"].iloc[-1])
+        kind = c["kind"]
+
+        if kind == "buy_price":
+            if _match_trigger(c["trigger"], last, c["price"]):
+                _fire_condition(st, c, last, df, side="buy")
+                triggered += 1
+        elif kind == "sell_price":
+            if _match_trigger(c["trigger"], last, c["price"]):
+                _fire_condition(st, c, last, df, side="sell")
+                triggered += 1
+        elif kind in ("take_profit", "stop_loss"):
+            pos = _find_pos(st, sym)
+            if pos is None:
+                continue  # 无持仓的止盈止损无意义, 保留等待
+            entry = float(pos["buy_px"])
+            ret = last / entry - 1
+            if kind == "take_profit" and ret >= c["pct"]:
+                _fire_condition(st, c, last, df, side="sell", pos=pos)
+                triggered += 1
+            elif kind == "stop_loss" and ret <= -c["pct"]:
+                _fire_condition(st, c, last, df, side="sell", pos=pos)
+                triggered += 1
+        elif kind == "trailing":
+            pos = _find_pos(st, sym)
+            if pos is None:
+                # 无持仓时追踪止损无法建立峰值, 保留但跳过
+                continue
+            peak = c.get("peak") or max(last, float(pos.get("last", pos["buy_px"])))
+            if last > peak:
+                peak = last
+            c["peak"] = peak
+            if peak and last <= peak * (1 - c["pct"]):
+                _fire_condition(st, c, last, df, side="sell", pos=pos)
+                triggered += 1
+    return triggered
+
+
+def _find_pos(st, symbol):
+    for p in st["positions"]:
+        if p["symbol"] == symbol:
+            return p
+    return None
+
+
+def _judge_condition_correct(c, last, entry=None, ret=None, peak=None,
+                             side="sell", cond_price=None, pct=None):
+    """根据条件类型和行情判断是否正确 (True=绿钩, False=红叉, None=未评估)。
+    
+    判断规则:
+      - buy_price/above: 价格 ≥ 触发价 → True
+      - buy_price/below: 价格 ≤ 触发价 → True
+      - sell_price/above: 价格 ≥ 触发价 → True
+      - sell_price/below: 价格 ≤ 触发价 → True
+      - take_profit: 实际收益 ≥ pct → True
+      - stop_loss: 实际亏损 ≥ pct → True (ret <= -pct)
+      - trailing: 从峰值回撤 ≥ pct → True
+    """
+    kind = c.get("kind", "")
+    trigger = c.get("trigger", "above")
+    price = c.get("price")
+    
+    if kind in ("buy_price", "sell_price"):
+        if trigger == "above":
+            return price is not None and last >= price
+        else:  # below
+            return price is not None and last <= price
+    
+    if kind == "take_profit":
+        if ret is not None and pct is not None:
+            return ret >= pct
+        return None
+    
+    if kind == "stop_loss":
+        if ret is not None and pct is not None:
+            return ret <= -pct
+        return None
+    
+    if kind == "trailing":
+        if peak is not None and pct is not None:
+            # 触发时: 当前价是否已从峰值回撤 pct
+            return last <= peak * (1 - pct)
+        return None
+    
+    return None
+
+
+def _fire_condition(st, c, last, df, side="buy", pos=None):
+    """执行触发动作后把条件单标记为已触发 (status → "done")。"""
+    # 首先判断正确性
+    entry_price = None
+    condition_ret = None
+    condition_peak = None
+    
+    if side == "buy":
+        budget = c.get("amount") or st["cash"]
+        order = _make_order(c["symbol"], c.get("name", ""), "条件单",
+                            c.get("qty", 0) or 0, last, 0, budget)
+        if order is None or len(st["positions"]) >= _CUR["max_pos"]:
+            # 预算不足/同持已满: 条件单转取消, 防止永久悬挂
+            c["status"] = "cancelled"
+            c["note"] = "资金/同持上限不足, 未成交"
+            c["correct"] = None
+        else:
+            fill_buy(st, order)
+            c["matched_price"] = order["price"]
+            c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            c["status"] = "done"
+            # 买入条件单: 判断触发价是否被满足
+            # buy_price: 我们在 pick_candidates 中设置 price = last * 1.002 (略高于当前价)
+            # 触发意味着 last >= price，所以 correct=True
+            c["correct"] = True  # buy_price 已触发突破
+    else:
+        if pos is None:
+            pos = _find_pos(st, c["symbol"])
+        if pos is None:
+            c["status"] = "cancelled"
+            c["note"] = "无持仓可平"
+            c["correct"] = None
+            return
+        sell_price = round(last * (1 - SLIP_SELL), 3)
+        entry_price = float(pos["buy_px"])
+        condition_ret = last / entry_price - 1
+        
+        # 计算 trailing 的 peak
+        if c["kind"] == "trailing" and c.get("peak") is not None:
+            condition_peak = c["peak"]
+        elif c["kind"] == "trailing":
+            # 从持仓峰值计算
+            condition_peak = max(last, entry_price)
+        
+        close_position(st, pos, sell_price, f"条件单:{c['kind']}")
+        c["matched_price"] = sell_price
+        c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        c["status"] = "done"
+        
+        # 判断卖出条件单是否正确
+        c["correct"] = _judge_condition_correct(
+            c, last, entry=entry_price, ret=condition_ret,
+            peak=condition_peak, side="sell",
+            cond_price=c.get("price"), pct=c.get("pct")
+        )
+
+
 def fill_buy(st, order):
     """口头成交: 扣现金、建仓。"""
     price = order["price"]
@@ -331,6 +585,8 @@ def step(st, df_by_code):
     df_by_code: {symbol: df(含 indicators)} 当前最新行情窗口 (由 UI/调度器提供)。
     不可用 (无行情) 时跳过。
     """
+    # 先检查条件单: 用户自定义的价格触发/止盈/止损/追踪优先于默认止盈止损。
+    _check_conditions(st, df_by_code)
     for pos in st["positions"]:
         df = df_by_code.get(pos["symbol"])
         if df is None or len(df) == 0:
@@ -417,6 +673,10 @@ def stats(st):
         "n_closed": len(closed),
         "n_orders": len(st["orders"]),
         "n_pending": len(st["pending"]),
+        "n_cond_active": sum(1 for c in st.get("conditions", [])
+                             if c.get("status") == "active"),
+        "n_cond_done": sum(1 for c in st.get("conditions", [])
+                           if c.get("status") == "done"),
         "total_return": 0.0,
         "win_rate": None,
         "pl_ratio": None,
@@ -485,6 +745,7 @@ def signal_stats_text(st):
     L.append("")
     L.append(f"- 总资产: **{s['cash']:,}** 当前持仓 {s['n_positions']} 只, "
              f"已平仓 {s['n_closed']} 笔, 订单 {s['n_orders']} 笔")
+    L.append(f"- 条件单: 激活 {s['n_cond_active']} · 已触发 {s['n_cond_done']}")
     L.append(f"- 累计收益: **{s['total_return']*100:+.2f}%**  "
              f"最大回撤: {f'{s['max_drawdown']*100:.2f}%' if s['max_drawdown'] is not None else '-'}")
     if s["win_rate"] is not None:

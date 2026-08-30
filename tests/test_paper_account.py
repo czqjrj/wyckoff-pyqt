@@ -281,3 +281,92 @@ def test_run_cycle_end_to_end(monkeypatch, tmp_path):
     assert st["closed"][0]["reason"] == "止盈"
     assert st["closed"][0]["type"] == "Spring"
     assert st["closed"][0]["conf"] == 96
+
+
+# ───────────────────────── 条件单 ─────────────────────────
+def _state_with_cond(kind, price=None, pct=None, trigger="above",
+                     entry=10.0, cash=paper.INIT_CASH):
+    st = paper._new_state()
+    st["cash"] = cash
+    c, msg = paper.add_condition(st, kind, "sh600001", price=price, pct=pct,
+                                 trigger=trigger, name="测试", save=False)
+    assert c is not None, msg
+    # 建仓
+    o = paper._make_order("sh600001", "测试", "Spring", 90, entry, 0, st["cash"])
+    paper.fill_buy(st, o)
+    return st
+
+
+def test_condition_buy_price_triggers_below():
+    """价格买入条件单: 现价回落到触发价下方时买入。"""
+    st = paper._new_state()
+    st["cash"] = paper.INIT_CASH
+    paper.add_condition(st, "buy_price", "sh600001", price=10.0,
+                        trigger="below", name="测试", save=False)
+    df = _mk([12.0, 9.5])  # 现价 9.5 ≤ 10 触发
+    paper.step(st, {"sh600001": df})
+    assert len(st["positions"]) == 1
+    assert st["conditions"][0]["status"] == "done"
+    assert st["conditions"][0]["matched_price"] is not None
+
+
+def test_condition_sell_price_triggers_above():
+    """价格卖出条件单: 现价升破触发价时卖出持仓。"""
+    st = _state_with_cond("sell_price", price=13.0, trigger="above", entry=10.0)
+    df = _mk([10.0, 13.2])
+    paper.step(st, {"sh600001": df})
+    assert st["positions"] == []
+    assert st["conditions"][0]["status"] == "done"
+    assert st["closed"][0]["reason"] == "条件单:sell_price"
+
+
+def test_condition_take_profit():
+    st = _state_with_cond("take_profit", pct=0.12, entry=10.0)
+    df = _mk([10.0, 11.5])  # +15% ≥ 12% 止盈
+    paper.step(st, {"sh600001": df})
+    assert st["positions"] == []
+    assert st["conditions"][0]["status"] == "done"
+    assert st["closed"][0]["reason"] == "条件单:take_profit"
+
+
+def test_condition_stop_loss():
+    st = _state_with_cond("stop_loss", pct=0.05, entry=10.0)
+    df = _mk([10.0, 9.3])  # -7% ≥ 5% 止损
+    paper.step(st, {"sh600001": df})
+    assert st["positions"] == []
+    assert st["conditions"][0]["status"] == "done"
+
+
+def test_condition_trailing_stop():
+    st = _state_with_cond("trailing", pct=0.05, entry=10.0)
+    paper.step(st, {"sh600001": _mk([10.0, 11.0])})  # 建峰
+    assert st["positions"], "首根不应触发"
+    peak = st["conditions"][0]["peak"]
+    assert peak is not None and peak > 10.0
+    # 大幅回撤 (>5%) 触发追踪止损
+    paper.step(st, {"sh600001": _mk([11.0, 8.0])})
+    assert st["positions"] == []
+    assert st["conditions"][0]["status"] == "done"
+
+
+def test_condition_not_triggered_when_flat():
+    st = _state_with_cond("buy_price", price=8.0, trigger="below", entry=10.0)
+    df = _mk([10.2, 10.3])  # 现价高于触发价, 未触发
+    paper.step(st, {"sh600001": df})
+    assert st["conditions"][0]["status"] == "active"
+
+
+def test_condition_cancel():
+    st = paper._new_state()
+    c, _ = paper.add_condition(st, "buy_price", "sh600001", price=9.0,
+                               save=False)
+    assert paper.cancel_condition(st, c["cid"])
+    assert st["conditions"][0]["status"] == "cancelled"
+
+
+def test_condition_invalid_kind():
+    st = paper._new_state()
+    c, msg = paper.add_condition(st, "not_a_kind", "sh600001", price=9.0,
+                                 save=False)
+    assert c is None
+    assert "不支持" in msg

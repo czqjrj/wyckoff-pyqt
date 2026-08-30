@@ -9,7 +9,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout,
     QCheckBox, QTableWidgetItem, QWidget, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QGridLayout,
+    QGroupBox, QGridLayout, QComboBox, QLineEdit,
 )
 
 from .extra_windows import _accent_header, _table, _ghost_btn
@@ -63,6 +63,16 @@ def theme_c(num):
         return theme.C_UP
     return None
 
+
+def _cond_kind_cn(kind):
+    return {
+        "buy_price": "价跌买入",
+        "sell_price": "价升卖出",
+        "take_profit": "止盈",
+        "stop_loss": "止损",
+        "trailing": "追踪止损",
+    }.get(kind, kind)
+
 _CN_POS = ("symbol", "name", "type", "conf", "qty", "buy_px", "last",
            "last_ret", "entry_bars")
 _CN_POS_HEAD = ("代码", "名称", "事件", "置信", "数量", "成本", "现价",
@@ -76,6 +86,10 @@ _CN_CAND_HEAD = ("代码", "名称", "事件", "置信", "现价")
 _CN_ORD = ("ts", "symbol", "name", "qty", "price", "type", "conf", "side", "date")
 _CN_ORD_HEAD = ("时间", "代码", "名称", "数量", "价格", "事件", "置信",
                 "方向", "日期")
+_CN_COND = ("created_ts", "symbol", "name", "kind", "trigger", "cond_price",
+            "pct", "qty", "status", "matched_price", "reason")
+_CN_COND_HEAD = ("创建时间", "代码", "名称", "类型", "触发", "触发价", "百分比",
+                 "数量", "状态", "成交价", "说明")
 
 
 class _PaperCycleThread(QThread):
@@ -143,17 +157,19 @@ class PaperWindow(QDialog):
         # 策略参数配置 (放在模拟盘窗口内)
         root.addWidget(self._build_config_group())
 
-        # 五个页签: 持仓/已平仓/候选/订单 + 资金曲线
+        # 页签: 持仓/已平仓/候选/订单 + 条件单 + 资金曲线
         tabs = QTabWidget()
         self.t_pos = _table()
         self.t_closed = _table()
         self.t_cand = _table()
         self.t_ord = _table()
+        self.t_cond = _table()
         self.tabs = tabs
         tabs.addTab(self.t_pos, "持仓")
         tabs.addTab(self.t_closed, "已平仓")
         tabs.addTab(self.t_cand, "候选")
         tabs.addTab(self.t_ord, "订单")
+        tabs.addTab(self._build_cond_tab(), "条件单")
         tabs.addTab(self._build_equity_tab(), "资金曲线")
         root.addWidget(tabs, 1)
 
@@ -176,6 +192,22 @@ class PaperWindow(QDialog):
         self.equity_chart.getAxis("left").setLabel("总资产")
         self.equity_chart.setMouseEnabled(x=True, y=False)
         lay.addWidget(self.equity_chart)
+        return page
+
+    def _build_cond_tab(self):
+        """条件单页签: 显示自动生成的条件单 (无手动添加入口)。"""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+
+        info = QLabel(
+            "条件单由系统自动根据强多头事件生成\n"
+            "无需手动添加, 系统将根据交易机会实时创建条件单"
+        )
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info.setStyleSheet("font-size: 14px; color: #666; min-height: 80px;")
+        lay.addWidget(info, 1)
         return page
 
     # ── 策略参数配置 ──
@@ -383,6 +415,75 @@ class PaperWindow(QDialog):
                     rows)
         self.t_ord.setSortingEnabled(False)
 
+        # 条件单 (自动生成中)
+        crows = []
+        for c in st.get("conditions", []):
+            kind = c.get("kind", "")
+            status = c.get("status", "")
+            correct = c.get("correct")
+            
+            # 判断图标和颜色
+            if status == "done":
+                if correct is True:
+                    icon = "✓ 正确"
+                    icon_color = theme.C_UP  # 绿色
+                elif correct is False:
+                    icon = "✗ 错误"
+                    icon_color = theme.C_DOWN  # 红色
+                else:
+                    icon = "─ 评估中"
+                    icon_color = None
+            elif status == "cancelled":
+                icon = "✗ 已取消"
+                icon_color = theme.C_MUTED
+            else:  # active
+                icon = "○ 进行中"
+                icon_color = None
+            
+            crows.append({
+                "created_ts": c.get("created_ts", ""),
+                "symbol": c.get("symbol", ""), "name": c.get("name", ""),
+                "kind": _cond_kind_cn(kind),
+                "trigger": "上破≥" if c.get("trigger") == "above" else "回落≤" if c.get("trigger") == "below" else "",
+                "cond_price": c.get("price") if c.get("price") is not None else "",
+                "pct": c.get("pct") if c.get("pct") is not None else "",
+                "qty": c.get("qty", 0), "status": status,
+                "matched_price": c.get("matched_price") or "",
+                "reason": c.get("reason", ""),
+                "correct_icon": icon,
+                "correct_color": icon_color,
+            })
+        
+        # 计算列宽: 前8列固定, 后3列 (matched_price, reason, correct_icon) 根据内容自动
+        n_cols = max(1, len(crows)) if crows else 0
+        n_cols = min(n_cols, 13)  # 最大13列
+        
+        cond_cols = ("created_ts", "symbol", "name", "kind", "trigger",
+                     "cond_price", "pct", "qty", "status", "matched_price",
+                     "reason", "correct_icon")
+        cond_heads = ("创建时间", "代码", "名称", "类型", "触发",
+                      "触发价", "百分比", "数量", "状态", "成交价",
+                      "说明", "正确")
+        
+        # 只有当有数据时才设置列数
+        if crows:
+            self.t_cond.setColumnCount(n_cols)
+            self.t_cond.setHorizontalHeaderLabels([cond_heads[i % len(cond_heads)] for i in range(n_cols)])
+        
+        _fill_paper(self.t_cond, cond_cols[:n_cols], 
+                   dict(zip(cond_cols[:n_cols], cond_heads[:n_cols])), crows)
+        self.t_cond.setSortingEnabled(False)
+        
+        # 为 correct_icon 列设置专用渲染 (显示 ✓ 或 ✗ 并着色)
+        if n_cols > 11 and crows:
+            # 获取 correct_icon 所在的列索引
+            correct_col_idx = 11  # 第12列 (0-indexed)
+            if correct_col_idx < self.t_cond.columnCount():
+                # 重新设置该列的表头
+                self.t_cond.setHorizontalHeaderItem(correct_col_idx, QTableWidgetItem("结果"))
+                # 隐藏或调整该列的大小
+                self.t_cond.horizontalHeader().setSectionSizeFromContent(correct_col_idx)
+        
         self._render_equity(st)
 
     def _render_equity(self, st):
