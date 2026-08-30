@@ -116,6 +116,12 @@ conf 已被 `expected_conf` 封顶 (SOS≤58 / JOC≤54 / PSY≤57), 不再出�
 109 条建档 (ref_dt 2026-08-21~28), 全部 pending (评估窗口未走满)。每日 15:01 cron
 自动评估并重训模型, 将陆续出数; `record_analysis` 已加"写入即评估", 走满周期即出结果。
 
+### 2026-09-修复要点
+
+- **事件中立判定修复**: `confirm_events` 中 SC/BC/AR 事件类型现正确返回 `confirmed=None`，避免在确认窗口内错误计算方向命中率，修复 `test_confirm_neutral_pending` 失败问题。
+- **阶段带实测命中率显示**: `ui/kline_widget.py` 新增 `_phase_verdict_stats()`，在每个阶段带下方实时展示 `correct/total` 统计和命中率 (如 "3/8 38%")，提升用户对阶段可靠性的即时感知。
+- **TTS跨平台停止修复**: `wyckoff/tts.py` 移除 `_play_mp3` 中 Windows `os.startfile()` 死路，统一使用带 `stop_event` 感知的子进程管理，修复了停止播报无法终止的问题。
+
 ## 七、结论与建议
 
 1. **事件核心价值**: Spring / Shakeout / UTAD / LPSY / ST / LPS / SC 有统计显著预测力 (`expected_conf` 保留高可信)

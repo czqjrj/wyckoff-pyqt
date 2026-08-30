@@ -83,6 +83,12 @@
 - ✅ 止损 = 结构关键位 ± 0.5×ATR(14)，先校验结构有效性再应用缓冲，降低被扫率 ~10%
 - ✅ 新闻/产业链/结论面板字号可独立缩放（A−/A+）
 
+### 2026-09-修复汇报
+
+- ✅ `wyckoff/events.py`: 修复 `confirm_events` 中 SC/BC/AR 事件类型的中立判定，确认窗口正确返回 `confirmed=None`，避免虚高置信度
+- ✅ `ui/kline_widget.py`: 新增 `_phase_verdict_stats()` 方法，阶段带下方实时显示实测命中率统计 (correct/total %, 如 "3/8 38%")，无数据时回退预存 verdict 字典
+- ✅ `wyckoff/tts.py`: 移除 `_play_mp3` 中 Windows `os.startfile()` 死路短路，统一在所有平台使用带停止事件感知的子进程管理，修复 TTS "停止无效" 问题
+
 ---
 
 ## ⌨️ 常用快捷键
