@@ -1274,8 +1274,9 @@ class MainWindow(QMainWindow):
 
         lab = QLabel("账户私有 Git 仓库地址 (可留空):")
         lay.addWidget(lab)
-        ed_url = QLineEdit()
+        ed_url = QLineEdit("git@github.com:czqjrj/wyckoff-account.git")
         ed_url.setPlaceholderText("git@github.com:user/wyckoff-profile.git")
+        ed_url.setReadOnly(True)
         lay.addWidget(ed_url)
 
         err = QLabel("")
@@ -1347,6 +1348,7 @@ class MainWindow(QMainWindow):
         def _finish(res):
             if isinstance(res, dict) and res.get("ok"):
                 self._status("账户数据同步完成")
+                self.reload_watchlist()
             else:
                 self._status(
                     f"账户同步失败: {(res or {}).get('error', '未知错误')}")
@@ -1371,6 +1373,7 @@ class MainWindow(QMainWindow):
         def _finish(res):
             if isinstance(res, dict) and res.get("ok"):
                 self._status("从远端同步私有数据完成")
+                self.reload_watchlist()
             else:
                 self._status(
                     f"从远端同步失败: {(res or {}).get('error', '未知错误')}")

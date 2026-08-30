@@ -317,6 +317,7 @@ class GeneralPage(SettingsPage):
         self.ed_profile_url.setToolTip(
             "同一账户多台设备通过该私有仓同步 UI 布局/主题/自选/候选/笔记/组合/模拟盘;\n"
             "AI Key 等敏感凭据不会上传。")
+        self.ed_profile_url.setReadOnly(True)
         grid.addWidget(QLabel("仓库地址:"), row, 0)
         grid.addWidget(self.ed_profile_url, row, 1)
         row += 1
