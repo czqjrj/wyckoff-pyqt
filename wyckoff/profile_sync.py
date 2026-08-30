@@ -461,12 +461,26 @@ def _ensure_repo():
         raise RuntimeError("未初始化, 先 profile-setup <url>")
 
 
+def _ensure_remote_url():
+    """把工作副本 origin 对齐到账户绑定的仓库地址。
+
+    历史 bug: profile_repo 曾用拼错的仓库地址 clone/pull, 导致「从云下载」
+    一直在拉错误的仓库而拿不到云端数据。这里在每轮 pull/push 前按
+    账户当前绑定仓库动态重设 origin, 避免再次漂移。
+    """
+    url = _active_repo_url()
+    if not url:
+        return
+    _git(["remote", "set-url", "origin", url], cwd=PROFILE_REPO_DIR, check=False)
+
+
 def sync_once():
     """拉取远端 → 与本机合并 → 写本机 → 提交推送。"""
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
     try:
         _ensure_repo()
+        _ensure_remote_url()
         _git(["pull", "--no-rebase"], cwd=PROFILE_REPO_DIR, check=False)
         remote = _read_repo_bundle()
         local = collect_profile()
@@ -490,6 +504,7 @@ def pull_or_push(mode):
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
     try:
         _ensure_repo()
+        _ensure_remote_url()
         if mode == "pull":
             _git(["pull", "--no-rebase"], cwd=PROFILE_REPO_DIR, check=False)
             apply_profile(_read_repo_bundle())
