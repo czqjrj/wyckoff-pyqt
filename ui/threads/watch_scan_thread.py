@@ -20,7 +20,7 @@ class WatchScanThread(QThread):
         self._stopped = True
 
     def run(self):
-        from wyckoff.backtest import scan_stock_signals
+        from wyckoff.backtest import _EM_LOCK, scan_stock_signals
         from wyckoff.utils import normalize_symbol
         ok = False
         sig_by_code = {}
@@ -30,8 +30,9 @@ class WatchScanThread(QThread):
                 break
             try:
                 sym = normalize_symbol(c)
-                r = scan_stock_signals(c, datalen=500, confirm_enabled=False,
-                                       on_result=AnalysisThread._snapshot_cb)
+                with _EM_LOCK:
+                    r = scan_stock_signals(c, datalen=500, confirm_enabled=False,
+                                           on_result=AnalysisThread._snapshot_cb)
                 ok = True
                 if r and r.get("signals"):
                     sig_by_code[sym[2:]] = list(r["signals"])

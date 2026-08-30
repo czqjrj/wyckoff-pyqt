@@ -26,6 +26,9 @@ from .vsa import vsa_classify
 _EM_FAIL_STREAK = 0
 _EM_FAIL_LIMIT = 3
 _EM_LOCK = threading.Lock()
+_SECTOR_FAIL_STREAK = 0
+_SECTOR_FAIL_LIMIT = 3
+_SECTOR_FAIL_LOCK = threading.Lock()
 
 # classify_phase 按自然日缓存: 自选股 30s 定时刷新只更新实时价, 阶段流水线
 # (K线+指标+枢轴+事件+判段) 每天最多跑一次, 避免 N 只自选股每 30s 全量重算。
