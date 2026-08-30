@@ -235,6 +235,24 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
         # VSA 置信度: 用历史方向化命中率 (L1 贝叶斯收缩值) 作实证先验,
         # 缺失样本回退 50 (中性)。修复旧版恒 0 → 无法排序/过滤的问题。
         vconf = round(win_rate_of("vsa", vtype, 20) * 100)
+        # 新闻情绪动态调整: 根据实测新闻方向一致性对 VSA conf 进行轻度校准。
+        # factor > 1.0: 新闻有增量, 放大置信度; factor < 1.0: 新闻整体反向, 缩减置信度。
+        # factor = 1.0: 维持中性, 无调整。默认 1.0 (文件不存在/样本不足时)。
+        try:
+            import json, os
+            from .paths import DATA_DIR, NEWS_CALIBRATION_FILE
+            cal_path = os.path.join(DATA_DIR, "wx_news_calibration.json")
+            if os.path.exists(cal_path):
+                with open(cal_path, encoding="utf-8") as f:
+                    cal = json.load(f)
+                factor = cal.get("factor", 1.0)
+                # 温和校准: 映射 factor [0.5, 1.3] → [0.85, 1.15] 防止剧烈波动
+                adj = 0.5 + 0.5 * factor  # factor=0.5→0.75, factor=1.0→1.0, factor=1.3→1.15
+                vconf = int(round(vconf * adj))
+                # 钳制在合理範圍 (1-99), 避免 conf 被校准完全抵消
+                vconf = max(1, min(99, vconf))
+        except Exception:
+            pass  # 新闻校准异常不影响基本流程
         # 让在线模型也校准 VSA conf (模型 ready 时轻度接管):
         try:
             from .online_model import apply_model_conf
@@ -355,9 +373,20 @@ _WINRATE_LOCK = threading.Lock()
 #     p_shrunk = (wins + alpha0 * p0) / (n + alpha0)
 #   alpha0 为伪样本量 (先验权重): 20 意味着"n=20 时原值与先验各占一半"。
 #   p0 取全池实测上涨占比 (市场基线), 并钳制在 40%~60% 防极端行情污染。
+#   为不同 VSA 类型引入分层 p0: 优于随机类型 (UT/ER) p0 略升, 劣于随机类型 (SUP/BC/NS) p0 略降
+VSA_PRIOR_P0_ADJ = {
+    "UT": 0.03,   # 上升突破: 略升基线 (实际约 52-53%)
+    "ER": 0.03,   # Engulfing: 略升基线 (实际约 52-53%)
+    "SUP": -0.04, # 支撑反弹: 降低基线 (实际约 46-47%)
+    "BC": -0.03,  # 宽振: 降低基线 (实际约 47-48%)
+    "NS": -0.02,  # 非摊: 轻微降低基线 (实际约 48-49%)
+    "TRU": -0.03, # 真实体: 降低基线
+    "default": 0.0, # 其他类型使用全池基线
+}
+# 各类型的有效 p0 调整范围钳制: p0 = min(max(p0 + adj, 0.38), 0.62)
 PRIOR_ALPHA0 = 20
-PRIOR_P0_MIN = 0.40
-PRIOR_P0_MAX = 0.60
+PRIOR_P0_MIN = 0.38
+PRIOR_P0_MAX = 0.62
 MIN_SHRUNK_N = 3  # 少于该样本量连收缩也无意义 → 直接回退 baseline
 
 
@@ -422,7 +451,28 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
         pool_wins = sum(1 for key in out for v in out[key]["rets"]
                         if _hit(key[0], key[1], v))
         pool_n = sum(s["n"] for s in out.values())
-        p0 = (pool_wins / pool_n) if pool_n else 0.5
+        p0_raw = (pool_wins / pool_n) if pool_n else 0.5
+        # 按 VSA 类型调整基线: 优于随机类型升高, 劣于随机类型降低
+        # 仅对 event kind 的 VSA 类型调整; event 类型保持原 p0
+        p0_adj_map = {}
+        for key in out:
+            kind, type_ = key
+            if kind == "vsa" and type_ in VSA_PRIOR_P0_ADJ:
+                p0_adj_map[key] = VSA_PRIOR_P0_ADJ[type_]
+            else:
+                p0_adj_map[key] = 0.0  # event 类型或未列出 VSA 类型不调整
+        # 计算加权平均 p0: 所有样本的 p0_raw + 各自调整, 但钳制在有效范围
+        p0_sum = 0.0
+        p0_count = 0
+        for key, adj in p0_adj_map.items():
+            # 按样本量加权: n 越大, 调整影响越应反映类型特性
+            s = out[key]
+            p0_sum += (p0_raw + adj) * s["n"]
+            p0_count += s["n"]
+        if p0_count > 0:
+            p0 = p0_sum / p0_count
+        else:
+            p0 = p0_raw
         p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
         result = {}
         for key, s in out.items():
