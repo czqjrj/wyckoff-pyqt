@@ -203,12 +203,24 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                     latest = e
             if latest is None:
                 continue
+            base_conf = int(latest.get("conf", 0) or 0)
             latest["code"] = code
             latest["name"] = _stock_name(code)
             latest["last"] = round(float(df["close"].iloc[-1]), 2)
             latest["sector"] = ""
             try:
                 latest["sector"] = fetch_sector(code) or ""
+            except Exception:
+                pass
+            # A: 产业链加分/门禁 — 不改变 base_conf 的入池过滤, 只影响排序优先级;
+            #    数据不可用/无板块 (离线) 时 adj=0 完全退化为原行为。
+            try:
+                if latest["sector"]:
+                    from .chain import chain_conf_adjust
+                    adj = chain_conf_adjust(latest["sector"], base_conf)
+                    latest["base_conf"] = base_conf
+                    latest["conf"] = max(min_conf, min(100, base_conf + adj))
+                    latest["chain_adj"] = adj
             except Exception:
                 pass
             out.append(latest)

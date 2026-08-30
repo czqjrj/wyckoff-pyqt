@@ -80,6 +80,7 @@ def dedup_signals(
     sigs: Iterable[dict],
     mode: str = "date",
     sector_map: dict | None = None,
+    chain_map: dict | None = None,
 ) -> list[dict]:
     """按相关性去重, 降低同日/同板块重叠导致的组合回撤失真。
 
@@ -87,7 +88,10 @@ def dedup_signals(
       "none"  —— 不去重;
       "date"  —— 每个交易日最多保留 1 笔 (优先保 conf 高者), 离线可用, 最稳健;
       "sector"—— 同一天同一板块最多保留 1 笔, 不同板块同日可并存 (优先保 conf
-               高者)。需要 sector_map (code -> 板块名); 缺映射时退化为 date 模式。
+               高者)。需要 sector_map (code -> 板块名); 缺映射时退化为 date 模式;
+      "chain" —— 同一条产业链同一天最多保留 1 笔 (链内跨板块去重), 相对 sector
+               更进一步降低系统性交织风险。需要 chain_map (code -> 链条名),
+               缺映射时退化为 date 模式。
 
     返回按日期排序的去重列表; 保留规则: 同组内按 conf 降序, 取首笔 (conf 并列
     取 code 较小者)。
@@ -95,16 +99,20 @@ def dedup_signals(
     sigs = sorted(sigs, key=lambda r: (r["date"], -r["conf"], r["code"]))
     if mode == "none":
         return sigs
-    if mode not in ("date", "sector"):
+    if mode not in ("date", "sector", "chain"):
         raise ValueError(f"未知去重模式: {mode!r}")
     if mode == "sector" and not sector_map:
         mode = "date"   # 无板块映射时退化为同日去重
+    if mode == "chain" and not chain_map:
+        mode = "date"   # 无链条映射时退化为同日去重
     seen: set = set()
     out = []
     for r in sigs:
         d = r["date"]
         if mode == "sector":
             key = (d, sector_map.get(r["code"]) or "?")
+        elif mode == "chain":
+            key = (d, chain_map.get(r["code"]) or "?")
         else:
             key = d
         if key in seen:
@@ -120,11 +128,12 @@ def filter_actionable_long(
     events: frozenset | None = None,
     dedup: str = "none",
     sector_map: dict | None = None,
+    chain_map: dict | None = None,
 ) -> list[dict]:
     """筛选可交易强多头事件信号 (去向排除空头; 已评估且 20 根收益完备)。
 
     返回记录并附解析结果, 不改变原始记录。events 默认取 STRONG_LONG_ACTIONABLE。
-    dedup 见 dedup_signals (date/sector/none)。
+    dedup 见 dedup_signals (date/sector/chain/none)。chain_map 见 dedup_signals。
     """
     ev = STRONG_LONG_ACTIONABLE if events is None else events
     out = []
@@ -158,8 +167,25 @@ def filter_actionable_long(
             "ret20": float(r20),
             "ret40": (res.get("40") or {}).get("ret"),
         })
-    out = dedup_signals(out, mode=dedup, sector_map=sector_map)
+    out = dedup_signals(out, mode=dedup, sector_map=sector_map,
+                        chain_map=chain_map)
     out.sort(key=lambda x: x["date"])
+    return out
+
+
+def chain_map_from_sectors(sector_map: dict | None) -> dict:
+    """把 code→板块名 映射升级为 code→产业链名 (不在图谱内 → 用板块名兜底)。
+
+    供 dedup 模式 "chain" 使用; sector_map 为空时返回空 dict。
+    """
+    if not sector_map:
+        return {}
+    from .chain import chain_cap_key
+    out = {}
+    for code, sec in sector_map.items():
+        k = chain_cap_key(sec) or sec
+        if k:
+            out[code] = k
     return out
 
 
@@ -200,10 +226,11 @@ def per_trade_stats(
     stop: float | None = DEFAULT_STOP,
     dedup: str = "none",
     sector_map: dict | None = None,
+    chain_map: dict | None = None,
 ) -> PerTradeResult:
     """逐笔口径统计 (强多头事件, 方向化 20 根净收益)。"""
     sigs = filter_actionable_long(records, conf_min=conf_min, dedup=dedup,
-                                  sector_map=sector_map)
+                                  sector_map=sector_map, chain_map=chain_map)
     if not sigs:
         return PerTradeResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     nets = np.array([_net_return(r, cost, stop) for r in sigs])
@@ -267,6 +294,7 @@ def portfolio_backtest(
     stop: float | None = DEFAULT_STOP,
     dedup: str = "none",
     sector_map: dict | None = None,
+    chain_map: dict | None = None,
 ) -> PortfolioResult:
     """组合口径回测: 槽位并发、仓位切分、持有期与成本。
 
@@ -275,10 +303,10 @@ def portfolio_backtest(
     各槽位结束价值的加总, 不把同笔收益重复记到同一本金上, 避免叠加放大。
 
     stop 触发用 5 根收益近似; 用分段(5/10/20/40根)收益近似出场。
-    该口径为"保守下界", 非精确逐日盯市。dedup 见 dedup_signals。
+    该口径为"保守下界", 非精确逐日盯市。dedup 见 dedup_signals (含 chain)。
     """
     sigs = filter_actionable_long(records, conf_min=conf_min, dedup=dedup,
-                                  sector_map=sector_map)
+                                  sector_map=sector_map, chain_map=chain_map)
     if not sigs:
         return PortfolioResult(0, 0, 0, 0, 0, 0)
     slot_equity = [1.0] * position_count          # 每槽复利倍数 (初始1)
@@ -344,12 +372,13 @@ def export_csv(
     stop: float | None = None,
     dedup: str = "none",
     sector_map: dict | None = None,
+    chain_map: dict | None = None,
 ) -> str:
     """导出可交易强多头信号逐笔明细到 CSV, 返回写入路径。"""
     import os
 
     sigs = filter_actionable_long(records, conf_min=conf_min, dedup=dedup,
-                                  sector_map=sector_map)
+                                  sector_map=sector_map, chain_map=chain_map)
     dest = path or os.path.join(os.getcwd(), "conservative_trades.csv")
     with open(dest, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
@@ -384,16 +413,17 @@ def build_report(
     position_count: int = 3,
     dedup: str = "none",
     sector_map: dict | None = None,
+    chain_map: dict | None = None,
 ) -> str:
     """生成保守年化回测报告 (Markdown 字符串)。"""
     sigs = filter_actionable_long(records, conf_min=conf_min, dedup=dedup,
-                                  sector_map=sector_map)
+                                  sector_map=sector_map, chain_map=chain_map)
     pt = per_trade_stats(records, conf_min=conf_min, cost=cost, stop=stop,
-                         dedup=dedup, sector_map=sector_map)
+                         dedup=dedup, sector_map=sector_map, chain_map=chain_map)
     pv = portfolio_backtest(records, conf_min=conf_min, capital=capital,
                             position_count=position_count, hold_days=32,
                             cost=cost, stop=stop, dedup=dedup,
-                            sector_map=sector_map)
+                            sector_map=sector_map, chain_map=chain_map)
     span = (sigs[-1]["date"].strftime("%Y-%m-%d"),
             sigs[0]["date"].strftime("%Y-%m-%d"), pt.years)
     lines = [

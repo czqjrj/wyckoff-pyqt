@@ -836,6 +836,29 @@ def build_confirm_section(phase, df, fund=None, flow=None, holder=None, sector=N
                 items.append((f"板块: {s_name} · 近20日主力{s_txt} {s_abs:.2f}亿",
                               "bullish" if s20 > 0 else "bearish"))
 
+    # ── 产业链: 链条强度 + 传导方向 → 门禁证据 ──
+    if sector and sector.get("name"):
+        try:
+            from .chain import chain_factor_for, chain_home
+            _TIER_CN = {"upstream": "上游", "midstream": "中游", "downstream": "下游"}
+            cf = chain_factor_for(sector["name"])
+            if cf:
+                cn, tier = chain_home(sector["name"])
+                trans = cf.get("trans") or ""
+                tone = cf.get("tone")
+                tr_txt = f" · {trans}受益环节" if trans and tone == "bullish" else (
+                    f" · 逆{trans}" if trans and tone == "bearish" else (
+                        f" · {trans}" if trans else ""))
+                tier_txt = _TIER_CN.get(tier, tier or "")
+                items.append((f"产业链: [{cn}] 强度{cf['pct']*100:.0f}分位{tr_txt}"
+                              + (f" · 所处{tier_txt}" if tier_txt else ""), tone))
+                if tone == "bullish" and bull:
+                    pos += 1
+                elif tone == "bearish" and bull:
+                    neg += 1
+        except Exception:
+            pass
+
     # ── 当日订单流 (外盘/内盘) ──
     if fund and fund.get("buy_vol") and fund.get("sell_vol"):
         b, s = float(fund["buy_vol"]), float(fund["sell_vol"])

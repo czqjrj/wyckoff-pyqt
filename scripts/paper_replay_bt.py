@@ -17,6 +17,8 @@ import json
 import os
 import sys
 
+import pandas as pd
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from wyckoff import paper  # noqa: E402
@@ -55,8 +57,22 @@ def load_stock_events(code, min_conf, datalen):
             continue
         events.append({"idx": idx, "type": e["type"], "conf": conf})
     events.sort(key=lambda x: x["idx"])
+    sector = ""
+    try:
+        from wyckoff.fundamental import fetch_sector
+        sector = fetch_sector(code) or ""
+    except Exception:
+        pass
+    chain_key = ""
+    try:
+        from wyckoff.chain import chain_cap_key, chain_factor_for
+        chain_key = chain_cap_key(sector) or ""
+    except Exception:
+        pass
     return {
         "code": code,
+        "sector": sector,
+        "chain": chain_key,
         "day": list(df["day"]),
         "open": list(df["open"].astype(float)),
         "low": list(df["low"].astype(float)),
@@ -162,13 +178,32 @@ def replay(stocks, params):
             ev = newest_buyable(rec, j, window=params["window"])
             if ev is None:
                 continue
-            cands.append((ev["conf"], code, ev["type"], rec["open"][j]))
+            # D: 强链过滤 — 只交易信号日链条强度达标的板块内个股。
+            #    用历史快照 (strength_at) 无前视; 无历史快照时 fail-open 不筛选
+            #    (避免把无数据区间误清空, 覆盖区间内才真正过滤)。
+            if params.get("chain_min_pct"):
+                from wyckoff.chain import chain_factor_for
+                try:
+                    cf = chain_factor_for(rec["sector"], ts=pd.Timestamp(D))
+                    if cf is not None and cf["pct"] < params["chain_min_pct"]:
+                        continue
+                except Exception:
+                    pass
+            cands.append((ev["conf"], code, ev["type"], rec["open"][j],
+                          rec["chain"]))
         cands.sort(key=lambda x: -x[0])
-        for conf, code, typ, open_px in cands:
+        for conf, code, typ, open_px, chain in cands:
             if len(st["positions"]) >= cfg["max_pos"]:
                 break
             if paper.has_position(st, code):
                 continue
+            # C: 同产业链限仓 — 同链已持 ≥ chain_cap 则不重复买
+            cc = params.get("chain_cap") or 0
+            if cc and chain:
+                n_chain = sum(1 for p in st["positions"]
+                              if stocks[code_to_idx[p["symbol"]]].get("chain") == chain)
+                if n_chain >= cc:
+                    continue
             order = paper._make_order(code, "", typ, conf, open_px, 0, st["cash"])
             if order is None:
                 continue
@@ -250,6 +285,11 @@ def main():
     ap.add_argument("--cost", type=float, default=None, help="单边成本")
     ap.add_argument("--cash", type=float, default=None, help="初始资金")
     ap.add_argument("--window", type=int, default=10, help="信号可买入窗口(根)")
+    ap.add_argument("--chain-cap", type=int, default=0,
+                    help="同产业链最多同时持有N只 (0=不限, 需个股有板块映射)")
+    ap.add_argument("--chain-min-pct", type=float, default=0,
+                    help="强链过滤: 只交易信号日板块强度≥该分位(0~1)的链条内个股, "
+                         "用历史快照无前视 (0=关闭)")
     ap.add_argument("--start", default="", help="回放起始日期 YYYY-MM-DD")
     ap.add_argument("--report", default="", help="写出报告 md 路径")
     ap.add_argument("--export", default="", help="导出逐笔 CSV 路径")
@@ -265,6 +305,8 @@ def main():
         "cost": args.cost if args.cost is not None else defaults["cost"],
         "init_cash": args.cash if args.cash is not None else defaults["init_cash"],
         "window": args.window,
+        "chain_cap": args.chain_cap,
+        "chain_min_pct": args.chain_min_pct,
         "start": args.start,
     }
 

@@ -288,6 +288,133 @@ def locate(sector_name):
     return [(CHAINS[ci]["name"], t) for ci, t in _LOCATE.get(sector_name, [])]
 
 
+def chain_home(sector_name):
+    """板块名 → (chain_name, tier) 或 (None, None) (不在图谱内)。"""
+    loc = _LOCATE.get(sector_name)
+    if not loc:
+        return None, None
+    ci, t = loc[0]
+    return CHAINS[ci]["name"], t
+
+
+def _beneficiary_tiers(trans):
+    """给定的链条传导方向 → 受益(补涨/兑现)环节集合。
+
+    - 上游→下游 (成本推动/资源景气): 中下游为兑现受益环节, 上游已领涨;
+    - 下游→上游 (需求拉动): 中上游为兑现受益环节, 下游已领涨。
+    """
+    if trans == "上游→下游":
+        return {"midstream", "downstream"}
+    if trans == "下游→上游":
+        return {"upstream", "midstream"}
+    return set()
+
+
+def _trans_strength(chain, tier):
+    """个股所处环节在当前传导中是否受益 (回落集判断)。"""
+    return tier in _beneficiary_tiers(chain.get("trans") or "")
+
+
+def chain_factor_for(sector_name, ts=None):
+    """计算个股所在产业链的复合因子 (含传导方向), 用于交易加分/门禁。
+
+    返回 dict 或 None (个股不在图谱 / 板块强度不可用):
+      {pct, tier, trans, score, tone}
+        pct     板块强度百分位 [0,1] (ts 给定用历史快照 strength_at, 否则当日)
+        tier    个股所处环节 upstream/midstream/downstream
+        trans   所在链当前传导方向 "上游→下游"/"下游→上游"/""
+        score   复合分数 [-1, 1]
+                = trans(±1 受益/逆传导) × pct 强度加权: 受益环节(含中游)取 +当下游
+                  驱动或 +当地上游驱动; 其余环节取 -0.5~+0.5 的强度中性。
+        tone    bullish/bearish/neutral
+
+    无前视: ts 给定时按该日期之前的最近强度快照取 (strength_at), 否则当日 live。
+    数据不全时返回 None 而非硬编码 0, 由调用方决定是否回退到无因子状态。
+    """
+    if not sector_name:
+        return None
+    cn, tier = chain_home(sector_name)
+    if cn is None:
+        return None
+    if ts is not None:
+        pct = strength_at(sector_name, ts)
+    else:
+        pct = sector_strength_pct(sector_name)
+    if pct is None:
+        return None
+    try:
+        snap = chain_snapshot(sector_name)
+        cur = next((s for s in snap if s["name"] == cn), None)
+        trans = cur["trans"] if cur else ""
+        if cur is not None:
+            a = cur["avg"]
+            up = a.get("upstream"); mid = a.get("midstream"); dn = a.get("downstream")
+            if trans == "上游→下游" and None not in (up, mid, dn):
+                grad = up - dn
+            elif trans == "下游→上游" and None not in (up, mid, dn):
+                grad = dn - up
+            else:
+                grad = 0.0
+        else:
+            trans, grad = "", 0.0
+    except Exception:
+        return {"pct": pct, "tier": tier, "trans": "",
+                "score": _neutral_score(pct), "tone": _tone_neutral(pct)}
+
+    if trans:
+        if _trans_strength({"trans": trans}, tier):
+            # 受益环节 + 强度梯度 + 自身强度 → 强正向
+            score = 0.5 * pct + 0.5 * min(1.0, grad)
+            tone = "bullish"
+        else:
+            # 逆传导环节 (已领涨/被挤压): 即便板块强也打折扣
+            score = 0.25 * pct - 0.25
+            tone = "bearish"
+    else:
+        score = _neutral_score(pct)
+        tone = _tone_neutral(pct)
+    return {"pct": pct, "tier": tier, "trans": trans,
+            "score": round(float(score), 4), "tone": tone}
+
+
+def _neutral_score(pct):
+    return float(pct) * 2.0 - 1.0   # 强度映射到 [-1, 1]
+
+
+def _tone_neutral(pct):
+    if pct >= 0.8:
+        return "bullish"
+    if pct <= 0.2:
+        return "bearish"
+    return "neutral"
+
+
+def chain_conf_adjust(sector_name, conf, ts=None):
+    """A: 把产业链因子换算成 conf 加分 (整数, 可选负), 用于选股/排序门禁。
+
+    返回加分整数; 链条数据不可用或个股不在图谱时返回 0 (不改变现有行为)。
+    强链受益环节加分, 逆传导/弱链减分。ts 给定时用历史快照 (回测无前视),
+    否则用当日 live 强度。
+    """
+    try:
+        cf = chain_factor_for(sector_name, ts=ts)
+    except Exception:
+        return 0
+    if cf is None:
+        return 0
+    score = cf["score"]
+    adj = int(round(score * 4))   # score∈[-1,1] → adj∈[-4,4]
+    conf = int(conf)
+    pull = max(6, int(conf * 0.08))   # 加分上限约为 conf 的 8%, 不低于 6 分
+    return max(-pull, min(pull, adj))
+
+
+def chain_cap_key(sector_name):
+    """C: 组合同链限仓用分组键 (链条名或 None)。"""
+    cn, _tier = chain_home(sector_name)
+    return cn
+
+
 def _tier_avg(nodes):
     vals = [nd["pct"] for nd in nodes if nd.get("pct") is not None]
     if len(vals) < max(1, len(nodes) // 2):  # 覆盖过半才有效
