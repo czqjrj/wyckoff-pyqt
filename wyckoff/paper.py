@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover
     np = None
 
 from .paths import PAPER_FILE
+from .settings_keys import S
 
 _LOCK = threading.RLock()
 
@@ -52,6 +53,44 @@ MIN_LOT = 100.0
 # conf 过滤下限: 只做实证收益显著为正的强信号 (参见 docs/profitability_bt.md)
 MIN_CONF = 90
 
+
+def apply_paper_params(settings=None):
+    """从用户设置 dict 解析并覆盖模拟盘策略参数, 返回当前生效参数字典 `_CUR`.
+
+    不传/键缺失时回退到模块常量默认值, 保证与旧行为完全一致 (测试兼容)。
+    支持键 (见 settings_keys.Paper): INIT_CASH/MAX_POS/HOLD_BARS/STOP_LOSS/
+    TAKE_PROFIT/COST/MIN_CONF。调用方 (run_cycle/UI) 在周期执行前调用即可生效。
+    """
+    settings = settings or {}
+
+    def _get(key, default):
+        v = settings.get(key)
+        return default if v is None or v == "" else v
+
+    global _CUR
+    _CUR = {
+        "init_cash": float(_get(S.Paper.INIT_CASH, INIT_CASH)),
+        "max_pos": max(1, int(_get(S.Paper.MAX_POS, MAX_POSITIONS))),
+        "hold_bars": max(1, int(_get(S.Paper.HOLD_BARS, HOLD_BARS))),
+        "stop_loss": float(_get(S.Paper.STOP_LOSS, STOP_LOSS)),
+        "take_profit": float(_get(S.Paper.TAKE_PROFIT, TAKE_PROFIT)),
+        "cost": float(_get(S.Paper.COST, COST)),
+        "min_conf": int(_get(S.Paper.MIN_CONF, MIN_CONF)),
+    }
+    return _CUR
+
+
+# 当前生效参数 (默认=模块常量; 由 apply_paper_params 按用户设置覆盖)。
+_CUR = {
+    "init_cash": INIT_CASH,
+    "max_pos": MAX_POSITIONS,
+    "hold_bars": HOLD_BARS,
+    "stop_loss": STOP_LOSS,
+    "take_profit": TAKE_PROFIT,
+    "cost": COST,
+    "min_conf": MIN_CONF,
+}
+
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
 try:
     from .config import STRONG_TIER_TYPES, event_dir
@@ -74,7 +113,7 @@ def load_state():
         with open(PAPER_FILE, encoding="utf-8") as f:
             st = json.load(f)
         if isinstance(st, dict):
-            st.setdefault("cash", INIT_CASH)
+            st.setdefault("cash", float(_CUR["init_cash"]))
             st.setdefault("positions", [])   # 持仓: {symbol, name, qty, cost,
             st.setdefault("orders", [])      #       entry_ts, entry_bars, type, conf}
             st.setdefault("closed", [])      # 已平仓: {symbol, ..., buy_px, sell_px,
@@ -90,7 +129,7 @@ def load_state():
 
 def _new_state():
     return {
-        "cash": INIT_CASH,
+        "cash": float(_CUR["init_cash"]),
         "positions": [],
         "orders": [],
         "closed": [],
@@ -115,13 +154,16 @@ def save_state(st):
 
 
 # ── 选股: 全市场自动筛选 ────────────────────────────────
-def pick_candidates(universe=None, max_codes=60, min_conf=MIN_CONF,
+def pick_candidates(universe=None, max_codes=60, min_conf=None,
                     cancel_event=None):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
 
     每只股票只留"最近 N 根内最新"的强多头事件; conf 由 event 的 conf 字段
     (启发式 + online model 校准 + 类型封顶后) 提供。universe 为空用全市场。
+    min_conf 缺省取当前生效参数 (apply_paper_params 设置或模块默认 90)。
     """
+    if min_conf is None:
+        min_conf = _CUR["min_conf"]
     from .datasource import fetch_kline
     from .indicators import add_indicators, find_pivots
     from .events import detect_all
@@ -208,7 +250,7 @@ def has_position(st, code):
 
 def _make_order(code, name, type_, conf, price, n_total, cash):
     """构造买单订单公共字段 (qty 按当前现金预算分配, 整手)。"""
-    budget = cash * _POS_WEIGHT
+    budget = cash * (1.0 / max(1, _CUR["max_pos"]))
     if budget < MIN_LOT:
         return None
     qty = int(budget // (price * (1 + SLIP_BUY)) // 100 * 100)
@@ -230,8 +272,8 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True):
     st = load_state()
     with _LOCK:
         if has_position(st, code):
-            return None, "已持仓"
-        if len(st["positions"]) >= MAX_POSITIONS:
+            return None, "已持有"
+        if len(st["positions"]) >= _CUR["max_pos"]:
             return None, "同持已满"
         order = _make_order(code, name, type_, conf, price, n_total, st["cash"])
         if order is None:
@@ -256,7 +298,7 @@ def fill_buy(st, order):
     """口头成交: 扣现金、建仓。"""
     price = order["price"]
     qty = order["qty"]
-    cost = qty * price * COST
+    cost = qty * price * _CUR["cost"]
     spend = qty * price + cost
     st["cash"] -= spend
     st["positions"].append({
@@ -288,18 +330,18 @@ def step(st, df_by_code):
         pos["last_ret"] = round(ret, 4)
         # 结构位: 用最近 10 根低点做动态支撑 (近似结构关键位)
         support = float(df["low"].iloc[-10:].min())
-        stop_px = entry * (1 - STOP_LOSS)
+        stop_px = entry * (1 - _CUR["stop_loss"])
         # 卖出判定 (任一触发); 每周期推进持仓 K 数 (run_cycle 末尾落盘)
         pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
         reason = None
         held = int(pos["entry_bars"])
-        if ret >= TAKE_PROFIT:
+        if ret >= _CUR["take_profit"]:
             reason = "止盈"
         elif last <= stop_px:
             reason = "止损"
         elif support < stop_px and last <= support:
             reason = "破位"
-        elif held >= HOLD_BARS:
+        elif held >= _CUR["hold_bars"]:
             reason = "到期"
         if reason:
             sell_price = max(stop_px, last) * (1 - SLIP_SELL)
@@ -321,7 +363,7 @@ def close_position(st, pos, sell_price, reason):
     """平仓: 回收现金、记录已平仓与净值。"""
     price = round(sell_price, 3)
     gross = price * pos["qty"]  # 不含卖出成本的口径内部用
-    fee = gross * COST
+    fee = gross * _CUR["cost"]
     proceeds = gross - fee
     st["cash"] += proceeds
     ret_total = (price / pos["buy_px"] - 1)
@@ -409,12 +451,13 @@ def stats(st):
 
     # 总收益率: 当前总资产 (现金+持仓市值) 相对初始模拟资金
     hist = st.get("equity_hist") or []
+    init = float(_CUR["init_cash"])
     if hist:
-        last_hist = hist[-1].get("equity", INIT_CASH)
-        out["total_return"] = round(last_hist / INIT_CASH - 1, 4)
+        last_hist = hist[-1].get("equity", init)
+        out["total_return"] = round(last_hist / init - 1, 4)
         # 最大回撤 (用净值曲线)
         if np is not None and len(hist) >= 2:
-            eqs = [h.get("equity", INIT_CASH) for h in hist]
+            eqs = [h.get("equity", init) for h in hist]
             arr = np.asarray(eqs, dtype=float)
             peak = np.maximum.accumulate(arr)
             dd = arr / peak - 1
@@ -446,14 +489,20 @@ def signal_stats_text(st):
     return "\n".join(L)
 
 
-def run_cycle(min_conf=MIN_CONF, universe=None):
+def run_cycle(settings=None, min_conf=None, universe=None):
     """无头自动运行一个周期: 筛选→下单→步进→统计。返回统计。
 
     供 cron / 调度线程 / 手动触发。每周期持仓 K 数 +1,
     到期/止盈/止损/破位在该周期内平仓。
+    settings 传入界面设置 dict (S.Paper.* 键) 覆盖策略参数; min_conf 显式传入
+    时优先于 settings (兼容旧调用方)。
     """
     from .datasource import fetch_kline
     from .indicators import add_indicators
+
+    apply_paper_params(settings)
+    if min_conf is None:
+        min_conf = _CUR["min_conf"]
 
     st = load_state()
     # 1) 选股
@@ -461,7 +510,7 @@ def run_cycle(min_conf=MIN_CONF, universe=None):
     st["candidates"] = cand
     # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合
     for e in cand:
-        if len(st["positions"]) >= MAX_POSITIONS:
+        if len(st["positions"]) >= _CUR["max_pos"]:
             break
         code = e["code"]
         if has_position(st, code) or any(o["symbol"] == code for o in st["pending"]):

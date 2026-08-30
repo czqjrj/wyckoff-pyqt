@@ -2931,7 +2931,8 @@ class MainWindow(QMainWindow):
         """打开模拟盘 (自动筛选→下单→卖出→统计)。"""
         from .paper_window import PaperWindow
         self._show_win("_paper_win",
-                       lambda: PaperWindow(self, on_load=self._load_code),
+                       lambda: PaperWindow(self, settings=self.settings,
+                                           on_load=self._load_code),
                        refresh=True)
 
     def open_alerts(self):
