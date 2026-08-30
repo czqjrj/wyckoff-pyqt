@@ -319,5 +319,8 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
                         "cpos": round(float(cpos[i]), 4),
                         "trend": int(trend),
                         "dir": int(1 if up_bar[i] else (-1 if dn_bar[i] else 0)),
+                        "cpos_trend": round(float(cpos[i]) * (1 if trend else -1), 4),
+                        "vr_cpos": round(float(vr[i]) * float(cpos[i]), 4),
+                        "vr_trend": round(float(vr[i]) * (1 if trend else -1), 4),
                     }})
     return out

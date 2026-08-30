@@ -36,7 +36,7 @@ def _empirical_reliability(type_, d=0):
 # 把 conf 封在 ci_hi 附近 — 防止弱类型 (SOS/JOC/BC/AR/PSY/BU) 被打分/模型
 # 抬到 80-100 档 (实测该档弱类型命中率越低反而越高置信, 反向亏钱)。
 # 强类型 (Spring ci_hi≈88, Shakeout≈88) 天花板高, 不受影响。
-CONF_CI_FLOOR = 0.60   # 仅当 ci_hi < 该值才封顶 (弱类型门)
+CONF_CI_FLOOR = 0.55   # 仅当 ci_hi < 该值才封顶 (弱类型门), 进一步压低SOS/JOC/BC/AR
 CONF_CEIL_MARGIN = 0.04  # 天花板 = ci_hi + margin, 给低样本少量余量
 
 
@@ -525,8 +525,27 @@ def _is_neutral_event(e_type: str) -> bool:
     return e_type in ("SC", "BC", "AR")
 
 
+# 动态确认窗口: 不同事件类型最佳确认期 (根数)
+# 基于历史实测: Spring需要较长确认, SOS需要中等, 低置信度事件需要较短窗口
+DYNAMIC_WINDOW = {
+    "Spring": 8,      # 刺破后收回需更多确认
+    "Shakeout": 5,    # 假破位确认相对快
+    "UTAD": 4,        # 冲高后回落确认快
+    "LPSY": 3,        # 缩量反弹确认快
+    "SOS": 5,         # 量价突破确认
+    "JOC": 5,         # 突破60日区间确认
+    "BU": 4,          # 回踩区间上沿确认
+    "LPS": 3,         # 缩量回踩确认
+    "ST": 4,          # 缩量回踩 SC 区
+    "AR": 4,          # 自动反弹/回落确认
+    "BC": 4,          # 买入高潮确认
+    "SC": 3,          # 卖出高潮确认 (中立类型默认 None)
+    "default": 3,     # 其他事件默认窗口
+}
+
+
 def confirm_events(df: pd.DataFrame, events, window: int = 3):
-    """跟进确认 - 向量化。"""
+    """跟进确认 - 向量化。为每个事件使用动态确认窗口。"""
     n = len(df)
     close = df["close"].values
     high = df["high"].values
@@ -543,23 +562,27 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
     for j, e in enumerate(events):
         ne = dict(e)
         i = idx[j]
+        t = types[j]
         d = dirs[j]
+        # 使用动态窗口: 根据事件类型确定最佳确认期
+        dyn_window = DYNAMIC_WINDOW.get(t, DYNAMIC_WINDOW["default"])
         # 中立事件类型 (SC/BC/AR) 默认确认窗口返回 None
-        if _is_neutral_event(e["type"]) or d == 0 or not (0 <= i < n) or i + window >= n:
+        if _is_neutral_event(e["type"]) or d == 0 or not (0 <= i < n) or i + dyn_window >= n:
             ne["confirmed"] = None
         else:
-            fut_close = close[i + 1:i + 1 + window]
+            fut_close = close[i + 1:i + 1 + dyn_window]
             if d > 0:
                 cond = fut_close > high[i]
             else:
                 cond = fut_close < low[i]
             ne["confirmed"] = bool(np.any(cond))
             if ne["confirmed"]:
-                # 确认后首根可交易 bar (�޳�ǰ��, �� signal_accuracy.ret_c ͬ� Habsburg):
-                # ��¼���ý�����, ��"ȷ�Ϻ�������"�������볡���� (entries.avail_idx)��
+                # 确认后首根可交易 bar
                 av = int(i + 1 + np.argmax(cond))
                 ne["avail_idx"] = av
                 ne["avail_date"] = str(df["day"].iloc[av])
+                # 记录使用的窗口长度 (便于追踪)
+                ne["confirm_window"] = dyn_window
         out.append(ne)
     return out
 
@@ -737,6 +760,39 @@ def event_confidence(ctx: _EventContext, events):
             "dir": d,
             "rsi_6": round(float(rsi_val), 2) if rsi_val is not None else None,
             "kdj_d": round(float(kdj_val), 2) if kdj_val is not None else None,
+            # 新增特征: 非线性交互 (使用 up_i 替代未定义的 trend)
+            "cpos_trend": round(float(cpos) * (1 if up_i else -1), 4),
+            "vr_cpos": round(float(vr) * float(cpos), 4),
+            "vr_trend": round(float(vr) * (1 if up_i else -1), 4),
         }
+        # 根据新特征调整置信度得分
+        cpt = e["feat"].get("cpos_trend")
+        vrcp = e["feat"].get("vr_cpos")
+        vrt = e["feat"].get("vr_trend")
+        if cpt is not None:
+            # cpos_trend: 底部反转在非上升趋势更有效, 顶部反转在上升趋势更有效
+            if e["type"] in ("SC", "ST", "Spring", "LPS", "PSY", "Shakeout"):
+                # cpos_trend < 0 表示卖在低位+趋势向下 (强信号)
+                # 使用 up_i 判断趋势: up_i=True 表示上升趋势
+                score += min(5, max(0, -cpt * 15)) if not up_i else min(5, max(0, cpt * 15)) * -1
+            elif e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
+                # cpos_trend > 0 表示买在高位+趋势向上 (强信号)
+                score += min(5, max(0, cpt * 15)) if up_i else min(5, max(0, -cpt * 15))
+        if vrcp is not None:
+            # vr_cpos: 体量×收盘位置综合信号
+            if d > 0:
+                # 多头: 高vr_cpos (体量高+收盘靠下) → 看空倾向
+                score -= min(6, max(0, (vrcp - 0.4) * 20))
+            elif d < 0:
+                # 空头: 低vr_cpos (体量高+收盘靠上) → 看多倾向
+                score += min(6, max(0, (0.4 - vrcp) * 20))
+        if vrt is not None:
+            # vr_trend: 体量×趋势综合信号
+            if d > 0:
+                # 多头: 高vr_trend (体量大+趋势向上) → 确认多头
+                score += min(5, max(0, vrt * 10)) if up_i else min(5, max(0, -vrt * 10))
+            elif d < 0:
+                # 空头: 高vr_trend (体量大+趋势向下) → 确认空头
+                score += min(5, max(0, vrt * 10)) if not up_i else min(5, max(0, -vrt * 10))
         e["conf"] = int(round(min(100, max(0, score))))
     return ev_list

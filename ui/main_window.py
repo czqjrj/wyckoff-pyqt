@@ -609,6 +609,24 @@ class MainWindow(QMainWindow):
         self._account_btn.setObjectName("accountBtn")
         self._account_btn.setToolTip("账户登录 / 多设备私有数据同步")
         self._account_btn.clicked.connect(self._on_account_click)
+
+        # 同步按钮: 双向同步 (pull→merge→push)
+        self._sync_btn = _button("同步数据")
+        self._sync_btn.setObjectName("syncBtn")
+        self._sync_btn.setToolTip("双向同步: 下载远端变更 + 上传本地变更")
+        self._sync_btn.setEnabled(False)  # 直到登录才启用
+        self._sync_btn.clicked.connect(self._run_account_sync)
+
+        # 新增: 仅从云端下载按钮
+        self._pull_btn = _button("从云下载")
+        self._pull_btn.setObjectName("pullBtn")
+        self._pull_btn.setToolTip("从云端下载私有数据到本地 (不推送)")
+        self._pull_btn.setEnabled(False)  # 直到登录才启用
+        self._pull_btn.clicked.connect(self._run_pull)
+
+        lay.addSpacing(4)
+        lay.addWidget(self._sync_btn)
+        lay.addWidget(self._pull_btn)
         lay.addSpacing(8)
         lay.addWidget(self._account_btn)
         self._refresh_account_state()
@@ -1185,19 +1203,29 @@ class MainWindow(QMainWindow):
 
     # ── 账户登录 ──
     def _refresh_account_state(self):
-        """刷新工具栏账户按钮: 未登录=「登录」, 已登录=账户名。"""
+        """刷新工具栏账户/同步按钮: 未登录=「登录/禁用」, 已登录=账户名/启用。"""
         try:
             from wyckoff import account
             st = account.status()
             if st.get("logged_in"):
                 self._account_btn.setText(str(st.get("current", "登录")))
+                self._sync_btn.setEnabled(True)
+                self._sync_btn.setToolTip("同步账户私有数据 (推送到远端 + 拉取从远端)")
+                self._pull_btn.setEnabled(True)
+                self._pull_btn.setToolTip("从远端仓库拉取私有数据到本地")
             else:
                 self._account_btn.setText("登录")
+                self._sync_btn.setEnabled(False)
+                self._sync_btn.setToolTip("请先登录")
+                self._pull_btn.setEnabled(False)
+                self._pull_btn.setToolTip("请先登录")
         except Exception:
             self._account_btn.setText("登录")
+            self._sync_btn.setEnabled(False)
+            self._pull_btn.setEnabled(False)
 
     def _on_account_click(self):
-        """点击账户按钮: 未登录弹登录对话框, 已登录弹账户菜单(退出/切换/同步)。"""
+        """点击账户按钮: 未登录弹登录对话框, 已登录弹菜单(退出登录)。"""
         try:
             from wyckoff import account
             if not account.status().get("logged_in"):
@@ -1205,14 +1233,10 @@ class MainWindow(QMainWindow):
                 return
             from PyQt6.QtWidgets import QMenu
             menu = QMenu(self)
-            act_sync = menu.addAction("立即同步")
-            menu.addSeparator()
             act_logout = menu.addAction("退出登录")
             chosen = menu.exec(self._account_btn.mapToGlobal(
                 self._account_btn.rect().bottomLeft()))
-            if chosen is act_sync:
-                self._run_account_sync()
-            elif chosen is act_logout:
+            if chosen is act_logout:
                 _, _ = account.logout()
                 self._refresh_account_state()
         except Exception as e:
@@ -1273,18 +1297,30 @@ class MainWindow(QMainWindow):
         # 账户私有仓地址不预填/不写死: 由用户自行输入自己的仓库地址
         def _login():
             from wyckoff import account
+            from wyckoff import profile_sync
             ok, msg = account.login(
                 ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
             if ok:
+                # 自动初始化/应用 profile sync
+                try:
+                    psync.setup(account.current_repo_url())
+                except Exception as e:
+                    pass  # sync init non-fatal, 可在菜单里手动触发
                 dlg.accept()
             else:
                 err.setText(msg)
 
         def _register():
             from wyckoff import account
+            from wyckoff import profile_sync
             ok, msg = account.register(
                 ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
             if ok:
+                # 注册成功后自动绑定仓并初始化 sync
+                try:
+                    psync.setup(account.current_repo_url())
+                except Exception as e:
+                    pass  # sync init non-fatal
                 dlg.accept()
             else:
                 err.setText(msg)
@@ -1318,6 +1354,31 @@ class MainWindow(QMainWindow):
 
         self._account_sync_thread.result.connect(_finish)
         self._account_sync_thread.start()
+
+
+    def _run_pull(self):
+        """后台执行: 从远端仓库拉取私有数据到本地。
+        仅执行 git pull + apply_profile, 不推送本地变更。
+        """
+        import wyckoff.profile_sync as psync
+
+        def work():
+            # psync.pull_or_push('pull') 已经处理了确保仓库、pull 和 apply
+            return psync.pull_or_push("pull")
+
+        self._account_sync_thread = AutoSyncThread(work, self)
+
+        def _finish(res):
+            if isinstance(res, dict) and res.get("ok"):
+                self._status("从远端同步私有数据完成")
+            else:
+                self._status(
+                    f"从远端同步失败: {(res or {}).get('error', '未知错误')}")
+            self._refresh_account_state()
+
+        self._account_sync_thread.result.connect(_finish)
+        self._account_sync_thread.start()
+
 
     # ── 自选股 ──
     def reload_watchlist(self):

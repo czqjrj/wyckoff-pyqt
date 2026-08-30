@@ -276,6 +276,13 @@ def login(user, password, repo_url=None):
     if cached:
         _cache_login(user, now, repo_url or cached.get("repo_url", ""))
         return True, "登录成功(本机缓存)"
+    # 【新增】即使仓内没有该用户，也尝试读取本机缓存账号 (account.json),
+    # 这样即使GitHub私有仓里没有该用户，如果Windows/其他机器上有本机缓存，
+    # 也能进行登录而不报“用户不存在”
+    cached2 = load_accounts().get("accounts", {}).get(user)
+    if cached2:
+        _cache_login(user, now, repo_url or cached2.get("repo_url", ""))
+        return True, "登录成功(本机缓存)"
     return False, "用户不存在"
 
 
