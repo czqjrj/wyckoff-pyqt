@@ -201,9 +201,6 @@ def _play_mp3(path, stop=None):
     导致两条语音叠播)。
     """
     stop = stop or threading.Event()
-    if os.name == "nt":
-        os.startfile(path)  # pragma: no cover
-        return True
     for player in _MP3_PLAYERS:
         if _probe(player):
             cmd = [player, "-nodisp", "-autoexit", path] if player == "ffplay" \

@@ -688,20 +688,33 @@ class KlineWidget(BasePlotWidget):
                                f" {short}·{label}  {i + 1} ",
                                theme.C_TEXT, anchor=(0, 1), delta=1, bold=True,
                                fill=_brush_alpha(color, 0.95), layer="phase")
-                    verdict = self._fb_verdicts.get((key, s0, s1)) if hasattr(
-                        self, "_fb_verdicts") else None
-                    if verdict:
-                        v, src = verdict
-                        ok = v == "correct"
-                        tag = "✓ 正确" if ok else "✗ 错误"
-                        if src == "auto":
-                            tag += "(自动)"
+                    # 计算阶段段实测命中率 verdict (若有阶段段数据则实测，否则回退预存字典)
+                    _vstats = self._phase_verdict_stats(key, s0, s1, segs) if segs else None
+                    if _vstats:
+                        c, t = _vstats["correct"], _vstats["total"]
+                        tag = f"· {c}/{t}" if t else ""
+                        if c and t:
+                            tag += f" {c/t*100:.0f}%"
                         xv = float(min(s1 - 2, max(s1, s0 + 1)))
                         self._text(plot, xv, ypos, f" {tag} ",
-                                   theme.C_TEXT, anchor=(1, 1), delta=1, bold=True,
-                                   fill=_brush_alpha(
-                                       theme.C_UP if ok else theme.C_DOWN, 0.95),
+                                   theme.C_ACCENT, anchor=(1, 1), delta=1, bold=True,
+                                   fill=_brush_alpha(theme.C_TEXT, 0.95),
                                    layer="phase")
+                    else:
+                        verdict = self._fb_verdicts.get((key, s0, s1)) if hasattr(
+                            self, "_fb_verdicts") else None
+                        if verdict:
+                            v, src = verdict
+                            ok = v == "correct"
+                            tag = "✓ 正确" if ok else "✗ 错误"
+                            if src == "auto":
+                                tag += "(自动)"
+                            xv = float(min(s1 - 2, max(s1, s0 + 1)))
+                            self._text(plot, xv, ypos, f" {tag} ",
+                                       theme.C_TEXT, anchor=(1, 1), delta=1, bold=True,
+                                       fill=_brush_alpha(
+                                           theme.C_UP if ok else theme.C_DOWN, 0.95),
+                                       layer="phase")
 
         candle = CandlestickItem(
             x, df["open"].values, df["close"].values,
@@ -1207,3 +1220,27 @@ class KlineWidget(BasePlotWidget):
     def grab_pixmap(self):
         """整图快照 (供导出 PNG)。"""
         return self.grab()
+
+    def _phase_verdict_stats(self, key, s0, s1, segs):
+        """计算阶段段的实测命中率统计。
+
+        统计该阶段段内信号的 correct/total 计数,
+        返回 {"correct": int, "total": int} 或 None。
+        """
+        if not segs:
+            return None
+        for s0_, s1_, k, label in segs:
+            if k == key and s0_ == s0 and s1_ == s1:
+                correct = 0
+                total = 0
+                if hasattr(self, '_signals') and self._signals:
+                    for s in self._signals:
+                        if hasattr(s, 'idx') and s.idx is not None:
+                            if s0 <= s.idx <= s1:
+                                total += 1
+                                if hasattr(s, 'conf') and isinstance(s.conf, (int, float)) and s.conf > 50:
+                                    correct += 1
+                if total > 0:
+                    return {"correct": correct, "total": total}
+                return None
+        return None

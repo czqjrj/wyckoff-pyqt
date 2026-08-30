@@ -520,6 +520,11 @@ def detect_psy(ctx: _EventContext, pivots, sc_idx):
     return []
 
 
+def _is_neutral_event(e_type: str) -> bool:
+    """判断是否为中立事件类型, 默认确认窗口返回 None。"""
+    return e_type in ("SC", "BC", "AR")
+
+
 def confirm_events(df: pd.DataFrame, events, window: int = 3):
     """跟进确认 - 向量化。"""
     n = len(df)
@@ -539,7 +544,8 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
         ne = dict(e)
         i = idx[j]
         d = dirs[j]
-        if d == 0 or not (0 <= i < n) or i + window >= n:
+        # 中立事件类型 (SC/BC/AR) 默认确认窗口返回 None
+        if _is_neutral_event(e["type"]) or d == 0 or not (0 <= i < n) or i + window >= n:
             ne["confirmed"] = None
         else:
             fut_close = close[i + 1:i + 1 + window]
@@ -549,8 +555,8 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
                 cond = fut_close < low[i]
             ne["confirmed"] = bool(np.any(cond))
             if ne["confirmed"]:
-                # 确认后首根可交易 bar (剔除前视, 与 signal_accuracy.ret_c 同口径):
-                # 记录可用进场点, 供"确认后命中率"评估与入场检索 (entries.avail_idx)。
+                # 确认后首根可交易 bar (�޳�ǰ��, �� signal_accuracy.ret_c ͬ� Habsburg):
+                # ��¼���ý�����, ��"ȷ�Ϻ�������"�������볡���� (entries.avail_idx)��
                 av = int(i + 1 + np.argmax(cond))
                 ne["avail_idx"] = av
                 ne["avail_date"] = str(df["day"].iloc[av])
