@@ -507,7 +507,17 @@ def pull_or_push(mode):
         _ensure_remote_url()
         if mode == "pull":
             _git(["pull", "--no-rebase"], cwd=PROFILE_REPO_DIR, check=False)
-            apply_profile(_read_repo_bundle())
+            remote = _read_repo_bundle()
+            # 不能盲目用远端覆盖本地: 先按影子收集本地变更(含删除 tombstone),
+            # 与远端做 LWW 合并, 使本地已删除的条目不被云端旧数据复活。
+            local = collect_profile()
+            types = {}
+            for tname in TYPES:
+                lt = (local.get("types", {}).get(tname, {}) or {}).get("items", {})
+                rt = (remote.get("types", {}).get(tname, {}) or {}).get("items", {})
+                types[tname] = {"items": _merge_items(lt, rt)}
+            apply_profile({"schema": SCHEMA, "machine": _machine_id(),
+                           "exported_ts": time.time(), "types": types})
         else:
             _commit_bundle(collect_profile(), "profile push")
             _git(["push"], cwd=PROFILE_REPO_DIR, check=False)

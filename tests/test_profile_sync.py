@@ -130,3 +130,41 @@ def test_collect_detects_add_delete_and_persists_shadow(tmp_path):
 def test_no_net_guards_git_ops():
     assert ps._no_net() is True
     assert ps._git(["status"]) == ("", 0)
+
+
+def test_pull_merge_preserves_local_delete(tmp_path):
+    """「从云下载」不能盲目用远端覆盖本地删除。
+
+    回归背景: 本地删除某自选股后, 从云下载曾用含该股的远端 bundle 直接覆盖,
+    导致被删除的股票复活。修复后 pull 需先按影子收集本地变更(含删除 tombstone)
+    再做 LWW 合并, 使本地已删除条目不被云端旧数据拉回。
+    """
+    m = _reload_modules(tmp_path)
+    # 1) 初始本地含 600104 + 300750, 建立影子
+    _write(tmp_path, "wyckoff_watchlist.json", ["600104", "300750"])
+    m._collect_type("watchlist")
+
+    # 2) 用户删除 300750: 本地仅剩 600104
+    _write(tmp_path, "wyckoff_watchlist.json", ["600104"])
+    local = m._collect_type("watchlist")
+    assert local["300750"].get("v") is None, "删除应产出 tombstone"
+
+    # 3) 但远端 bundle 里 300750 仍存在(旧数据)
+    remote = {
+        "schema": m.SCHEMA,
+        "types": {"watchlist": {"items": {
+            "600104": {"v": "600104", "ts": 1},
+            "300750": {"v": "300750", "ts": 2},
+        }}},
+    }
+
+    # 4) 按新 pull 逻辑合并: 本地删除(ts 为 now 较新)必须胜出
+    rt = remote["types"]["watchlist"]["items"]
+    merged = m._merge_items(local, rt)
+    assert merged["300750"]["v"] is None, "删除的股票不能被远程旧数据复活"
+
+    # 5) 应用后磁盘无 300750
+    m.apply_profile({"schema": m.SCHEMA, "types": {"watchlist": {"items": merged}}})
+    wl = m._read_watchlist()
+    assert "300750" not in wl
+    assert "600104" in wl
