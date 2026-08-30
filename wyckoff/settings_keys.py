@@ -113,12 +113,14 @@ class TTS(_Base):
     MAX_CHARS = "tts_max_chars"
 
 
-# ── 运行时记忆 (分析历史/校准仓库) ──────────────────────────
+# ── 运行时记忆 (分析历史/校准仓库/档案同步) ──────────────────
 class Runtime(_Base):
     LAST_ANALYZED_CODE = "last_analyzed_code"
     LAST_ANALYZED_SCALE = "last_analyzed_scale"
     LAST_ANALYZED_PERIOD = "last_analyzed_period"
     CALIB_REPO_URL = "calib_repo_url"
+    PROFILE_REPO_URL = "profile_repo_url"
+    PROFILE_SYNC = "profile_sync"
 
 
 # ── 便捷聚合：S.<域>.<键> ───────────────────────────────────
@@ -225,4 +227,6 @@ DEFAULTS = {
     Runtime.LAST_ANALYZED_SCALE: "日线",
     Runtime.LAST_ANALYZED_PERIOD: "近3年",
     Runtime.CALIB_REPO_URL: "",
+    Runtime.PROFILE_REPO_URL: "",
+    Runtime.PROFILE_SYNC: False,
 }

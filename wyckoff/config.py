@@ -405,6 +405,9 @@ DEFAULT_SETTINGS = {
     "theme": "light",
     # 分析结论 / AI解读 面板文字字号 (pt)
     "text_font_size": 11,
+    # 账户私有数据同步: 私有 Git 仓 URL + 开关 (见 plan_profile_sync.md)
+    "profile_repo_url": "",
+    "profile_sync": False,
 }
 
 # ── 通用阈值 ──

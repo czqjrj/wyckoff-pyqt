@@ -58,6 +58,11 @@ debian/
 /*.txt
 /wyckoff_*.png
 /calib_repo/
+# 账户私有数据同步工作副本 / 本地时间戳影子 / 登录仓克隆 (运行时用户数据, 勿入库)
+/profile_repo/
+/account_repo/
+/profile_shadow.json
+/account.json
 
 # ── 运行时用户数据/状态 (勿入库) ──
 /wx_*.json

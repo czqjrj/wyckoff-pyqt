@@ -62,6 +62,8 @@ from wyckoff.utils import normalize_symbol
 from wyckoff.vsa_explain import LONG_ONLY_NOTE, explain
 
 from . import theme
+from .analysis_ctrl import AnalysisController
+from .chart_manager import ChartManager
 from .code_search import CodeSearchDialog
 from .extra_windows import (
     AlertsWindow,
@@ -75,9 +77,8 @@ from .extra_windows import (
     ScreenerWidget,
 )
 from .settings_dialog import SettingsDialog
+from .state_manager import StateManager
 from .threads import (
-    AnalysisThread,
-    AnalysisTickerThread,
     AutoSyncThread,
     LabelAiThread,
     ScanMarketThread,
@@ -85,9 +86,6 @@ from .threads import (
     WatchRTThread,
     WatchScanThread,
 )
-from .analysis_ctrl import AnalysisController
-from .chart_manager import ChartManager
-from .state_manager import StateManager
 
 # ──────────────────────────────────────────── 结论 HTML 渲染 ────────────────────────────────────────────
 
@@ -605,6 +603,15 @@ class MainWindow(QMainWindow):
         for w in (self.tb_name, self.tb_code, self.tb_price,
                   self.tb_pct, self.tb_advice):
             lay.addWidget(w)
+
+        # 账户登录入口: 未登录显示「登录」, 已登录显示账户名 (点击弹菜单可退出/同步)
+        self._account_btn = _button("登录")
+        self._account_btn.setObjectName("accountBtn")
+        self._account_btn.setToolTip("账户登录 / 多设备私有数据同步")
+        self._account_btn.clicked.connect(self._on_account_click)
+        lay.addSpacing(8)
+        lay.addWidget(self._account_btn)
+        self._refresh_account_state()
 
         tb.setToolTip("主工具栏")
         tbwrap = QToolBar("主工具栏", self)
@@ -1176,6 +1183,142 @@ class MainWindow(QMainWindow):
             return
         self.source_health_label.setText(" 数据源: " + " · ".join(parts))
 
+    # ── 账户登录 ──
+    def _refresh_account_state(self):
+        """刷新工具栏账户按钮: 未登录=「登录」, 已登录=账户名。"""
+        try:
+            from wyckoff import account
+            st = account.status()
+            if st.get("logged_in"):
+                self._account_btn.setText(str(st.get("current", "登录")))
+            else:
+                self._account_btn.setText("登录")
+        except Exception:
+            self._account_btn.setText("登录")
+
+    def _on_account_click(self):
+        """点击账户按钮: 未登录弹登录对话框, 已登录弹账户菜单(退出/切换/同步)。"""
+        try:
+            from wyckoff import account
+            if not account.status().get("logged_in"):
+                self._open_login_dialog()
+                return
+            from PyQt6.QtWidgets import QMenu
+            menu = QMenu(self)
+            act_sync = menu.addAction("立即同步")
+            menu.addSeparator()
+            act_logout = menu.addAction("退出登录")
+            chosen = menu.exec(self._account_btn.mapToGlobal(
+                self._account_btn.rect().bottomLeft()))
+            if chosen is act_sync:
+                self._run_account_sync()
+            elif chosen is act_logout:
+                _, _ = account.logout()
+                self._refresh_account_state()
+        except Exception as e:
+            self._status(f"账户操作异常: {e}")
+
+    def _open_login_dialog(self):
+        """弹出登录对话框: 账户名 + 密码 (+ 可选私有档案仓地址) + 登录/注册。"""
+        from PyQt6.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout
+
+        from . import theme
+        dlg = QDialog(self)
+        dlg.setWindowTitle("账户登录")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+        tip = QLabel("登录后可在多台设备间同步账户私有数据 "
+                     "(UI 布局 / 自选 / 候选 / 笔记 / 组合 / 模拟盘)。\n"
+                     "AI Key 等敏感凭据不会上传。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f"color:{theme.C_MUTED};")
+        lay.addWidget(tip)
+
+        lab = QLabel("账户名:")
+        lay.addWidget(lab)
+        ed_user = QLineEdit()
+        ed_user.setPlaceholderText("如 GitHub 用户名")
+        lay.addWidget(ed_user)
+
+        lab = QLabel("密码:")
+        lay.addWidget(lab)
+        ed_pass = QLineEdit()
+        ed_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        ed_pass.setPlaceholderText("至少 6 位")
+        lay.addWidget(ed_pass)
+
+        lab = QLabel("账户私有 Git 仓库地址 (可留空):")
+        lay.addWidget(lab)
+        ed_url = QLineEdit()
+        ed_url.setPlaceholderText("git@github.com:user/wyckoff-profile.git")
+        lay.addWidget(ed_url)
+
+        err = QLabel("")
+        err.setWordWrap(True)
+        err.setStyleSheet(f"color:{theme.C_UP};")
+        lay.addWidget(err)
+
+        btns = QHBoxLayout()
+        btn_login = QPushButton("登录")
+        btn_login.setObjectName("primaryBtn")
+        btn_register = QPushButton("注册并登录")
+        btn_cancel = QPushButton("取消")
+        btns.addStretch(1)
+        btns.addWidget(btn_login)
+        btns.addWidget(btn_register)
+        btns.addWidget(btn_cancel)
+        lay.addLayout(btns)
+
+        # 账户私有仓地址不预填/不写死: 由用户自行输入自己的仓库地址
+        def _login():
+            from wyckoff import account
+            ok, msg = account.login(
+                ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
+            if ok:
+                dlg.accept()
+            else:
+                err.setText(msg)
+
+        def _register():
+            from wyckoff import account
+            ok, msg = account.register(
+                ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
+            if ok:
+                dlg.accept()
+            else:
+                err.setText(msg)
+
+        btn_login.clicked.connect(_login)
+        btn_register.clicked.connect(_register)
+        btn_cancel.clicked.connect(dlg.reject)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._refresh_account_state()
+
+    def _run_account_sync(self):
+        """后台执行账户私有数据同步 (走 AutoSyncThread)。"""
+        import wyckoff.profile_sync as psync
+
+        from .threads.auto_sync_thread import AutoSyncThread
+
+        def work():
+            if not psync.status().get("configured"):
+                return psync.setup("")
+            return psync.sync_once()
+
+        self._account_sync_thread = AutoSyncThread(work, self)
+
+        def _finish(res):
+            if isinstance(res, dict) and res.get("ok"):
+                self._status("账户数据同步完成")
+            else:
+                self._status(
+                    f"账户同步失败: {(res or {}).get('error', '未知错误')}")
+            self._refresh_account_state()
+
+        self._account_sync_thread.result.connect(_finish)
+        self._account_sync_thread.start()
+
     # ── 自选股 ──
     def reload_watchlist(self):
         self._reload_watchlist()
@@ -1637,18 +1780,18 @@ class MainWindow(QMainWindow):
         code = r.get("code", "")
         key = self._cache_key(code)
         self._analysis_ctrl._analysis_cache[key] = r
-        
+
         # 更新图表缓存
         scale_key = self.cb_scale.currentText()
         period_key = self.cb_period.currentText()
         scale = SCALE_OPTIONS.get(scale_key, 240)
         datalen = PERIOD_OPTIONS.get(period_key, 700)
-        
+
         self._chart_mgr.update_caches(r, scale, datalen)
-        
+
         # 批量渲染图表
         self._chart_mgr.render_all(r)
-        
+
         self._current_code = r["code"]
         self._current_name = r.get("name") or ""
         self._remember_last_analyzed()
