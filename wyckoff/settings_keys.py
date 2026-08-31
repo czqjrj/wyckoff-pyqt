@@ -25,6 +25,7 @@ class General(_Base):
     AUTO_SHOW_SCREENER = "auto_show_screener"
     AUTO_SHOW_CALIB = "auto_show_calib"
     AUTO_SHOW_ENTRIES = "auto_show_entries"
+    START_NO_ANALYSIS = "startup_no_analysis"
     THEME = "theme"
 
 
@@ -168,6 +169,7 @@ DEFAULTS = {
     General.AUTO_SHOW_SCREENER: False,
     General.AUTO_SHOW_CALIB: False,
     General.AUTO_SHOW_ENTRIES: False,
+    General.START_NO_ANALYSIS: True,
     General.THEME: "light",
     UI.FONT_FAMILY: "",
     UI.FONT_SIZE: 12,

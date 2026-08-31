@@ -158,6 +158,15 @@ class GeneralPage(SettingsPage):
         self._grid.addWidget(self.cb_maximize, self._row, 0, 1, 2)
         self._row += 1
 
+        # 启动时不分析任何股票
+        self.cb_no_startup_analysis = QCheckBox("启动时不分析任何股票")
+        self.cb_no_startup_analysis.setChecked(
+            bool(self._s.get("startup_no_analysis", True)))
+        self.cb_no_startup_analysis.setToolTip(
+            "勾选后启动时不会自动加载/分析上次或默认股票, 也不做自选股首扫。")
+        self._grid.addWidget(self.cb_no_startup_analysis, self._row, 0, 1, 2)
+        self._row += 1
+
         # 启动自动显示: 综合选股 / 校准中心 / 今日入场点 (均为懒创建 Tab)
         lab = QLabel("启动时自动显示:")
         lab.setStyleSheet(f"color:{theme.C_MUTED};")
@@ -450,6 +459,7 @@ class GeneralPage(SettingsPage):
             "default_scale": self.cb_scale.currentText(),
             "default_period": self.cb_period.currentText(),
             "start_maximized": self.cb_maximize.isChecked(),
+            "startup_no_analysis": self.cb_no_startup_analysis.isChecked(),
             "auto_show_screener": self.cb_auto_show["auto_show_screener"].isChecked(),
             "auto_show_calib": self.cb_auto_show["auto_show_calib"].isChecked(),
             "auto_show_entries": self.cb_auto_show["auto_show_entries"].isChecked(),

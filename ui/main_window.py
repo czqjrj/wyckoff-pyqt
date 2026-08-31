@@ -275,7 +275,9 @@ class MainWindow(QMainWindow):
         self._reload_watchlist()
         # 启动即做一次自选股扫描, 让状态栏中间头条尽快填充 (不依赖 auto_scan 开关)
         # 用挂在窗口上的单发定时器而非裸 singleShot: 窗口关闭即失效, 避免僵尸回调
-        if self._watchlist:
+        # 设置→基本「启动时不分析任何股票」开启时跳过自选股首扫与自动载入。
+        no_startup = bool(self.settings.get(S.General.START_NO_ANALYSIS, True))
+        if not no_startup and self._watchlist:
             self._startup_scan_timer = QTimer(self)
             self._startup_scan_timer.setSingleShot(True)
             self._startup_scan_timer.timeout.connect(self._startup_ticker_scan)
@@ -284,7 +286,7 @@ class MainWindow(QMainWindow):
         last_code, last_scale, last_period = self._state_mgr.get_last_analyzed()
         default_load = str(self.settings.get(S.General.DEFAULT_LOAD, "") or "").strip()
         startup_code = last_code or default_load
-        if startup_code:
+        if not no_startup and startup_code:
             if last_code:
                 # 恢复上次的周期/时间段选择
                 self.cb_scale.setCurrentText(last_scale)

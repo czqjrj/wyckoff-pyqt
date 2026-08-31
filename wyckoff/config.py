@@ -276,6 +276,15 @@ def vsa_dir(lab):
         return -1
     return 0
 
+
+def dir_hit(kind, t, ret):
+    """信号方向命中: 收益 ret 是否落在这类信号标称方向上。
+    event 用 event_dir, vsa 用 vsa_dir; 方向=0 (中性) 时恒为 False。"""
+    d = event_dir(t) if kind == "event" else vsa_dir(t)
+    if d == 0:
+        return False
+    return ret < 0 if d < 0 else ret > 0
+
 ACC_PHASES = [
     ("A", "初步支撑 PSY + 卖出高潮 SC + 自动反弹 AR", "恐慌抛售 → 初步止跌"),
     ("B", "二次测试 ST / 区间震荡", "抛压衰减, 区间构筑"),

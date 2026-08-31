@@ -942,7 +942,7 @@ class CalibrationCenter(QWidget):
             row_lay.addWidget(ok)
             row_lay.addWidget(bad)
             self.fb_lay.addWidget(row)
-        note = QLabel(f"已标注 {labeled}/{len(segs)} 带  ·  累计 {len(feedback)} 条")
+        note = QLabel(f"已标注 {labeled}/{len(self._last_segs)} 带  ·  累计 {len(fb)} 条")
         note.setStyleSheet(f"color:{theme.C_MUTED};")
         self.fb_lay.addWidget(note)
         self.fb_lay.addStretch(1)
@@ -1350,8 +1350,7 @@ class CalibrationCenter(QWidget):
         d = event_dir(t) if kind == "event" else vsa_dir(t)
         if d == 0:
             return ""
-        from wyckoff.config import dir_hit
-        return "✓" if dir_hit(kind, t, ret) else "✗"
+        return "✓" if (ret < 0 if d < 0 else ret > 0) else "✗"
 
     def _render_signal_accuracy(self, data=None):
         if data:
@@ -1363,6 +1362,37 @@ class CalibrationCenter(QWidget):
             stats = signal_stats(records)
             from wyckoff.validation import compute_validation_stats
             vstats = compute_validation_stats(records)
+
+        # 摘要
+        s = stats["summary"]
+        lines = [f"信号追踪: 累计 {s['total']} 条 · 已评估 {s['evaluated']} · "
+                 f"待评估 {s['pending']} · 无法定位 {s.get('stale', 0)}"]
+        for kind, label in (("event", "威科夫事件"), ("vsa", "VSA")):
+            by_type = stats[kind]
+            if not by_type:
+                continue
+            n = sum(x["n"] for x in by_type.values())
+            ev = sum(x["evaluated"] for x in by_type.values())
+            lines.append(f"  {label}: {n}条 / 已评估{ev}")
+        self.sig_summary.setText("\n".join(lines))
+
+        # L1 收缩胜率 + L5 多周期一致性
+        self.sig_shrink.setText(self._shrink_summary()
+                                or "(尚无收缩统计 — 完成评估后自动生成)")
+        self.sig_consistency.setText(self._consistency_summary() or "")
+
+        # 验证结果 (Rank IC / Bootstrap CI / 置换检验)
+        from wyckoff.validation import validation_lines, validation_verdict
+        vlines = validation_lines(records, stats=vstats)
+        self.sig_validation.setText("\n".join(vlines) if vlines else "(暂无验证统计)")
+
+        # 规则化解读 (含高置信 vs 低置信区分度 / 可依赖类型)
+        self.sig_verdict.setText(validation_verdict(records, stats=vstats))
+
+        # 胜率图表 + 筛选器 + 信号列表
+        self._render_sig_chart(stats)
+        self._update_signal_filters(records)
+        self._render_signal_list(records)
 
     def _consistency_summary(self):
         """L5 多周期一致性: 各类型 5/10/20/40 根收缩胜率 + 边缘判定。"""
@@ -2045,6 +2075,10 @@ class CalibrationCenter(QWidget):
         self.setWindowTitle("校准中心")
         if errors:
             QMessageBox.warning(self, "部分评估失败", "\n".join(errors))
+        # 评估已落盘: 清空缓存与 mtime 缓存, 强制用最新数据重渲染
+        self._tab_data_cache.clear()
+        self._cache = _MtimeCache()
+        self._acc_stats_memo = None
         self.render_all()
 
     def on_calibrate(self):

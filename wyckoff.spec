@@ -45,7 +45,7 @@ optimize = 0
 
 
 a = Analysis(
-    [os.path.join(_ROOT, 'wyckoff_desktop.py')],
+    [os.path.join(_ROOT, 'wyckoff_ui.py')],
     pathex=[_ROOT],
     binaries=binaries,
     datas=datas,
