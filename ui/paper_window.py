@@ -4,15 +4,25 @@
   - 手动/定时执行"一个周期" (run_cycle), 后台线程执行避免卡 UI。
   - 四个标签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
 """
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal, Qt
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout,
-    QCheckBox, QTableWidgetItem, QWidget, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QGridLayout, QComboBox, QLineEdit,
+    QCheckBox,
+    QDialog,
+    QDoubleSpinBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
-from .extra_windows import _accent_header, _table, _ghost_btn
+from .extra_windows import _accent_header, _ghost_btn, _table
 
 
 def _fill_paper(table, cols, heads, rows, color_cols=()):
@@ -141,6 +151,8 @@ class PaperWindow(QDialog):
         self.btn_refresh.clicked.connect(self.refresh)
         self.btn_reset = _ghost_btn("重置账户")
         self.btn_reset.clicked.connect(self._reset_account)
+        # 导出报告按钮
+        self.btn_export = _ghost_btn("导出报告")
         # 自动执行模式设置
         hb_mode = QHBoxLayout()
         # 30分钟模式 (默认)
@@ -197,6 +209,7 @@ class PaperWindow(QDialog):
     def _build_equity_tab(self):
         """资金曲线页签: 总资产净值折线 (起点=初始资金, 含当前时点)。"""
         import pyqtgraph as pg
+
         from .extra_windows import theme
         page = QWidget()
         lay = QVBoxLayout(page)
@@ -352,13 +365,13 @@ class PaperWindow(QDialog):
             self, "重置模拟盘", "清空账户全部持仓/历史/统计并回到初始资金？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if ok == QMessageBox.StandardButton.Yes:
-            from wyckoff.paper import save_state, _new_state
+            from wyckoff.paper import _new_state, save_state
             save_state(_new_state())
             self.refresh()
 
     # ── 渲染 ──
     def refresh(self):
-        from wyckoff.paper import load_state, stats, apply_paper_params
+        from wyckoff.paper import apply_paper_params, load_state, stats
         st = load_state()
         s = stats(st)
         cfg = apply_paper_params(self._settings)
@@ -440,7 +453,7 @@ class PaperWindow(QDialog):
             kind = c.get("kind", "")
             status = c.get("status", "")
             correct = c.get("correct")
-            
+
             # 判断图标和颜色
             if status == "done":
                 if correct is True:
@@ -458,7 +471,7 @@ class PaperWindow(QDialog):
             else:  # active
                 icon = "○ 进行中"
                 icon_color = None
-            
+
             crows.append({
                 "created_ts": c.get("created_ts", ""),
                 "symbol": c.get("symbol", ""), "name": c.get("name", ""),
@@ -472,27 +485,27 @@ class PaperWindow(QDialog):
                 "correct_icon": icon,
                 "correct_color": icon_color,
             })
-        
+
         # 计算列宽: 前8列固定, 后3列 (matched_price, reason, correct_icon) 根据内容自动
         n_cols = max(1, len(crows)) if crows else 0
         n_cols = min(n_cols, 13)  # 最大13列
-        
+
         cond_cols = ("created_ts", "symbol", "name", "kind", "trigger",
                      "cond_price", "pct", "qty", "status", "matched_price",
                      "reason", "correct_icon")
         cond_heads = ("创建时间", "代码", "名称", "类型", "触发",
                       "触发价", "百分比", "数量", "状态", "成交价",
                       "说明", "正确")
-        
+
         # 只有当有数据时才设置列数
         if crows:
             self.t_cond.setColumnCount(n_cols)
             self.t_cond.setHorizontalHeaderLabels([cond_heads[i % len(cond_heads)] for i in range(n_cols)])
-        
-        _fill_paper(self.t_cond, cond_cols[:n_cols], 
+
+        _fill_paper(self.t_cond, cond_cols[:n_cols],
                    dict(zip(cond_cols[:n_cols], cond_heads[:n_cols])), crows)
         self.t_cond.setSortingEnabled(False)
-        
+
         # 为 correct_icon 列设置专用渲染 (显示 ✓ 或 ✗ 并着色)
         if n_cols > 11 and crows:
             # 获取 correct_icon 所在的列索引
@@ -502,14 +515,16 @@ class PaperWindow(QDialog):
                 self.t_cond.setHorizontalHeaderItem(correct_col_idx, QTableWidgetItem("结果"))
                 # 隐藏或调整该列的大小
                 self.t_cond.horizontalHeader().setSectionSizeFromContent(correct_col_idx)
-        
+
         self._render_equity(st)
 
     def _render_equity(self, st):
         """资金曲线: [初始资金] + equity_hist 各平仓时点 + 当前总资产。"""
         import pyqtgraph as pg
-        from .extra_windows import theme
+
         from wyckoff.paper import INIT_CASH, equity
+
+        from .extra_windows import theme
         hist = st.get("equity_hist") or []
         xs = [0]
         eqs = [float(INIT_CASH)]

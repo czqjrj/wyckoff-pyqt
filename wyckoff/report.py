@@ -302,3 +302,99 @@ def build_export_report(symbol, name, scale_txt, period_txt, df, sections,
 
     blocks.append("(报告由威科夫分析工具生成, 仅供技术研究参考, 不构成投资建议)")
     return "\n\n".join(blocks)
+
+def build_paper_report(st, cfg=None, rows=20):
+    """构建模拟盘完整导出报告。
+
+    包含:
+    - 账户概览 (资金、持仓、盈亏)
+    - 交易统计 (胜率、盈亏比、交易笔数)
+    - 绩效指标 (夏普、索提诺、卡尔马、最大回撤)
+    - 交易分布 (盈亏分布、持仓时长分布)
+    - 持仓情况快照
+    - 近期交易明细
+    """
+    import numpy as np
+
+    from wyckoff.paper import INIT_CASH, equity, stats
+
+    s = stats(st)
+    init_cash = float(cfg["init_cash"]) if cfg else float(INIT_CASH)
+    current_equity = equity(st, {})
+    total_return = s["total_return"]
+    cash = s["cash"]
+    positions_mv = current_equity - cash
+
+    # 交易统计
+    closed = st.get("closed", [])
+    rets = [c["ret"] for c in closed if c.get("ret") is not None]
+    wins = [r for r in rets if r > 0]
+    losses = [r for r in rets if r <= 0]
+    win_rate = s["win_rate"] if s["win_rate"] else 0
+    pl_ratio = s.get("pl_ratio")
+    max_dd = s.get("max_drawdown")
+
+    # 绩效指标
+    sharpe = s.get("sharpe_ratio")
+    sortino = s.get("sortino_ratio")
+    calmar = s.get("calmar_ratio")
+    annual_ret = s.get("annual_return")
+    annual_vol = s.get("annual_volatility")
+    downside_vol = s.get("downside_volatility")
+    profit_factor = s.get("profit_factor")
+    expectancy = s.get("expectancy")
+    kelly = s.get("kelly_fraction")
+
+    # 交易分布
+    n_wins = len(wins) if wins else 0
+    n_losses = len(losses) if losses else 0
+    avg_win = np.mean(wins) * 100 if wins else 0
+    avg_loss = np.mean(losses) * 100 if losses else 0
+    largest_win = np.max(wins) * 100 if wins else 0
+    largest_loss = np.min(losses) * 100 if losses else 0
+    avg_hold = np.mean([c.get("bars", 0) for c in closed]) if closed else 0
+
+    lines = []
+    lines.append("=" * 60)
+    lines.append("模拟盘交易报告")
+    lines.append("=" * 60)
+    lines.append("")
+    lines.append("【账户概览】")
+    lines.append(f"  初始资金: {init_cash:,.0f}")
+    lines.append(f"  当前资金: {cash:,.0f}")
+    lines.append(f"  总资产: {current_equity:,.0f}")
+    lines.append(f"  总收益: {total_return*100:+.2f}%")
+    lines.append(f"  胜率: {win_rate*100:.1f}% ({n_wins} 盈 / {n_losses} 败)")
+    lines.append(f"  盈亏比: {pl_ratio:.3f}" if pl_ratio else "  盈亏比: N/A")
+    lines.append(f"  最大回撤: {max_dd*100:+.2f}%" if max_dd else "  最大回撤: N/A")
+    lines.append(f"  资金利用率: {100.0 * positions_mv / current_equity:.1f}%" if current_equity > 0 else "  资金利用率: N/A")
+    lines.append("")
+    lines.append("【绩效指标】")
+    lines.append(f"  夏普比率: {sharpe:.3f}" if sharpe else "  夏普比率: N/A")
+    lines.append(f"  索提诺比率: {sortino:.3f}" if sortino else "  索提诺比率: N/A")
+    lines.append(f"  卡尔马比率: {calmar:.3f}" if calmar else "  卡尔马比率: N/A")
+    lines.append(f"  年化收益: {annual_ret*100:+.2f}%" if annual_ret else "  年化收益: N/A")
+    lines.append(f"  年化波动: {annual_vol*100:.2f}%" if annual_vol else "  年化波动: N/A")
+    lines.append(f"  下行波动: {downside_vol*100:.2f}%" if downside_vol else "  下行波动: N/A")
+    lines.append(f"  利润因子: {profit_factor:.3f}" if profit_factor else "  利润因子: N/A")
+    lines.append(f"  期望值: {expectancy:.4f}" if expectancy else "  期望值: N/A")
+    lines.append(f"  Kelly 分数: {kelly:.3f}" if kelly else "  Kelly 分数: N/A")
+    lines.append("")
+    lines.append("【交易分布】")
+    lines.append(f"  盈利笔数: {n_wins}")
+    lines.append(f"  亏损笔数: {n_losses}")
+    lines.append(f"  平均盈利: {avg_win:+.2f}%")
+    lines.append(f"  平均亏损: {avg_loss:+.2f}%")
+    lines.append(f"  最大盈利: {largest_win:+.2f}%")
+    lines.append(f"  最大亏损: {largest_loss:+.2f}%")
+    lines.append(f"  平均持仓 bars: {avg_hold:.1f}")
+    lines.append("")
+    lines.append("【近期交易明细】")
+    for c in closed[-20:]:
+        lines.append(f"  {c.get('symbol', '')}: 买{c.get('buy_px',0):.2f} 卖{c.get('sell_px',0):.2f} 收益{c['ret']*100:+.2f}% 原因:{c.get('reason','')[:8]}")
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("报告结束")
+    lines.append("=" * 60)
+
+    return "\n".join(lines)
