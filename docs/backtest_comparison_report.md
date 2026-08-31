@@ -207,3 +207,39 @@ python scripts/paper_replay_bt.py --start 2026-08-01 --report docs/daily_review.
 ---
 
 *历史回测不构成投资建议；过去表现不代表未来收益。*
+
+---
+
+## 附录：复现命令与版本
+
+### Git 版本
+```
+commit 20715de
+save: 三大回测引擎对比报告 + paper.py 语法修复 + paper_replay_bt 作为主力模拟盘引擎
+```
+
+### paper_replay_bt 完整复现命令
+```bash
+python scripts/paper_replay_bt.py \
+  --conf 90 --maxpos 3 --hold 20 --stop 0.05 --tp 0.15 --cost 0.004 \
+  --mkt-gate --flow-gate --sect-gate --chain-cap 1 --chain-min-pct 0.6 \
+  --start 2023-09-01 --max-codes 80 --datalen 850 \
+  --report docs/paper_replay_bt.md --export docs/trades.csv
+```
+
+### conservative_bt 复现命令
+```bash
+python scripts/conservative_bt.py --conf 90 --dedup sector --cost 0.008 --stop 0.05 --capital 1000000 --slots 3
+```
+
+### backtest_events 手动验证命令
+```python
+from wyckoff.backtest import backtest_events
+from wyckoff.datasource import fetch_kline
+from wyckoff.indicators import add_indicators, find_pivots
+from wyckoff.events import detect_all
+from wyckoff.utils import normalize_symbol
+
+df = add_indicators(fetch_kline(normalize_symbol("sh600036"), datalen=500, scale=240), symbol="sh600036")
+res = backtest_events(df, None, horizon=20, cost=0.004)
+```
