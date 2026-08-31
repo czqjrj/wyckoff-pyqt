@@ -656,8 +656,8 @@ def export_review_report(records=None, path=None, days=7, markdown=True):
     内容:
       - 周期内新增信号总数、已评估数、类型分布
       - 按信号类型汇总的 5/20 根胜率 (vs 历史累计)
-      - 逐信号明细: 日期/标的/类型/判断方向/预期收益(类型历史20根方向化均值)/
-        实际收益(20根方向化真实收益)/入场价/各周期收益
+      - 逐信号明细: 日期/标的/类型/判断方向/预期涨跌幅(原始均值)/
+        预期收益(方向化有利波动)/实际收益(20根方向化真实收益)/入场价/各周期收益
     返回写入路径。
     """
     import datetime
@@ -775,12 +775,12 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
 
     # 明细
     lines += ["## 近周期信号明细", ""]
-    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 组别 | 方向 | 预期收益 "
-              "| 实际收益 | 入场价 | 5根 | 10根 | 20根 | 40根 |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["| 日期 | 代码 | 名称 | 类别 | 类型 | 组别 | 方向 | 预期涨跌幅 "
+              "| 预期收益(方向化) | 实际收益 | 入场价 | 5根 | 10根 | 20根 | 40根 |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
     if not recent:
-        lines += ["| (无) | | | | | | | | | | | | | |"]
+        lines += ["| (无) | | | | | | | | | | | | | | |"]
     for r in recent:
         kind_cn = "事件" if r.get("kind") == "event" else "VSA"
         res = r.get("results") or {}
@@ -794,6 +794,8 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
         tier_cn = "强" if (r.get("kind") == "event"
                            and r.get("type") in STRONG_TIER_TYPES) else "弱"
         exp = _exp.get((r.get("kind"), r.get("type")))
+        # 预期涨跌幅 = 未方向化原始历史均值 (空头为负=预期下跌, 与原方向一致)
+        exp_raw_s = f"{(exp if d >= 0 else -exp) * 100:+.1f}%" if exp is not None else "-"
         exp_s = f"{exp * 100:+.1f}%" if exp is not None else "-"
         # 实际收益: 20 根真实收益按方向化 (多头取 ret, 空头取 -ret), 正=信号做对
         r20 = (res.get("20") or {}).get("ret")
@@ -802,13 +804,15 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
             act_s = f"{(r20 if d >= 0 else -r20) * 100:+.1f}%"
         lines.append(f"| {r.get('date', '')[:10]} | {r.get('code')} | "
                      f"{r.get('name') or ''} | {kind_cn} | {r.get('type')} | "
-                     f"{tier_cn} | {dir_cn} | {exp_s} | {act_s} | "
+                     f"{tier_cn} | {dir_cn} | {exp_raw_s} | {exp_s} | {act_s} | "
                      f"{r.get('price') or '-'} | " + " | ".join(cells) + " |")
     lines.append("")
     lines.append("> 说明: 组别=实证梯队 (强: Spring/Shakeout/UTAD/LPSY/ST/LPS/SC; "
                  "弱: 其余), 依据 docs/accuracy_report.md 的 6000+ 样本实测; "
                  "方向=该信号类型的标称方向; "
-                 "预期收益=同类型历史已评估信号的 20 根方向化均值收益; "
+                 "预期涨跌幅=同类型历史已评估信号的 20 根原始收益均值 "
+                 "(空头显示为负=预期下跌, 与方向同向); "
+                 "预期收益(方向化)=原始均值按方向统一为有利波动, 空头取相反数 (正=信号做对); "
                  "实际收益=本条信号 20 根真实收益的方向化值 (正=做对, 负=做错); "
                  "5/10/20/40 根为未方向化的原始累计收益。未走满周期显示为 `-`。")
 
