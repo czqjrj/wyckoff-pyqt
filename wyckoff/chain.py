@@ -533,3 +533,80 @@ def apply_sector_strength(events, sec_pct, n_total, recent=10):
         e.setdefault("feat", {})["sec_pct"] = v
         cnt += 1
     return cnt
+
+
+def strength_history(sector: str, start_date: str = "2023-09-01", end_date: str = None) -> pd.DataFrame:
+    """回填板块强度历史分位序列（按日）。
+
+    从 wx_board_snap.json 读取历史快照，返回 DataFrame:
+      columns = ['date', 'pct']  pct ∈ [0,1] (1=最强)
+
+    若 sector 在快照中从未出现，返回空 DataFrame (非 None)，
+    供调用方判定是 fail-open 还是 fail-close。
+
+    参数:
+        sector: 板块名 (如 "银行", "医药", "有色金属")
+        start_date: 开始回溯日期 (默认 2023-09-01)
+        end_date: 结束日期 (默认 None → 今日)
+    返回: DataFrame 或空 DataFrame
+    """
+    import pandas as pd
+    from pathlib import Path
+    from datetime import datetime
+
+    snap_path = Path(BOARD_SNAP_FILE)
+    if not snap_path.exists():
+        return pd.DataFrame(columns=["date", "pct"])
+
+    try:
+        with open(snap_path, encoding="utf-8") as f:
+            snaps = json.load(f)
+    except Exception:
+        return pd.DataFrame(columns=["date", "pct"])
+
+    if not isinstance(snaps, list):
+        return pd.DataFrame(columns=["date", "pct"])
+
+    # 统一时间戳 -> 日期字符串
+    rows = []
+    for s in snaps:
+        if not isinstance(s, dict):
+            continue
+        ts_int = s.get("ts", 0)
+        # 时间戳是秒级整数，转 datetime
+        try:
+            dt = datetime.fromtimestamp(ts_int) if ts_int > 1e9 else datetime.fromtimestamp(ts_int / 1e9)
+        except Exception:
+            continue
+        d_str = dt.strftime("%Y-%m-%d")
+        # 只保留在目标区间内的快照
+        if start_date and d_str < start_date:
+            continue
+        if end_date:
+            try:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                if dt > end_dt:
+                    continue
+            except Exception:
+                pass
+        # 抽取该板块的强度
+        strengths = s.get("strengths") or {}
+        pct = strengths.get(sector)
+        if pct is not None:
+            try:
+                pct = float(pct)
+            except Exception:
+                pct = None
+        else:
+            pct = None
+        rows.append({"date": d_str, "pct": pct})
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "pct"])
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+    # 对同一日多条记录去重，取最后一次 (最新快照)
+    df = df.drop_duplicates(subset="date", keep="last")
+    return df
