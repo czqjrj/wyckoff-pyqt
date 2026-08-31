@@ -11,14 +11,25 @@
   - 统计: 分类型/总账户 胜率、盈亏比、净值曲线、最大回撤。
   - 存储: 单 JSON (wx_paper.json), 与项目其他 wx_* 数据文件同目录同风格。
 数据目录用 paths.DATA_DIR, 测试用 WYCKOFF_DATA_DIR 隔离。
+
+增强功能:
+  - 风控: 最大回撤限制、相关性限制、Kelly 资金管理、波动率调整仓位
+  - 高级订单: OCO、括号单、分批建仓/平仓、冰山单
+  - 实时监控: WebSocket 行情推送、价格触发条件单
+  - 绩效分析: 夏普/索提诺/卡尔马比率、归因分析、回撤分析
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import statistics
 import threading
 import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Optional
 
 try:
     import numpy as np
@@ -53,6 +64,162 @@ MIN_LOT = 100.0
 # conf 过滤下限: 只做实证收益显著为正的强信号 (参见 docs/profitability_bt.md)
 MIN_CONF = 90
 
+# ── 风控参数 ──────────────────────────────────────────────
+# 最大账户回撤限制 (触发时停止开新仓, 仅平仓)
+MAX_DRAWDOWN_PCT = 0.15
+# 单笔最大风险预算 (账户净值的百分比, Kelly 计算上限)
+MAX_RISK_PCT = 0.02
+# 最大行业集中度 (单行业持仓市值占总市值上限)
+MAX_SECTOR_CONCENTRATION = 0.40
+# 最大单股集中度 (单股持仓市值占总市值上限)
+MAX_SINGLE_CONCENTRATION = 0.25
+# 相关性阈值 (拒绝开仓高相关标的, 需外部相关性矩阵)
+CORRELATION_THRESHOLD = 0.70
+# 波动率调整: 高波动降低仓位, 低波动提高仓位 (ATR 百分位)
+VOL_ADJUST_ENABLED = True
+VOL_PERCENTILE_HIGH = 0.80
+VOL_PERCENTILE_LOW = 0.20
+# 资金利用率上限 (防止满仓无现金应对机会)
+MAX_CAPITAL_USAGE = 0.95
+
+# ── 订单类型 ──────────────────────────────────────────────
+class OrderType(Enum):
+    MARKET = "market"           # 市价单
+    LIMIT = "limit"             # 限价单
+    STOP = "stop"               # 止损单
+    STOP_LIMIT = "stop_limit"   # 止损限价单
+    OCO = "oco"                 # 一单撤一单 (止盈+止损)
+    BRACKET = "bracket"         # 括号单 (入场+止盈+止损)
+    ICEBERG = "iceberg"         # 冰山单 (分批显示)
+    SCALE_IN = "scale_in"       # 分批建仓
+    SCALE_OUT = "scale_out"     # 分批平仓
+    TRAILING = "trailing"       # 追踪止损
+
+class OrderSide(Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+class OrderStatus(Enum):
+    PENDING = "pending"
+    PARTIAL = "partial"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+class PositionSizingMethod(Enum):
+    EQUAL_WEIGHT = "equal_weight"           # 等权
+    KELLY = "kelly"                         # Kelly 公式
+    VOLATILITY_ADJUSTED = "vol_adjusted"    # 波动率调整
+    RISK_PARITY = "risk_parity"             # 风险平价
+    FIXED_FRACTIONAL = "fixed_fractional"   # 固定分数
+    CONF_WEIGHTED = "conf_weighted"         # 置信度加权
+
+
+@dataclass
+class AdvancedOrder:
+    """高级订单数据类"""
+    order_id: str
+    symbol: str
+    name: str
+    order_type: OrderType
+    side: OrderSide
+    qty: int
+    price: Optional[float] = None          # 限价
+    stop_price: Optional[float] = None     # 止损触发价
+    limit_price: Optional[float] = None    # 止损限价
+    trail_pct: Optional[float] = None      # 追踪止损百分比
+    trail_price: Optional[float] = None    # 追踪止损激活价
+    parent_id: Optional[str] = None        # 父订单 ID (用于 OCO/括号单)
+    child_ids: list = field(default_factory=list)  # 子订单 ID
+    status: OrderStatus = OrderStatus.PENDING
+    filled_qty: int = 0
+    avg_fill_price: float = 0.0
+    created_ts: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
+    updated_ts: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
+    expiry_ts: Optional[str] = None        # 过期时间
+    tags: dict = field(default_factory=dict)  # 自定义标签 (如 strategy, confidence)
+    
+    def to_dict(self) -> dict:
+        return {
+            "order_id": self.order_id,
+            "symbol": self.symbol,
+            "name": self.name,
+            "order_type": self.order_type.value,
+            "side": self.side.value,
+            "qty": self.qty,
+            "price": self.price,
+            "stop_price": self.stop_price,
+            "limit_price": self.limit_price,
+            "trail_pct": self.trail_pct,
+            "trail_price": self.trail_price,
+            "parent_id": self.parent_id,
+            "child_ids": self.child_ids,
+            "status": self.status.value,
+            "filled_qty": self.filled_qty,
+            "avg_fill_price": self.avg_fill_price,
+            "created_ts": self.created_ts,
+            "updated_ts": self.updated_ts,
+            "expiry_ts": self.expiry_ts,
+            "tags": self.tags,
+        }
+    
+    @classmethod
+    def from_dict(cls, d: dict) -> "AdvancedOrder":
+        return cls(
+            order_id=d["order_id"],
+            symbol=d["symbol"],
+            name=d.get("name", ""),
+            order_type=OrderType(d["order_type"]),
+            side=OrderSide(d["side"]),
+            qty=d["qty"],
+            price=d.get("price"),
+            stop_price=d.get("stop_price"),
+            limit_price=d.get("limit_price"),
+            trail_pct=d.get("trail_pct"),
+            trail_price=d.get("trail_price"),
+            parent_id=d.get("parent_id"),
+            child_ids=d.get("child_ids", []),
+            status=OrderStatus(d.get("status", "pending")),
+            filled_qty=d.get("filled_qty", 0),
+            avg_fill_price=d.get("avg_fill_price", 0.0),
+            created_ts=d.get("created_ts", ""),
+            updated_ts=d.get("updated_ts", ""),
+            expiry_ts=d.get("expiry_ts"),
+            tags=d.get("tags", {}),
+        )
+
+
+@dataclass 
+class PositionRisk:
+    """持仓风险指标"""
+    symbol: str
+    market_value: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    var_95: float = 0.0                    # 95% VaR
+    var_99: float = 0.0                    # 99% VaR
+    beta: float = 1.0                      # 相对大盘 Beta
+    correlation_risk: float = 0.0          # 组合相关性风险
+    sector_exposure: float = 0.0           # 行业敞口
+    concentration_risk: float = 0.0        # 集中度风险
+    liquidity_risk: float = 0.0            # 流动性风险 (基于换手率/市值)
+    
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "market_value": self.market_value,
+            "unrealized_pnl": self.unrealized_pnl,
+            "unrealized_pnl_pct": self.unrealized_pnl_pct,
+            "var_95": self.var_95,
+            "var_99": self.var_99,
+            "beta": self.beta,
+            "correlation_risk": self.correlation_risk,
+            "sector_exposure": self.sector_exposure,
+            "concentration_risk": self.concentration_risk,
+            "liquidity_risk": self.liquidity_risk,
+        }
+
 
 def apply_paper_params(settings=None):
     """从用户设置 dict 解析并覆盖模拟盘策略参数, 返回当前生效参数字典 `_CUR`.
@@ -60,6 +227,9 @@ def apply_paper_params(settings=None):
     不传/键缺失时回退到模块常量默认值, 保证与旧行为完全一致 (测试兼容)。
     支持键 (见 settings_keys.Paper): INIT_CASH/MAX_POS/HOLD_BARS/STOP_LOSS/
     TAKE_PROFIT/COST/MIN_CONF。调用方 (run_cycle/UI) 在周期执行前调用即可生效。
+    
+    新增风控参数: MAX_DRAWDOWN/MAX_RISK_PCT/MAX_SECTOR_CONC/MAX_SINGLE_CONC/
+    CORRELATION_THRESHOLD/VOL_ADJUST_ENABLED/MAX_CAPITAL_USAGE
     """
     settings = settings or {}
 
@@ -76,6 +246,16 @@ def apply_paper_params(settings=None):
         "take_profit": float(_get(S.Paper.TAKE_PROFIT, TAKE_PROFIT)),
         "cost": float(_get(S.Paper.COST, COST)),
         "min_conf": int(_get(S.Paper.MIN_CONF, MIN_CONF)),
+        # 风控参数
+        "max_drawdown": float(_get("paper_max_drawdown", MAX_DRAWDOWN_PCT)),
+        "max_risk_pct": float(_get("paper_max_risk_pct", MAX_RISK_PCT)),
+        "max_sector_conc": float(_get("paper_max_sector_conc", MAX_SECTOR_CONCENTRATION)),
+        "max_single_conc": float(_get("paper_max_single_conc", MAX_SINGLE_CONCENTRATION)),
+        "correlation_threshold": float(_get("paper_correlation_threshold", CORRELATION_THRESHOLD)),
+        "vol_adjust_enabled": bool(_get("paper_vol_adjust_enabled", VOL_ADJUST_ENABLED)),
+        "max_capital_usage": float(_get("paper_max_capital_usage", MAX_CAPITAL_USAGE)),
+        # 资金管理方式
+        "sizing_method": _get("paper_sizing_method", PositionSizingMethod.EQUAL_WEIGHT.value),
     }
     return _CUR
 
@@ -89,6 +269,14 @@ _CUR = {
     "take_profit": TAKE_PROFIT,
     "cost": COST,
     "min_conf": MIN_CONF,
+    "max_drawdown": MAX_DRAWDOWN_PCT,
+    "max_risk_pct": MAX_RISK_PCT,
+    "max_sector_conc": MAX_SECTOR_CONCENTRATION,
+    "max_single_conc": MAX_SINGLE_CONCENTRATION,
+    "correlation_threshold": CORRELATION_THRESHOLD,
+    "vol_adjust_enabled": VOL_ADJUST_ENABLED,
+    "max_capital_usage": MAX_CAPITAL_USAGE,
+    "sizing_method": PositionSizingMethod.EQUAL_WEIGHT.value,
 }
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
@@ -138,6 +326,8 @@ def _new_state():
         "candidates": [],
         "pending": [],
         "conditions": [],
+        "advanced_orders": [],  # 高级订单
+        "risk_metrics": {},     # 风险指标缓存
         "meta": {},
     }
 
@@ -153,6 +343,591 @@ def save_state(st):
         return True
     except Exception:
         return False
+
+
+# ── 风控与资金管理 ──────────────────────────────────────────
+def check_drawdown_limit(st) -> tuple[bool, str]:
+    """检查账户回撤是否超过限制。返回 (是否通过, 信息)。"""
+    hist = st.get("equity_hist") or []
+    if len(hist) < 2:
+        return True, ""
+    eqs = [h.get("equity", _CUR["init_cash"]) for h in hist]
+    peak = max(eqs)
+    current = eqs[-1]
+    dd = (peak - current) / peak if peak > 0 else 0
+    if dd >= _CUR["max_drawdown"]:
+        return False, f"账户回撤 {dd*100:.1f}% 超过限制 {_CUR['max_drawdown']*100:.1f}%"
+    return True, ""
+
+
+def check_risk_budget(st, symbol: str, entry_price: float, stop_price: float,
+                      qty: int) -> tuple[bool, str]:
+    """检查单笔风险预算是否超限。返回 (是否通过, 信息)。"""
+    equity_val = st["cash"]
+    for p in st["positions"]:
+        df_px = p.get("last", p["buy_px"])
+        equity_val += df_px * p["qty"]
+    
+    risk_per_share = abs(entry_price - stop_price)
+    total_risk = risk_per_share * qty
+    risk_pct = total_risk / equity_val if equity_val > 0 else 1.0
+    
+    if risk_pct > _CUR["max_risk_pct"]:
+        return False, f"单笔风险 {risk_pct*100:.1f}% 超过限制 {_CUR['max_risk_pct']*100:.1f}%"
+    return True, ""
+
+
+def check_sector_concentration(st, symbol: str, sector: str, 
+                               new_mv: float, df_by_code: dict) -> tuple[bool, str]:
+    """检查行业集中度。返回 (是否通过, 信息)。"""
+    if not sector:
+        return True, ""
+    
+    total_mv = new_mv
+    sector_mv = new_mv
+    
+    for p in st["positions"]:
+        df = df_by_code.get(p["symbol"])
+        px = float(df["close"].iloc[-1]) if df is not None and len(df) else p.get("last", p["buy_px"])
+        mv = px * p["qty"]
+        total_mv += mv
+        if p.get("sector") == sector:
+            sector_mv += mv
+    
+    if total_mv > 0:
+        conc = sector_mv / total_mv
+        if conc > _CUR["max_sector_conc"]:
+            return False, f"行业 {sector} 集中度 {conc*100:.1f}% 超过限制 {_CUR['max_sector_conc']*100:.1f}%"
+    return True, ""
+
+
+def check_single_concentration(st, symbol: str, new_mv: float, 
+                               df_by_code: dict) -> tuple[bool, str]:
+    """检查单股集中度。返回 (是否通过, 信息)。"""
+    total_mv = new_mv
+    for p in st["positions"]:
+        df = df_by_code.get(p["symbol"])
+        px = float(df["close"].iloc[-1]) if df is not None and len(df) else p.get("last", p["buy_px"])
+        total_mv += px * p["qty"]
+    
+    if total_mv > 0:
+        conc = new_mv / total_mv
+        if conc > _CUR["max_single_conc"]:
+            return False, f"单股 {symbol} 集中度 {conc*100:.1f}% 超过限制 {_CUR['max_single_conc']*100:.1f}%"
+    return True, ""
+
+
+def check_capital_usage(st, required_cash: float) -> tuple[bool, str]:
+    """检查资金利用率。返回 (是否通过, 信息)。"""
+    equity_val = st["cash"]
+    for p in st["positions"]:
+        equity_val += p.get("last", p["buy_px"]) * p["qty"]
+    
+    usage = 1.0 - (st["cash"] - required_cash) / equity_val if equity_val > 0 else 1.0
+    if usage > _CUR["max_capital_usage"]:
+        return False, f"资金利用率 {usage*100:.1f}% 超过限制 {_CUR['max_capital_usage']*100:.1f}%"
+    return True, ""
+
+
+def calculate_kelly_fraction(win_rate: float, avg_win: float, avg_loss: float) -> float:
+    """计算 Kelly 分数。"""
+    if avg_loss <= 0 or win_rate <= 0 or win_rate >= 1:
+        return 0.0
+    b = avg_win / abs(avg_loss)  # 盈亏比
+    p = win_rate
+    q = 1 - p
+    kelly = (b * p - q) / b if b > 0 else 0.0
+    return max(0.0, min(kelly, 0.25))  # 限制在 25% 以内
+
+
+def calculate_position_size(st, symbol: str, entry_price: float, stop_price: float,
+                            conf: int, df: any, method: str = None) -> int:
+    """计算仓位大小。
+    
+    支持多种资金管理方法:
+    - equal_weight: 等权分配
+    - kelly: Kelly 公式 (基于历史胜率/盈亏比)
+    - vol_adjusted: 波动率调整 (ATR 百分位)
+    - risk_parity: 风险平价 (目标风险预算相等)
+    - fixed_fractional: 固定分数 (固定风险百分比)
+    - conf_weighted: 置信度加权
+    """
+    if method is None:
+        method = _CUR.get("sizing_method", PositionSizingMethod.EQUAL_WEIGHT.value)
+    
+    equity_val = st["cash"]
+    for p in st["positions"]:
+        equity_val += p.get("last", p["buy_px"]) * p["qty"]
+    
+    risk_per_share = abs(entry_price - stop_price)
+    if risk_per_share <= 0:
+        return 0
+    
+    max_pos = _CUR["max_pos"]
+    base_budget = equity_val / max_pos
+    
+    if method == PositionSizingMethod.KELLY.value:
+        # 基于历史统计计算 Kelly
+        s = stats(st)
+        if s["win_rate"] and s["pl_ratio"]:
+            kelly = calculate_kelly_fraction(s["win_rate"], s["pl_ratio"], 1.0)
+            budget = equity_val * kelly
+        else:
+            budget = base_budget
+    elif method == PositionSizingMethod.VOLATILITY_ADJUSTED.value:
+        # 基于 ATR 调整仓位
+        try:
+            atr = float(df["atr"].iloc[-1]) if "atr" in df.columns else 0
+            atr_pct = atr / entry_price if entry_price > 0 else 0
+            # ATR 越大，仓位越小
+            vol_mult = max(0.5, min(1.5, 1.0 / (atr_pct * 100) if atr_pct > 0 else 1.0))
+            budget = base_budget * vol_mult
+        except Exception:
+            budget = base_budget
+    elif method == PositionSizingMethod.RISK_PARITY.value:
+        # 目标每笔风险相等
+        target_risk = equity_val * _CUR["max_risk_pct"]
+        budget = target_risk / (risk_per_share / entry_price) if risk_per_share > 0 else base_budget
+    elif method == PositionSizingMethod.FIXED_FRACTIONAL.value:
+        budget = equity_val * _CUR["max_risk_pct"] / (risk_per_share / entry_price) if risk_per_share > 0 else base_budget
+    elif method == PositionSizingMethod.CONF_WEIGHTED.value:
+        # 置信度加权: conf 90~100 映射到 0.8~1.2 倍
+        conf_mult = 0.8 + (conf - 90) / 10 * 0.4
+        budget = base_budget * conf_mult
+    else:
+        budget = base_budget
+    
+    budget = min(budget, equity_val * _CUR["max_capital_usage"])
+    budget = max(budget, MIN_LOT)
+    
+    qty = int(budget // (entry_price * (1 + SLIP_BUY)) // 100 * 100)
+    return max(0, qty)
+
+
+def calculate_var(returns: list[float], confidence: float = 0.95) -> float:
+    """计算历史模拟 VaR。"""
+    if not returns or len(returns) < 2:
+        return 0.0
+    sorted_rets = sorted(returns)
+    idx = int(len(sorted_rets) * (1 - confidence))
+    return abs(sorted_rets[idx]) if idx < len(sorted_rets) else 0.0
+
+
+def calculate_position_risk(st, symbol: str, df: any, benchmark_df: any = None) -> PositionRisk:
+    """计算单只持仓的风险指标。"""
+    pos = _find_pos(st, symbol)
+    if pos is None:
+        return PositionRisk(symbol, 0, 0, 0)
+    
+    last_px = pos.get("last", pos["buy_px"])
+    mv = last_px * pos["qty"]
+    entry_px = pos["buy_px"]
+    unrealized = (last_px - entry_px) * pos["qty"]
+    unrealized_pct = (last_px / entry_px - 1) if entry_px > 0 else 0
+    
+    # 计算收益率序列用于 VaR
+    rets = []
+    if df is not None and len(df) > 20:
+        close = df["close"]
+        rets = (close.pct_change().dropna()).tolist()
+    
+    var_95 = calculate_var(rets, 0.95) * mv if rets else 0
+    var_99 = calculate_var(rets, 0.99) * mv if rets else 0
+    
+    # Beta 计算 (相对大盘)
+    beta = 1.0
+    if benchmark_df is not None and len(benchmark_df) == len(df) and rets:
+        try:
+            bench_rets = benchmark_df["close"].pct_change().dropna().tolist()
+            if len(bench_rets) == len(rets) and len(rets) > 10:
+                cov = np.cov(rets, bench_rets)[0, 1] if np is not None else 0
+                bench_var = np.var(bench_rets) if np is not None else 1
+                beta = cov / bench_var if bench_var > 0 else 1.0
+        except Exception:
+            pass
+    
+    # 流动性风险 (简化: 基于换手率/市值)
+    liquidity_risk = 0.0
+    try:
+        if df is not None and "volume" in df.columns and "amount" in df.columns:
+            avg_vol = df["volume"].iloc[-20:].mean()
+            avg_amt = df["amount"].iloc[-20:].mean() if "amount" in df.columns else avg_vol * last_px
+            if avg_amt > 0:
+                # 日均成交额越小，流动性风险越高
+                liquidity_risk = min(1.0, 1e8 / avg_amt)  # 1亿为基准
+    except Exception:
+        pass
+    
+    return PositionRisk(
+        symbol=symbol,
+        market_value=mv,
+        unrealized_pnl=unrealized,
+        unrealized_pnl_pct=unrealized_pct,
+        var_95=var_95,
+        var_99=var_99,
+        beta=beta,
+        liquidity_risk=liquidity_risk,
+    )
+
+
+def update_portfolio_risk(st, df_by_code: dict, benchmark_df: any = None) -> dict:
+    """更新组合风险指标。"""
+    risks = {}
+    sector_mv = {}
+    total_mv = 0
+    
+    for pos in st["positions"]:
+        df = df_by_code.get(pos["symbol"])
+        risk = calculate_position_risk(st, pos["symbol"], df, benchmark_df)
+        risks[pos["symbol"]] = risk
+        total_mv += risk.market_value
+        sector = pos.get("sector", "未知")
+        sector_mv[sector] = sector_mv.get(sector, 0) + risk.market_value
+    
+    # 计算集中度风险
+    for symbol, risk in risks.items():
+        if total_mv > 0:
+            risk.concentration_risk = risk.market_value / total_mv
+        sector = st["positions"][0].get("sector", "未知") if st["positions"] else "未知"
+        for p in st["positions"]:
+            if p["symbol"] == symbol:
+                sector = p.get("sector", "未知")
+                break
+        if total_mv > 0:
+            risk.sector_exposure = sector_mv.get(sector, 0) / total_mv
+    
+    st["risk_metrics"] = {s: r.to_dict() for s, r in risks.items()}
+    return risks
+
+
+# ── 高级订单管理 ────────────────────────────────────────────
+def create_oco_order(st, symbol: str, name: str, qty: int, 
+                     take_profit_price: float, stop_loss_price: float,
+                     side: OrderSide = OrderSide.SELL) -> tuple[str, str]:
+    """创建 OCO 订单 (一单成交，一单撤销)。
+    
+    返回: (take_profit_order_id, stop_loss_order_id)
+    """
+    parent_id = f"oco-{int(time.time() * 1_000_000)}"
+    
+    tp_order = AdvancedOrder(
+        order_id=f"{parent_id}-tp",
+        symbol=symbol,
+        name=name,
+        order_type=OrderType.LIMIT,
+        side=side,
+        qty=qty,
+        price=take_profit_price,
+        parent_id=parent_id,
+        tags={"oco_role": "take_profit"},
+    )
+    
+    sl_order = AdvancedOrder(
+        order_id=f"{parent_id}-sl",
+        symbol=symbol,
+        name=name,
+        order_type=OrderType.STOP,
+        side=side,
+        qty=qty,
+        stop_price=stop_loss_price,
+        parent_id=parent_id,
+        tags={"oco_role": "stop_loss"},
+    )
+    
+    tp_order.child_ids = [sl_order.order_id]
+    sl_order.child_ids = [tp_order.order_id]
+    
+    st.setdefault("advanced_orders", []).extend([tp_order.to_dict(), sl_order.to_dict()])
+    save_state(st)
+    
+    return tp_order.order_id, sl_order.order_id
+
+
+def create_bracket_order(st, symbol: str, name: str, qty: int,
+                         entry_price: float, take_profit_price: float,
+                         stop_loss_price: float,
+                         side: OrderSide = OrderSide.BUY) -> dict:
+    """创建括号单 (入场单 + 止盈单 + 止损单)。
+    
+    返回: 入场单、止盈单、止损单的 ID 字典
+    """
+    parent_id = f"bracket-{int(time.time() * 1_000_000)}"
+    
+    entry_order = AdvancedOrder(
+        order_id=f"{parent_id}-entry",
+        symbol=symbol,
+        name=name,
+        order_type=OrderType.LIMIT,
+        side=side,
+        qty=qty,
+        price=entry_price,
+        parent_id=parent_id,
+        tags={"bracket_role": "entry"},
+    )
+    
+    exit_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
+    
+    tp_order = AdvancedOrder(
+        order_id=f"{parent_id}-tp",
+        symbol=symbol,
+        name=name,
+        order_type=OrderType.LIMIT,
+        side=exit_side,
+        qty=qty,
+        price=take_profit_price,
+        parent_id=parent_id,
+        tags={"bracket_role": "take_profit", "depends_on": entry_order.order_id},
+    )
+    
+    sl_order = AdvancedOrder(
+        order_id=f"{parent_id}-sl",
+        symbol=symbol,
+        name=name,
+        order_type=OrderType.STOP,
+        side=exit_side,
+        qty=qty,
+        stop_price=stop_loss_price,
+        parent_id=parent_id,
+        tags={"bracket_role": "stop_loss", "depends_on": entry_order.order_id},
+    )
+    
+    entry_order.child_ids = [tp_order.order_id, sl_order.order_id]
+    tp_order.child_ids = [sl_order.order_id]
+    sl_order.child_ids = [tp_order.order_id]
+    
+    orders = [entry_order.to_dict(), tp_order.to_dict(), sl_order.to_dict()]
+    st.setdefault("advanced_orders", []).extend(orders)
+    save_state(st)
+    
+    return {
+        "entry": entry_order.order_id,
+        "take_profit": tp_order.order_id,
+        "stop_loss": sl_order.order_id,
+    }
+
+
+def create_scale_in_order(st, symbol: str, name: str, total_qty: int,
+                          entry_prices: list[float], 
+                          side: OrderSide = OrderSide.BUY) -> list[str]:
+    """创建分批建仓订单。
+    
+    entry_prices: 每批的限价列表
+    """
+    n_batches = len(entry_prices)
+    if n_batches == 0:
+        return []
+    
+    base_qty = total_qty // n_batches
+    remainder = total_qty % n_batches
+    order_ids = []
+    parent_id = f"scalein-{int(time.time() * 1_000_000)}"
+    
+    for i, price in enumerate(entry_prices):
+        qty = base_qty + (1 if i < remainder else 0)
+        if qty <= 0:
+            continue
+        order = AdvancedOrder(
+            order_id=f"{parent_id}-{i}",
+            symbol=symbol,
+            name=name,
+            order_type=OrderType.LIMIT,
+            side=side,
+            qty=qty,
+            price=price,
+            parent_id=parent_id,
+            tags={"scale_role": "entry", "batch": i},
+        )
+        order_ids.append(order.order_id)
+        st.setdefault("advanced_orders", []).append(order.to_dict())
+    
+    save_state(st)
+    return order_ids
+
+
+def create_scale_out_order(st, symbol: str, name: str, total_qty: int,
+                           exit_prices: list[float],
+                           side: OrderSide = OrderSide.SELL) -> list[str]:
+    """创建分批平仓订单。"""
+    n_batches = len(exit_prices)
+    if n_batches == 0:
+        return []
+    
+    base_qty = total_qty // n_batches
+    remainder = total_qty % n_batches
+    order_ids = []
+    parent_id = f"scaleout-{int(time.time() * 1_000_000)}"
+    
+    for i, price in enumerate(exit_prices):
+        qty = base_qty + (1 if i < remainder else 0)
+        if qty <= 0:
+            continue
+        order = AdvancedOrder(
+            order_id=f"{parent_id}-{i}",
+            symbol=symbol,
+            name=name,
+            order_type=OrderType.LIMIT,
+            side=side,
+            qty=qty,
+            price=price,
+            parent_id=parent_id,
+            tags={"scale_role": "exit", "batch": i},
+        )
+        order_ids.append(order.order_id)
+        st.setdefault("advanced_orders", []).append(order.to_dict())
+    
+    save_state(st)
+    return order_ids
+
+
+def create_trailing_stop_order(st, symbol: str, name: str, qty: int,
+                               trail_pct: float, activation_price: float = None,
+                               side: OrderSide = OrderSide.SELL) -> str:
+    """创建追踪止损订单。"""
+    order = AdvancedOrder(
+        order_id=f"trail-{int(time.time() * 1_000_000)}",
+        symbol=symbol,
+        name=name,
+        order_type=OrderType.TRAILING,
+        side=side,
+        qty=qty,
+        trail_pct=trail_pct,
+        trail_price=activation_price,
+        tags={"trail_activated": activation_price is not None},
+    )
+    
+    st.setdefault("advanced_orders", []).append(order.to_dict())
+    save_state(st)
+    return order.order_id
+
+
+def check_advanced_orders(st, df_by_code: dict) -> int:
+    """检查并执行高级订单。返回成交数量。"""
+    filled = 0
+    orders = st.get("advanced_orders", [])
+    
+    for order_dict in list(orders):
+        if order_dict.get("status") != "pending":
+            continue
+        
+        order = AdvancedOrder.from_dict(order_dict)
+        df = df_by_code.get(order.symbol)
+        if df is None or len(df) == 0:
+            continue
+        
+        last = float(df["close"].iloc[-1])
+        high = float(df["high"].iloc[-1])
+        low = float(df["low"].iloc[-1])
+        
+        executed = False
+        fill_price = None
+        
+        if order.order_type == OrderType.LIMIT:
+            if order.side == OrderSide.BUY and low <= order.price:
+                executed = True
+                fill_price = min(order.price, float(df["open"].iloc[-1]))
+            elif order.side == OrderSide.SELL and high >= order.price:
+                executed = True
+                fill_price = max(order.price, float(df["open"].iloc[-1]))
+        
+        elif order.order_type == OrderType.STOP:
+            if order.side == OrderSide.BUY and high >= order.stop_price:
+                executed = True
+                fill_price = max(order.stop_price, float(df["open"].iloc[-1]))
+            elif order.side == OrderSide.SELL and low <= order.stop_price:
+                executed = True
+                fill_price = min(order.stop_price, float(df["open"].iloc[-1]))
+        
+        elif order.order_type == OrderType.STOP_LIMIT:
+            # 止损限价: 触发止损价后按限价成交
+            triggered = False
+            if order.side == OrderSide.BUY and high >= order.stop_price:
+                triggered = True
+            elif order.side == OrderSide.SELL and low <= order.stop_price:
+                triggered = True
+            
+            if triggered and order.limit_price is not None:
+                if order.side == OrderSide.BUY and low <= order.limit_price:
+                    executed = True
+                    fill_price = min(order.limit_price, float(df["open"].iloc[-1]))
+                elif order.side == OrderSide.SELL and high >= order.limit_price:
+                    executed = True
+                    fill_price = max(order.limit_price, float(df["open"].iloc[-1]))
+        
+        elif order.order_type == OrderType.TRAILING:
+            # 追踪止损: 价格创新高后回撤 trail_pct 触发
+            if order.trail_price is None:
+                # 未激活: 价格突破激活价时激活
+                if order.side == OrderSide.SELL and high >= (order.trail_price or 0):
+                    order.trail_price = high
+                    order_dict["trail_price"] = high
+                    order_dict["tags"]["trail_activated"] = True
+            else:
+                # 已激活: 更新追踪价
+                if order.side == OrderSide.SELL:
+                    if high > order.trail_price:
+                        order.trail_price = high
+                        order_dict["trail_price"] = high
+                    stop_trigger = order.trail_price * (1 - order.trail_pct)
+                    if low <= stop_trigger:
+                        executed = True
+                        fill_price = stop_trigger
+                else:  # BUY trailing (较少见)
+                    if low < order.trail_price:
+                        order.trail_price = low
+                        order_dict["trail_price"] = low
+                    stop_trigger = order.trail_price * (1 + order.trail_pct)
+                    if high >= stop_trigger:
+                        executed = True
+                        fill_price = stop_trigger
+        
+        if executed and fill_price:
+            # 执行成交
+            fill_price = round(fill_price * (1 + SLIP_BUY if order.side == OrderSide.BUY else 1 - SLIP_SELL), 3)
+            order.filled_qty = order.qty
+            order.avg_fill_price = fill_price
+            order.status = OrderStatus.FILLED
+            order.updated_ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 更新状态
+            order_dict.update(order.to_dict())
+            
+            # 处理 OCO/括号单的联动撤销
+            if order.parent_id:
+                _cancel_sibling_orders(st, order)
+            
+            filled += 1
+    
+    if filled > 0:
+        save_state(st)
+    return filled
+
+
+def _cancel_sibling_orders(st, filled_order: AdvancedOrder):
+    """成交时撤销同组的其他订单 (OCO/括号单)。"""
+    orders = st.get("advanced_orders", [])
+    for o in orders:
+        if o.get("parent_id") == filled_order.parent_id and o.get("order_id") != filled_order.order_id:
+            if o.get("status") == "pending":
+                o["status"] = "cancelled"
+                o["updated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def cancel_advanced_order(st, order_id: str) -> bool:
+    """撤销高级订单。"""
+    orders = st.get("advanced_orders", [])
+    for o in orders:
+        if o.get("order_id") == order_id and o.get("status") == "pending":
+            o["status"] = "cancelled"
+            o["updated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            # 同时撤销子订单
+            for child_id in o.get("child_ids", []):
+                for oc in orders:
+                    if oc.get("order_id") == child_id and oc.get("status") == "pending":
+                        oc["status"] = "cancelled"
+                        oc["updated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            save_state(st)
+            return True
+    return False
 
 
 # ── 选股: 全市场自动筛选并自动生成条件单 ─────────────────────
@@ -665,7 +1440,15 @@ def equity(st, df_by_code):
 
 # ── 收益统计 ─────────────────────────────────────────────
 def stats(st):
-    """账户/策略统计。返回 dict (供 UI/报告)。"""
+    """账户/策略统计。返回 dict (供 UI/报告)。
+    
+    包含基础统计 + 高级绩效指标:
+    - 夏普比率, 索提诺比率, 卡尔马比率
+    - 年化收益/波动率
+    - 回撤分析 (最大回撤、平均回撤、回撤持续时间)
+    - 交易分布统计
+    - 风险调整收益指标
+    """
     closed = st["closed"]
     out = {
         "cash": round(st["cash"], 2),
@@ -684,8 +1467,24 @@ def stats(st):
         "best": None,
         "worst": None,
         "max_drawdown": None,
+        # 高级绩效指标
+        "sharpe_ratio": None,
+        "sortino_ratio": None,
+        "calmar_ratio": None,
+        "annual_return": None,
+        "annual_volatility": None,
+        "downside_volatility": None,
+        "avg_drawdown": None,
+        "max_drawdown_duration": None,
+        "recovery_factor": None,
+        "profit_factor": None,
+        "expectancy": None,
+        "kelly_fraction": None,
         "by_type": {},
         "by_reason": {},
+        "by_sector": {},
+        "monthly_returns": {},
+        "trade_distribution": {},
     }
     rets = [c["ret"] for c in closed if c.get("ret") is not None]
     if rets:
@@ -697,7 +1496,14 @@ def stats(st):
         out["worst"] = round(min(rets), 4)
         if losses:
             avg_win = statistics.mean(wins) if wins else 0.0
-            out["pl_ratio"] = round(avg_win / abs(statistics.mean(losses)), 3)
+            avg_loss = abs(statistics.mean(losses))
+            out["pl_ratio"] = round(avg_win / avg_loss, 3) if avg_loss > 0 else None
+            out["profit_factor"] = round(sum(wins) / abs(sum(losses)), 3) if losses else None
+            # 期望值
+            out["expectancy"] = round(out["win_rate"] * avg_win - (1 - out["win_rate"]) * avg_loss, 4)
+            # Kelly 分数
+            if avg_loss > 0:
+                out["kelly_fraction"] = round((out["win_rate"] * avg_win - (1 - out["win_rate"]) * avg_loss) / avg_win, 4)
         # 分类型
         by_type = {}
         for c in closed:
@@ -709,6 +1515,9 @@ def stats(st):
             rs = b["rets"]
             b["avg"] = round(statistics.mean(rs), 4)
             b["win"] = round(sum(1 for r in rs if r > 0) / len(rs), 4)
+            b["pl_ratio"] = round(
+                statistics.mean([r for r in rs if r > 0]) / abs(statistics.mean([r for r in rs if r <= 0])) 
+                if any(r <= 0 for r in rs) else 0, 3)
             b.pop("rets", None)
         out["by_type"] = by_type
         # 平仓原因分布
@@ -720,20 +1529,150 @@ def stats(st):
         for r, b in by_reason.items():
             b["avg"] = round(statistics.mean(b["avg"]), 4)
         out["by_reason"] = by_reason
+        # 行业分布
+        by_sector = {}
+        for c in closed:
+            sec = c.get("sector", "未知")
+            b = by_sector.setdefault(sec, {"n": 0, "rets": []})
+            b["n"] += 1
+            b["rets"].append(c["ret"])
+        for sec, b in by_sector.items():
+            rs = b["rets"]
+            b["avg"] = round(statistics.mean(rs), 4)
+            b["win"] = round(sum(1 for r in rs if r > 0) / len(rs), 4)
+            b.pop("rets", None)
+        out["by_sector"] = by_sector
+        # 交易分布统计
+        out["trade_distribution"] = {
+            "n_wins": len(wins),
+            "n_losses": len(losses),
+            "avg_win": round(statistics.mean(wins), 4) if wins else 0,
+            "avg_loss": round(statistics.mean(losses), 4) if losses else 0,
+            "largest_win": round(max(wins), 4) if wins else 0,
+            "largest_loss": round(min(losses), 4) if losses else 0,
+            "avg_hold_bars": round(statistics.mean([c.get("bars", 0) for c in closed]), 1),
+        }
 
     # 总收益率: 当前总资产 (现金+持仓市值) 相对初始模拟资金
     hist = st.get("equity_hist") or []
     init = float(_CUR["init_cash"])
     if hist:
-        last_hist = hist[-1].get("equity", init)
+        eqs = [h.get("equity", init) for h in hist]
+        last_hist = eqs[-1]
         out["total_return"] = round(last_hist / init - 1, 4)
-        # 最大回撤 (用净值曲线)
-        if np is not None and len(hist) >= 2:
-            eqs = [h.get("equity", init) for h in hist]
-            arr = np.asarray(eqs, dtype=float)
-            peak = np.maximum.accumulate(arr)
-            dd = arr / peak - 1
+        
+        # 计算日收益率序列
+        daily_rets = []
+        for i in range(1, len(eqs)):
+            if eqs[i-1] > 0:
+                daily_rets.append(eqs[i] / eqs[i-1] - 1)
+        
+        if daily_rets and np is not None:
+            arr = np.asarray(daily_rets, dtype=float)
+            # 年化收益率 (假设日线, 250 个交易日)
+            out["annual_return"] = round(float(arr.mean() * 250), 4)
+            # 年化波动率
+            out["annual_volatility"] = round(float(arr.std() * np.sqrt(250)), 4)
+            # 下行波动率 (仅负收益)
+            neg_rets = arr[arr < 0]
+            out["downside_volatility"] = round(float(neg_rets.std() * np.sqrt(250)), 4) if len(neg_rets) > 1 else 0.0
+            
+            # 夏普比率 (假设无风险利率 3%)
+            rf = 0.03 / 250  # 日无风险利率
+            excess = arr - rf
+            if excess.std() > 0:
+                out["sharpe_ratio"] = round(float(excess.mean() / excess.std() * np.sqrt(250)), 3)
+            
+            # 索提诺比率
+            if out["downside_volatility"] and out["downside_volatility"] > 0:
+                out["sortino_ratio"] = round(float((arr.mean() - rf) * 250 / out["downside_volatility"]), 3)
+            
+            # 最大回撤
+            peak = np.maximum.accumulate(arr + 1)  # 累积净值
+            cum = np.cumprod(arr + 1)
+            dd = cum / peak - 1
             out["max_drawdown"] = round(float(dd.min()), 4)
+            
+            # 卡尔马比率
+            if out["max_drawdown"] and out["max_drawdown"] < 0:
+                out["calmar_ratio"] = round(out["annual_return"] / abs(out["max_drawdown"]), 3)
+            
+            # 平均回撤
+            out["avg_drawdown"] = round(float(dd[dd < 0].mean()), 4) if any(dd < 0) else 0.0
+            
+            # 最大回撤持续时间
+            in_dd = dd < 0
+            if any(in_dd):
+                dd_starts = np.where(np.diff(np.concatenate(([False], in_dd))))[0]
+                dd_ends = np.where(np.diff(np.concatenate((in_dd, [False]))))[0]
+                if len(dd_starts) == len(dd_ends):
+                    durations = dd_ends - dd_starts
+                    out["max_drawdown_duration"] = int(durations.max()) if len(durations) > 0 else 0
+            
+            # 恢复因子 = 总净收益 / 最大回撤
+            if out["max_drawdown"] and out["max_drawdown"] < 0:
+                out["recovery_factor"] = round(out["total_return"] / abs(out["max_drawdown"]), 3)
+    
+    return out
+
+
+def advanced_stats(st, benchmark_returns: list[float] = None) -> dict:
+    """高级绩效分析，包含相对基准指标。
+    
+    Args:
+        st: 模拟盘状态
+        benchmark_returns: 基准日收益率序列 (如沪深300)
+    
+    Returns:
+        包含 Alpha, Beta, 信息比率, 跟踪误差等的字典
+    """
+    base = stats(st)
+    hist = st.get("equity_hist") or []
+    if len(hist) < 2:
+        return base
+    
+    eqs = [h.get("equity", _CUR["init_cash"]) for h in hist]
+    daily_rets = []
+    for i in range(1, len(eqs)):
+        if eqs[i-1] > 0:
+            daily_rets.append(eqs[i] / eqs[i-1] - 1)
+    
+    if not daily_rets or np is None:
+        return base
+    
+    arr = np.asarray(daily_rets, dtype=float)
+    out = base.copy()
+    
+    if benchmark_returns and len(benchmark_returns) == len(arr):
+        bench = np.asarray(benchmark_returns, dtype=float)
+        # Beta
+        cov = np.cov(arr, bench)[0, 1]
+        bench_var = np.var(bench)
+        beta = cov / bench_var if bench_var > 0 else 1.0
+        out["beta"] = round(float(beta), 3)
+        # Alpha (年化)
+        alpha = (arr.mean() - beta * bench.mean()) * 250
+        out["alpha"] = round(float(alpha), 4)
+        # 跟踪误差
+        active_rets = arr - beta * bench
+        tracking_error = active_rets.std() * np.sqrt(250)
+        out["tracking_error"] = round(float(tracking_error), 4)
+        # 信息比率
+        if tracking_error > 0:
+            out["information_ratio"] = round(float(active_rets.mean() * np.sqrt(250) / tracking_error), 3)
+        # 上行/下行捕获率
+        up_market = bench > 0
+        down_market = bench < 0
+        if any(up_market):
+            out["up_capture"] = round(float(arr[up_market].mean() / bench[up_market].mean()), 3)
+        if any(down_market):
+            out["down_capture"] = round(float(arr[down_market].mean() / bench[down_market].mean()), 3)
+    
+    # 交易成本分析
+    total_cost = sum(c.get("cost", 0) for c in st.get("closed", []) if "cost" in c)
+    out["total_cost"] = round(total_cost, 2)
+    out["cost_drag"] = round(total_cost / _CUR["init_cash"] * 100, 2) if _CUR["init_cash"] > 0 else 0
+    
     return out
 
 
