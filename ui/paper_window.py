@@ -141,18 +141,37 @@ class PaperWindow(QDialog):
         self.btn_refresh.clicked.connect(self.refresh)
         self.btn_reset = _ghost_btn("重置账户")
         self.btn_reset.clicked.connect(self._reset_account)
-        self.auto_on = QCheckBox("每 30 分钟自动执行周期")
-        self.timer = QTimer(self)
-        self.timer.setInterval(30 * 60 * 1000)
-        self.auto_on.toggled.connect(lambda on: self.timer.start() if on else self.timer.stop())
-        self.timer.timeout.connect(self.refresh)
-        hb.addWidget(self.btn_cycle)
-        hb.addWidget(self.btn_refresh)
-        hb.addWidget(self.btn_reset)
-        hb.addSpacing(20)
-        hb.addWidget(self.auto_on)
+        # 自动执行模式设置
+        hb_mode = QHBoxLayout()
+        # 30分钟模式 (默认)
+        self.auto_on_30 = QCheckBox("每 30 分钟自动执行周期")
+        self.auto_on_30.setChecked(True)  # 默认开启
+        self.auto_on_30.setToolTip("间隔30分钟执行一个周期")
+        # 15分钟模式
+        self.auto_on_15 = QCheckBox("每 15 分钟自动执行周期")
+        self.auto_on_15.setChecked(False)  # 默认关闭
+        self.auto_on_15.setToolTip("间隔15分钟执行一个周期，单次周期较少")
+        # 互斥: 只能任选一个
+        self.auto_on_15.toggled.connect(lambda checked: self.auto_on_30.setChecked(not checked) if checked else None)
+        self.auto_on_30.toggled.connect(lambda checked: self.auto_on_15.setChecked(not checked) if checked else None)
+        hb_mode.addWidget(self.auto_on_30)
+        hb_mode.addWidget(self.auto_on_15)
         hb.addStretch(1)
         root.addLayout(hb)
+        root.addLayout(hb_mode)
+        # 定时器: 每30分钟(默认)或15分钟自动执行周期
+        self.timer = QTimer(self)
+        # 默认间隔: 30分钟 (auto_on_30 被勾选)
+        if self.auto_on_30.isChecked():
+            self.timer.setInterval(30 * 60 * 1000)
+        else:
+            self.timer.setInterval(15 * 60 * 1000)
+        # 复选框切换时自动更新间隔
+        self.auto_on_15.toggled.connect(lambda: self.timer.setInterval(15 * 60 * 1000 if not self.auto_on_30.isChecked() else 30 * 60 * 1000))
+        self.auto_on_30.toggled.connect(lambda: self.timer.setInterval(30 * 60 * 1000 if self.auto_on_30.isChecked() else 15 * 60 * 1000))
+        # 默认启动定时器 (30分钟模式)
+        self.timer.start()
+        self.timer.timeout.connect(self.refresh)
 
         # 策略参数配置 (放在模拟盘窗口内)
         root.addWidget(self._build_config_group())
