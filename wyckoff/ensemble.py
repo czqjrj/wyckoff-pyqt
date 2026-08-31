@@ -16,9 +16,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
-
-
 # ── 方案权重 ──────────────────────────────────────────────────────────
 _WEIGHTS = {
     "pnf": 0.35,
@@ -32,7 +29,7 @@ assert sum(_WEIGHTS.values()) == 1.0, "Weights must sum to 1.0"
 # ── 辅助：计算加权聚合分数 ─────────────────────────────────────────────
 
 def _weighted_score(
-    scores: Dict[str, float], weights: Optional[Dict[str, float]] = None
+    scores: dict[str, float], weights: dict[str, float] | None = None
 ) -> float:
     """根据权重计算加权平均分。
 
@@ -61,8 +58,8 @@ def ensemble_pnf_signal(
     online_conf: float,
     vsa_score: float,
     wave_score: float,
-    weights: Optional[Dict[str, float]] = None,
-) -> Dict[str, object]:
+    weights: dict[str, float] | None = None,
+) -> dict[str, object]:
     """聚合 P&F、在线模型、VSA 与波浪理论信号的加权分数。
 
     参数:

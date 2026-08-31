@@ -47,18 +47,18 @@ def chip_analysis(df, lookback: int = 120):
         centers = (edges[:-1] + edges[1:]) / 2.0
         density = np.zeros(nbin)
         for _, r in d.iterrows():
-            l, h = float(r["low"]), float(r["high"])
+            low_val, high_val = float(r["low"]), float(r["high"])
             v = float(r["volume"])
-            if h <= l or v <= 0 or h < lo or l > hi:
+            if high_val <= low_val or v <= 0 or high_val < lo or low_val > hi:
                 continue
-            typ = (h + l + float(r["close"])) / 3.0
-            mask = (centers >= l) & (centers <= h)
+            typ = (high_val + low_val + float(r["close"])) / 3.0
+            mask = (centers >= low_val) & (centers <= high_val)
             if not mask.any():
                 continue
             w = np.where(mask, np.where(
                 centers <= typ,
-                (centers - l) / max(typ - l, 1e-9),
-                (h - centers) / max(h - typ, 1e-9)), 0.0)
+                (centers - low_val) / max(typ - low_val, 1e-9),
+                (high_val - centers) / max(high_val - typ, 1e-9)), 0.0)
             w = np.clip(w, 0.0, 1.0)
             s = w.sum()
             if s <= 0:
@@ -135,7 +135,9 @@ def granville_signal(df):
         last = float(c[i])
         if not np.isfinite(m50[i]):
             return None
-        ma20 = float(m20[i]); ma5 = float(m5[i]); ma50 = float(m50[i])
+        ma20 = float(m20[i])
+        ma5 = float(m5[i])
+        ma50 = float(m50[i])
         if last > ma5 > ma20 > ma50:
             arrangement, arr_tone = "多头排列", "bullish"
         elif last < ma5 < ma20 < ma50:

@@ -98,7 +98,6 @@ def _wave_phase_cross(wc: WaveCount, phase_txt: str, events, last_close: float):
 def _wave_opp_risk(wc: WaveCount, phase_txt: str, events, last_close: float):
     """基于浪位生成机会/风险建议。"""
     opp, risk = [], []
-    ev_types = [e["type"] for e in events]
     if wc.kind == "impulse":
         if wc.direction == "up":
             if wc.done:

@@ -231,7 +231,6 @@ def record_analysis(df, symbol, code, scale, datalen, name="",
         # 立即评估: 同 symbol+scale 的待评估记录, 若 ref_dt 在当前 df 内已走过
         # 周期 (历史信号在今天拉到的更长序列里), 用本次 df 就地补齐缺失评估,
         # 避免等后台定时任务才出结果。单次最多评估 10 条, 防刷新风暴。
-        changed = True
         for r in records:
             if r.get("symbol") != symbol or int(r.get("scale", 240)) != int(scale):
                 continue
@@ -744,7 +743,6 @@ def confusion_matrix(records):
             if not res or res.get("ret") is None:
                 continue
             base = r.get("phase", "")
-            actual = "涨" if res["ret"] > 0 else "跌"
             key = (base, r.get("phase_tone", ""))
             rows.setdefault(key, {"n": 0, "up": 0, "dn": 0,
                                   "mean": [], "ex": []})
@@ -926,7 +924,7 @@ def install_cron(hour=None, minute=1):
                                       text=True)
     except subprocess.CalledProcessError:
         cur = ""
-    lines = [l for l in cur.splitlines() if "wyckoff.accuracy" not in l]
+    lines = [line for line in cur.splitlines() if "wyckoff.accuracy" not in line]
     if hour is not None:
         hour = max(0, min(23, int(hour)))
         minute = max(0, min(59, int(minute)))
@@ -1050,6 +1048,6 @@ if __name__ == "__main__":
         records = load_accuracy()
         print(json.dumps(accuracy_stats(records), ensure_ascii=False, indent=2,
                          default=str))
-        print("累计 %d 条; 命令: --eval 评估 / --export 导出 / "
+        print(f"累计 {len(records)} 条; 命令: --eval 评估 / --export 导出 / "
               "--daemon [分] 常驻 / --install-cron [HH:MM] 装Linux定时 / "
-              "--install-task [HH:MM] 装Windows计划" % len(records))
+              "--install-task [HH:MM] 装Windows计划")

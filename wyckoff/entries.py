@@ -20,10 +20,10 @@
   含前视水分 (收盘时点不可知), 确认制才是可成交的。
 """
 import numpy as np
+
+from .chain import sector_strength_pct
 from .config import STRONG_TIER_TYPES, event_dir
 from .entry_journal import record_entries
-from .analysis import fetch_market_env, fetch_main_flow, fetch_sector_flow
-from .chain import sector_strength_pct
 
 # 入场梯队 = 强梯队 ∩ 标称多头 (空头/中性事件不参与确认制多头入场)
 ENTRY_TIERS = frozenset(t for t in STRONG_TIER_TYPES if event_dir(t) > 0)
@@ -37,13 +37,17 @@ MAX_EXTEND_PCT = 0.08
 # 止损距离上限 (占入场价比例): 过宽说明弹簧结构松散, 盈亏比差
 MAX_STOP_DIST_PCT = 0.10
 
-# ── 2026-08-28 新增: 三重共振入口硬规则 (与 run_analysis 保持一致) ──
-# 大盘 MA20 斜率需 > 0
-ENTRY_MIN_MKT_TREND_20 = 0.0
-# 板块强度百分位需 > 0.6
-ENTRY_MIN_SECTOR_PCT = 0.6
-# 资金流 20日净额分位需 > 0.5
-ENTRY_MIN_FUND_NET_PCT = 0.5
+# ── 2026-08-28 新增: 三重共振入口硬规则 (与 paper / run_analysis 保持一致) ──
+# 阈值统一来自 discipline.py (唯一数据源), 避免与 paper 双份硬编码漂移。
+from .discipline import (  # noqa: E402
+    FUND_NET_PCT_GATE as ENTRY_MIN_FUND_NET_PCT,
+)
+from .discipline import (
+    MARKET_TREND_20 as ENTRY_MIN_MKT_TREND_20,
+)
+from .discipline import (
+    SECTOR_PCT_GATE as ENTRY_MIN_SECTOR_PCT,
+)
 
 # 可靠度否决门: 在线模型就绪时, low 档 (模型可靠度≤REL_TIER_LOW) 入场点
 # 默认不进扫描结果 —— 实测该档方向命中仅 ~12%, 列出只会诱导低质量交易。
@@ -212,11 +216,10 @@ def _scan_one(codes_str, datalen=500, scale=240, stats=None, macro_ctx=None, **k
     # 资金流净额分位
     if fund_net_pct_val is None:
         try:
+            from .discipline import fund_net_pct
             flow = r.get("flow")
-            if flow is not None and len(flow) >= 20:
-                recent_flow = flow.tail(20)["main"].sum()
-                hist = flow.tail(60)["main"].sum() if len(flow) >= 60 else recent_flow
-                fund_net_pct_val = 0.5 + 0.5 * np.tanh(recent_flow / (abs(hist) + 1e-6))
+            fund_net_pct_val = fund_net_pct(flow)
+            if fund_net_pct_val is not None:
                 macro_ctx["fund_net_pct_val"] = fund_net_pct_val
         except Exception:
             fund_net_pct_val = 0.5

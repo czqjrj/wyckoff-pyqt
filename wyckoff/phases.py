@@ -24,8 +24,7 @@ from .config import (
 
 
 def _vol_pct_median(df, window: int = 20) -> float:
-    """计算最近 window 根 K 线的收盘价波动率中位数 (%): 
-    以中位而非均值，避免极端行情 (黑天鹅/封 ST) 污染。
+    """计算最近 window 根 K 线的收盘价波动率中位数 (%): 以中位而非均值，避免极端行情 (黑天鹅/封 ST) 污染。
     若数据不足窗口，自动收窄至可用根数。"""
     close = df["close"].values.astype(float)
     win = min(window, len(close))

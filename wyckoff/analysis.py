@@ -11,8 +11,6 @@ from .counterevidence import counter_evidence
 from .datasource import data_source_of, fetch_kline, fetch_name, merge_realtime_bar
 from .events import detect_all
 from .falsify import falsify_structure
-from .news import (apply_price_validation, fetch_forward_calendar,
-                   fetch_market_news_sentiment, fetch_news_sentiment)
 from .filters import (
     chip_analysis,
     flow_gate,
@@ -42,6 +40,12 @@ from .market import (
     volume_profile,
 )
 from .multitime import multi_tf_analysis
+from .news import (
+    apply_price_validation,
+    fetch_forward_calendar,
+    fetch_market_news_sentiment,
+    fetch_news_sentiment,
+)
 from .ninetests import nine_tests
 from .phases import judge_phase, phase_segments
 from .pnf import build_pnf, plot_pnf, pnf_history_targets, pnf_targets, pnf_volume
@@ -86,8 +90,6 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     spring = "Spring" in rtypes
     utad = "UTAD" in rtypes
     lpsy = "LPSY" in rtypes
-    dist = "Distribution" in (structure[2] if structure else "") \
-        or "Markdown" in (structure[2] if structure else "")
 
     # 提取基础阶段 (去除"高置信"/"需谨慎"修饰)
     base_phase = phase.replace("高置信 ", "").replace(" (需谨慎)", "").split(" ")[0]

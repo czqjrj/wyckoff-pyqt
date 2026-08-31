@@ -11,10 +11,9 @@
 import os
 import statistics
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QThread, QThreadPool, QRunnable, pyqtSignal, QObject, pyqtSlot
+from PyQt6.QtCore import QObject, QRunnable, Qt, QThread, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -23,7 +22,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QProgressBar,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -52,7 +50,6 @@ from wyckoff.pnf_accuracy import (
 )
 from wyckoff.settings_keys import S
 from wyckoff.signal_accuracy import (
-    _fmt_stats,
     export_signals,
     load_signals,
     run_auto_signal_eval,
@@ -897,13 +894,13 @@ class CalibrationCenter(QWidget):
             self._placeholder(self.fb_lay, "请先完成一次分析 (开始分析 或 双击自选股)")
             return
         fmap = {}
-        for r in feedback:
+        for r in fb:
             if r.get("start_dt") and r.get("end_dt"):
                 fmap[feedback_key(r["symbol"], r.get("scale", 240),
                                   r["start_dt"], r["end_dt"])] = r
         self._fb_bands = []
         labeled = 0
-        for a, e, key, label in segs:
+        for a, e, key, label in self._last_segs:
             rec = build_feedback_record(self._last_symbol, self._last_datalen,
                                         self._last_scale, self._last_df, a, e, key, label)
             k = feedback_key(self._last_symbol, self._last_scale,

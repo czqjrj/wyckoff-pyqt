@@ -22,13 +22,13 @@ class AutoScheduler:
         scheduler.schedule()  # 启动定时扫描
         scheduler.startup_scan()  # 启动后一次性扫描
     """
-    
+
     def __init__(self, main_window: MainWindow, settings: dict) -> None:
         self._mw = main_window
         self._settings = settings
         self._scan_timer: QTimer | None = None
         self._startup_timer: QTimer | None = None
-    
+
     def schedule(self) -> None:
         """后台定期重算自选股威科夫信号 (设置 auto_scan 时启用)。"""
         self.cancel()
@@ -43,13 +43,13 @@ class AutoScheduler:
         timer.timeout.connect(self._scan_watchlist)
         timer.start(interval * 1000)
         self._scan_timer = timer
-    
+
     def cancel(self) -> None:
         """取消定时扫描。"""
         if self._scan_timer is not None:
             self._scan_timer.stop()
         self._scan_timer = None
-    
+
     def startup_scan(self) -> None:
         """启动后一次性扫描自选股, 立即填充状态栏头条。"""
         try:
@@ -63,7 +63,7 @@ class AutoScheduler:
             self._scan_watchlist()
         except Exception as e:
             log_exc("startup_scan 失败", e)
-    
+
     def _scan_watchlist(self):
         """后台扫描自选股信号 (静默), 完成后重新调度。"""
         self.cancel()

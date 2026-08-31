@@ -3,15 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import datetime as _dt
 
-from wyckoff._log import log_exc
-from wyckoff.config import SCALE_OPTIONS, PERIOD_OPTIONS
+from wyckoff.config import SCALE_OPTIONS
 from wyckoff.settings_keys import S
-from wyckoff.storage import save_settings
-
-from . import theme
-from .base_plot import BasePlotWidget
 
 
 class ChartManager:

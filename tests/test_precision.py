@@ -102,7 +102,6 @@ def test_volume_anomaly_level_thresholds():
     th = thresholds(240)
     assert th["z_anom"] == 2.0 and th["z_climax"] == 3.0
     df = add_indicators(_mk_df(vol_spike_at=300, vol_spike=50.0), symbol="600104")
-    z = df["vol_z_20"].iloc[300]
     ev = vsa_volume_anomaly(df, z_anom=1.0, z_climax=1.5)
     assert any(e["idx"] == 300 and e["level"] == "climax" for e in ev)
 

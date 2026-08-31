@@ -348,7 +348,9 @@ def chain_factor_for(sector_name, ts=None):
         trans = cur["trans"] if cur else ""
         if cur is not None:
             a = cur["avg"]
-            up = a.get("upstream"); mid = a.get("midstream"); dn = a.get("downstream")
+            up = a.get("upstream")
+            mid = a.get("midstream")
+            dn = a.get("downstream")
             if trans == "上游→下游" and None not in (up, mid, dn):
                 grad = up - dn
             elif trans == "下游→上游" and None not in (up, mid, dn):

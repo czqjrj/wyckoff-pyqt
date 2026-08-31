@@ -48,10 +48,10 @@ def _make_market(n=3200):
     """生成 n 只假 A 股 (代码+名称), 保证包含一只非自选股的知名股。"""
     stocks = [("601899", "紫金矿业")]
     for i in range(1, n):
-        code = "%06d" % i
+        code = f"{i:06d}"
         if code == "601899":
             continue
-        stocks.append((code, "测试股份%d" % i))
+        stocks.append((code, f"测试股份{i}"))
     return stocks
 
 

@@ -293,7 +293,6 @@ def scan_volume_divergence(codes, workers=6, cancel_event=None, datalen=500):
 
     def classify(df):
         c = df["close"].values
-        v = df["volume"].values
         last, prev = float(c[-1]), float(c[-2])
         pct = (last / prev - 1) * 100 if prev else 0
         vr20 = float(df["vol_ratio_20"].iloc[-1]) if "vol_ratio_20" in df else np.nan
@@ -936,50 +935,60 @@ def scan_gpzy(min_ratio=50):
     return rows
 
 
-# ──────────────────── 扫描注册表 (供 UI 使用) ────────────────────
+# ──────────────────── 扫描注册表 (供 UI 使用 + run_scan 单一数据源) ────────────────────
 
 SCAN_REGISTRY = [
-    {"key": "pullback", "title": "回踩买点",
+    {"key": "pullback", "title": "回踩买点", "fn": scan_pullback,
      "desc": "强买点(Spring/SC/ST)后回调未破位, 此刻可低吸", "need_universe": True},
-    {"key": "pnf_breakout", "title": "P&F 突破",
+    {"key": "pnf_breakout", "title": "P&F 突破", "fn": scan_pnf_breakout,
      "desc": "点数图刷新前高/三重顶突破 + 计数目标", "need_universe": True},
-    {"key": "volume_surge", "title": "量能异动",
+    {"key": "volume_surge", "title": "量能异动", "fn": scan_volume_surge,
      "desc": "量比/量Z大幅放大 → 突破 vs 出货", "need_universe": True},
-    {"key": "volume_divergence", "title": "量价背离",
+    {"key": "volume_divergence", "title": "量价背离", "fn": scan_volume_divergence,
      "desc": "放量滞涨/缩量过峰/缩量回踩/布林蓄势", "need_universe": True},
-    {"key": "wave_proximity", "title": "波浪亲密度",
+    {"key": "wave_proximity", "title": "波浪亲密度", "fn": scan_wave_proximity,
      "desc": "现价贴近斐波那契关键支撑/目标位", "need_universe": True},
     {"key": "portfolio_risk", "title": "持仓风险",
+     "fn": lambda workers=6, cancel_event=None: scan_portfolio_risk(
+         workers=workers, cancel_event=cancel_event),
      "desc": "我的持仓中的派发/减仓/破位信号", "need_universe": False},
     {"key": "candidates_status", "title": "候选池巡检",
+     "fn": lambda workers=6, cancel_event=None: scan_candidates_status(
+         workers=workers, cancel_event=cancel_event),
      "desc": "待观察池股票: 已走强/已破位/继续观察", "need_universe": False},
     {"key": "sector_driven", "title": "强势板块联动",
+     "fn": lambda workers=6, cancel_event=None: scan_sector_driven(
+         workers=workers, cancel_event=cancel_event),
      "desc": "资金流入强势板块 → 板块内信号股", "need_universe": False},
-    {"key": "lhb", "title": "龙虎榜",
+    {"key": "lhb", "title": "龙虎榜", "fn": lambda *_a, **_k: scan_lhb(),
      "desc": "近一月游资/机构净买入 (需 akshare)", "need_universe": False},
-    {"key": "margin", "title": "两融异动",
+    {"key": "margin", "title": "两融异动", "fn": lambda *_a, **_k: scan_margin(),
      "desc": "融资余额显著放大 (需 akshare)", "need_universe": False},
-    {"key": "restricted", "title": "解禁预警",
+    {"key": "restricted", "title": "解禁预警", "fn": lambda *_a, **_k: scan_restricted(),
      "desc": "未来60日限售解禁压力 (需 akshare)", "need_universe": False},
-    {"key": "yjyg", "title": "业绩预告",
+    {"key": "yjyg", "title": "业绩预告", "fn": lambda *_a, **_k: scan_yjyg(),
      "desc": "业绩预增/预亏快扫 (需 akshare)", "need_universe": False},
-    {"key": "north", "title": "北向资金",
+    {"key": "north", "title": "北向资金", "fn": lambda *_a, **_k: scan_north(),
      "desc": "北向净流入/个股持仓 (数据源受限)", "need_universe": False},
-    {"key": "distribution", "title": "派发风险",
+    {"key": "distribution", "title": "派发风险", "fn": scan_distribution,
      "desc": "全市场顶部构筑/派发信号(UTAD/BC) → 减仓预警", "need_universe": True},
-    {"key": "platform", "title": "平台突破",
+    {"key": "platform", "title": "平台突破", "fn": scan_platform,
      "desc": "低波动平台 + 放量上破前高, 突破启动", "need_universe": True},
-    {"key": "absorption", "title": "吸筹完成度",
+    {"key": "absorption", "title": "吸筹完成度", "fn": scan_absorption,
      "desc": "SC→PSY→Spring/AR/SOS 完整吸筹链, 待主升", "need_universe": True},
-    {"key": "dzjy", "title": "大宗交易",
+    {"key": "dzjy", "title": "大宗交易", "fn": lambda *_a, **_k: scan_dzjy(),
      "desc": "大宗折价接盘 / 溢价买入 (需 akshare)", "need_universe": False},
-    {"key": "jgdy", "title": "机构调研",
+    {"key": "jgdy", "title": "机构调研", "fn": lambda *_a, **_k: scan_jgdy(),
      "desc": "近期被机构密集调研 (需 akshare)", "need_universe": False},
-    {"key": "ztpool", "title": "涨停池",
+    {"key": "ztpool", "title": "涨停池", "fn": lambda *_a, **_k: scan_ztpool(),
      "desc": "连板高度与炸板承接 (需 akshare)", "need_universe": False},
-    {"key": "gpzy", "title": "股权质押",
+    {"key": "gpzy", "title": "股权质押", "fn": lambda *_a, **_k: scan_gpzy(),
      "desc": "高质押比例风险提示 (需 akshare)", "need_universe": False},
 ]
+
+# need_universe=True 的扫描统一签名 (codes, workers=, cancel_event=, datalen=)
+_UNIVERSE_SCAN_KEYS = frozenset(k["key"] for k in SCAN_REGISTRY
+                                if k.get("need_universe"))
 
 # 每个扫描默认展示列 (代码/名称/现价/评分 由窗口统一前置)
 SCAN_COLUMNS = {
@@ -1007,36 +1016,18 @@ SCAN_COLUMNS = {
 
 
 def run_scan(key, codes=None, workers=6, cancel_event=None, **kw):
-    """按注册表 key 执行扫描。返回行列表 (统一含 code/name/last/score)。"""
-    fn_map = {
-        "pullback": scan_pullback,
-        "pnf_breakout": scan_pnf_breakout,
-        "volume_surge": scan_volume_surge,
-        "volume_divergence": scan_volume_divergence,
-        "wave_proximity": scan_wave_proximity,
-        "portfolio_risk": lambda *_a, **_k: scan_portfolio_risk(
-            workers=workers, cancel_event=cancel_event),
-        "candidates_status": lambda *_a, **_k: scan_candidates_status(
-            workers=workers, cancel_event=cancel_event),
-        "sector_driven": lambda *_a, **_k: scan_sector_driven(
-            workers=workers, cancel_event=cancel_event),
-        "lhb": lambda *_a, **_k: scan_lhb(),
-        "margin": lambda *_a, **_k: scan_margin(),
-        "restricted": lambda *_a, **_k: scan_restricted(),
-        "yjyg": lambda *_a, **_k: scan_yjyg(),
-        "north": lambda *_a, **_k: scan_north(),
-        "distribution": scan_distribution,
-        "platform": scan_platform,
-        "absorption": scan_absorption,
-        "dzjy": lambda *_a, **_k: scan_dzjy(),
-        "jgdy": lambda *_a, **_k: scan_jgdy(),
-        "ztpool": lambda *_a, **_k: scan_ztpool(),
-        "gpzy": lambda *_a, **_k: scan_gpzy(),
-    }
-    fn = fn_map.get(key)
-    if fn is None:
+    """按注册表 key 执行扫描。返回行列表 (统一含 code/name/last/score)。
+
+    由 SCAN_REGISTRY 单一数据源生成: 注册表里存了 fn 与 need_universe,
+    这里只负责按 need_universe 决定是否传入 codes (universe 扫描需全市场列表,
+    非 universe 扫描忽略 codes)。新增扫描只需改注册表, 不再双份维护 fn_map。
+    """
+    for entry in SCAN_REGISTRY:
+        if entry["key"] == key:
+            fn = entry["fn"]
+            break
+    else:
         return []
-    if key in ("pullback", "pnf_breakout", "volume_surge", "volume_divergence",
-               "wave_proximity", "distribution", "platform", "absorption"):
+    if entry.get("need_universe"):
         return fn(codes or [], workers=workers, cancel_event=cancel_event)
-    return fn()
+    return fn(workers=workers, cancel_event=cancel_event)

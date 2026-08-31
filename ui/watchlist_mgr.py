@@ -25,7 +25,7 @@ class WatchlistManager:
         mgr = WatchlistManager(main_window, settings)
         mgr.reload()  # 加载自选股列表
     """
-    
+
     def __init__(self, main_window: MainWindow, settings: dict) -> None:
         self._mw = main_window
         self._settings = settings
@@ -33,11 +33,11 @@ class WatchlistManager:
         self._watch_names: dict[str, str] = {}
         self._rt_threads: dict[str, WatchRTThread] = {}
         self._last_rt: dict[str, dict] = {}
-    
+
     @property
     def watchlist(self) -> list[str]:
         return list(self._watchlist)
-    
+
     def reload(self) -> None:
         """加载自选股列表并刷新显示。"""
         raw = load_watchlist()
@@ -65,7 +65,7 @@ class WatchlistManager:
         if self._mw._current_code:
             self.select(self._mw._current_code)
         self.refresh_rt()
-    
+
     def _add_item(self, code, name):
         """添加一个自选股列表项。"""
         from .watch_card import ROLE_NAME, ROLE_PCT, ROLE_PRICE, ROLE_TAG, ROLE_TAG_COLOR
@@ -81,7 +81,7 @@ class WatchlistManager:
         item.setToolTip(f"{code} {name}" if name else code)
         self._mw.watch_list.addItem(item)
         return item
-    
+
     def select(self, code):
         """选中指定代码的自选股。"""
         for i in range(self._mw.watch_list.count()):
@@ -89,7 +89,7 @@ class WatchlistManager:
             if it.data(Qt.ItemDataRole.UserRole) == code:
                 self._mw.watch_list.setCurrentItem(it)
                 return
-    
+
     def add(self, code):
         """添加股票到自选股。"""
         try:
@@ -103,14 +103,14 @@ class WatchlistManager:
             self.select(full)
         else:
             self.select(full)
-    
+
     def remove(self, code):
         """从自选股删除股票。"""
         if code in self._watchlist:
             self._watchlist.remove(code)
             save_watchlist(self._watchlist)
             self.reload()
-    
+
     def move(self, code, direction):
         """移动自选股顺序 (direction: -1 上移, 1 下移)。"""
         i = self._watchlist.index(code) if code in self._watchlist else -1
@@ -122,7 +122,7 @@ class WatchlistManager:
             save_watchlist(self._watchlist)
             self.reload()
             self.select(code)
-    
+
     def refresh_rt(self):
         """后台拉取自选股实时行情 + 阶段分类。"""
         codes = list(self._watchlist)
@@ -132,7 +132,7 @@ class WatchlistManager:
         th.result.connect(self._on_rt)
         self._rt_threads[th] = th
         th.start()
-    
+
     def _on_rt(self, rt, phases):
         """实时行情回调: 更新卡片数据。"""
         from .watch_card import ROLE_NAME, ROLE_PCT, ROLE_PRICE, ROLE_TAG, ROLE_TAG_COLOR, tag_for

@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """产业链作用提升后的单元测试: 环节定位 / 因子 / conf 加分 / 同链去重。"""
 import datetime as _dt
 import sys
+
 sys.path.insert(0, r"E:\wyckoff-pyqt")
 
-import pytest
 
-from wyckoff import chain, conservative_bt as cbt
-
+from wyckoff import chain
+from wyckoff import conservative_bt as cbt
 
 # ───────────────────────── 环节定位 / 分组 ─────────────────────────
 

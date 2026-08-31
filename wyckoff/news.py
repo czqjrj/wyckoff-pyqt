@@ -33,7 +33,6 @@ import pandas as pd
 
 from ._shared import http_session
 
-
 _NEWS_CACHE = {}
 _NEWS_CACHE_TTL = 1800
 _MARKET_NEWS_CACHE = {}

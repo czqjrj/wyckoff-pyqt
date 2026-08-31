@@ -85,7 +85,7 @@ def test_pick_candidates_filter_and_sort(monkeypatch):
     monkeypatch.setattr("wyckoff.events.detect_all", fake_detect)
     monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
     out = paper.pick_candidates(universe=["sh600001", "sh600002"],
-                                max_codes=10, min_conf=85)
+                                max_codes=10, min_conf=85, skip_gates=True)
     assert len(out) == 2
     confs = sorted(e["conf"] for e in out)
     assert confs == [88, 95]
@@ -106,8 +106,54 @@ def test_pick_candidates_no_net_grace(monkeypatch):
     monkeypatch.setattr("wyckoff.events.detect_all",
                         lambda *a, **k: [_candidate(idx=295)])
     monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
-    out = paper.pick_candidates(max_codes=5)
+    out = paper.pick_candidates(max_codes=5, skip_gates=True)
     assert isinstance(out, list)
+
+
+def test_pick_candidates_discipline_gate_failclose(monkeypatch):
+    """大盘20日线向上门禁 fail-close: 大盘未站上 MA20 时整池拦截 (返回空)。"""
+    df = _mk(np.linspace(10.0, 10.5, 400))
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline",
+                        lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators",
+                        lambda df, **k: df)
+    monkeypatch.setattr("wyckoff.indicators.find_pivots", lambda *a, **k: [])
+    monkeypatch.setattr("wyckoff.events.detect_all",
+                        lambda *a, **k: [_candidate(idx=395)])
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    monkeypatch.setattr(paper, "_market_trend_ok",
+                        lambda: (False, "大盘未站上MA20"))
+    out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    assert out == []
+
+
+def test_pick_candidates_discipline_gate_sector_flow(monkeypatch):
+    """板块强度>60分位 + 资金流截面中位门禁: 未达标候选被拦截。"""
+    df = _mk(np.linspace(10.0, 10.5, 400))
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline",
+                        lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators",
+                        lambda df, **k: df)
+    monkeypatch.setattr("wyckoff.indicators.find_pivots", lambda *a, **k: [])
+    monkeypatch.setattr("wyckoff.events.detect_all",
+                        lambda *a, **k: [_candidate(code="sh600001", idx=395)])
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    monkeypatch.setattr(paper, "_market_trend_ok",
+                        lambda: (True, "大盘站上MA20"))
+    # 板块强度不足 → fail-close
+    monkeypatch.setattr(paper, "_sector_strength_ok", lambda s: (False, "板块强度40分位"))
+    assert paper.pick_candidates(universe=["sh600001"], max_codes=5) == []
+    # 板块达标: 需要 _flow_net5; 无资金流数据 → fail-close 拦截
+    monkeypatch.setattr(paper, "_sector_strength_ok",
+                        lambda s: (True, "板块强度80分位"))
+    monkeypatch.setattr(paper, "_flow_net5", lambda c: None)
+    assert paper.pick_candidates(universe=["sh600001"], max_codes=5) == []
+    # 资金流达标 → 候选入池
+    monkeypatch.setattr(paper, "_flow_net5", lambda c: 1_000_000.0)
+    monkeypatch.setattr(paper, "add_condition", lambda *a, **k: (None, ""))
+    out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    assert len(out) == 1
+    assert out[0]["code"] == "sh600001"
 
 
 # ───────────────────────── 订单/撮合 ─────────────────────────

@@ -239,8 +239,10 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
         # factor > 1.0: 新闻有增量, 放大置信度; factor < 1.0: 新闻整体反向, 缩减置信度。
         # factor = 1.0: 维持中性, 无调整。默认 1.0 (文件不存在/样本不足时)。
         try:
-            import json, os
-            from .paths import DATA_DIR, NEWS_CALIBRATION_FILE
+            import json
+            import os
+
+            from .paths import DATA_DIR
             cal_path = os.path.join(DATA_DIR, "wx_news_calibration.json")
             if os.path.exists(cal_path):
                 with open(cal_path, encoding="utf-8") as f:
@@ -717,7 +719,7 @@ def _render_markdown_report(recent, stats, summary, days, path=None, records=Non
         from .validation import validation_lines
         vlines = validation_lines(records or recent)
         if vlines:
-            lines += ["## 信号准确性验证", ""] + [f"- {l}" for l in vlines] + [""]
+            lines += ["## 信号准确性验证", ""] + [f"- {line}" for line in vlines] + [""]
     except Exception:
         pass
 
@@ -821,7 +823,7 @@ def _render_html_report(recent, stats, summary, days, path=None, records=None):
     import os
     md = _render_markdown_report(recent, stats, summary, days, path=None,
                                  records=records)
-    body = "\n".join(_html_escape(l) for l in md.splitlines())
+    body = "\n".join(_html_escape(line) for line in md.splitlines())
     html = f"""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <title>威科夫信号复盘周报</title><style>
 body{{font-family:'Noto Sans CJK SC',sans-serif;margin:24px;color:#1f2937}}

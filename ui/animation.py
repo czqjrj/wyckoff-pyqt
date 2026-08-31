@@ -1,5 +1,5 @@
 """微动效工具: 面板折叠/展开、标签页切换淡入淡出等。"""
-from PyQt6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation
+from PyQt6.QtCore import QEasingCurve, QObject, QParallelAnimationGroup, QPropertyAnimation
 
 
 class AnimationManager:

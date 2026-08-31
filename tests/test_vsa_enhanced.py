@@ -29,10 +29,10 @@ def _mk_df(n=400, trend_up=True, seed=0):
     close = close + np.random.randn(n) * 0.2
     o = close + np.random.randn(n) * 0.3
     h = np.maximum(o, close) + np.abs(np.random.randn(n) * 0.7) + 0.1
-    l = np.minimum(o, close) - np.abs(np.random.randn(n) * 0.7) - 0.1
+    low = np.minimum(o, close) - np.abs(np.random.randn(n) * 0.7) - 0.1
     vol = np.random.rand(n) * 2e6 + 1e5
     return pd.DataFrame({
-        "open": o, "close": close, "high": h, "low": l, "volume": vol,
+        "open": o, "close": close, "high": h, "low": low, "volume": vol,
         "day": pd.date_range("2024-01-01", periods=n),
     })
 
@@ -83,7 +83,7 @@ def test_legacy_labels_still_present():
         _, sigs = _classify(trend_up=trend_up, seed=seed)
         for s in sigs:
             produced.add(s["label"])
-    missing = legacy - produced
+    _ = legacy - produced
     # ND/NS 高概率出现; 其他为随机合成数据, 允许个别缺失
     assert "ND" in produced and "NS" in produced, "ND/NS 应稳定产出"
 
@@ -95,17 +95,16 @@ def test_choc_trigger():
     close = np.linspace(80, 40, n)
     o = close + 0.3
     h = o + 0.5
-    l = close - 0.5
+    low = close - 0.5
     vol = np.full(n, 5e5)
     i = 150
-    rng = 6.0
     o[i] = close[i] - 5.8
     close[i] = o[i] + 5.9
     h[i] = close[i]
-    l[i] = o[i]
+    low[i] = o[i]
     vol[i] = 5e6
     df = pd.DataFrame({
-        "open": o, "close": close, "high": h, "low": l, "volume": vol,
+        "open": o, "close": close, "high": h, "low": low, "volume": vol,
         "day": pd.date_range("2024-01-01", periods=n),
     })
     df = add_indicators(df, symbol="600104")
@@ -122,16 +121,16 @@ def test_sc_trigger():
                             np.linspace(84, 52, 210)])
     o = close + 0.3
     h = o + 0.5
-    l = close - 0.5
+    low = close - 0.5
     vol = np.full(n, 5e5)
     i = 210
     o[i] = close[i] + 1.2
     close[i] = o[i] - 2.5
     h[i] = o[i] + 0.2
-    l[i] = close[i] - 0.2
+    low[i] = close[i] - 0.2
     vol[i] = 4e6
     df = pd.DataFrame({
-        "open": o, "close": close, "high": h, "low": l, "volume": vol,
+        "open": o, "close": close, "high": h, "low": low, "volume": vol,
         "day": pd.date_range("2024-01-01", periods=n),
     })
     df = add_indicators(df, symbol="600104")

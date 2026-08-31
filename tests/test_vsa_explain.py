@@ -131,10 +131,10 @@ def test_all_signals_in_conclusion():
     close = np.linspace(50, 90, n) + np.random.randn(n) * 0.2
     o = close + np.random.randn(n) * 0.3
     h = np.maximum(o, close) + np.abs(np.random.randn(n) * 0.7) + 0.1
-    l = np.minimum(o, close) - np.abs(np.random.randn(n) * 0.7) - 0.1
+    low = np.minimum(o, close) - np.abs(np.random.randn(n) * 0.7) - 0.1
     vol = np.random.rand(n) * 2e6 + 1e5
     df = add_indicators(pd.DataFrame({
-        "open": o, "close": close, "high": h, "low": l, "volume": vol,
+        "open": o, "close": close, "high": h, "low": low, "volume": vol,
         "day": pd.date_range("2024-01-01", periods=n),
     }), symbol="600104")
     sigs = vsa_classify(df, scale=240)
@@ -143,7 +143,7 @@ def test_all_signals_in_conclusion():
                                 detail="低位收敛筑底", vsa_signals=sigs)
     titles = [t for t, _ in sections]
     assert "VSA 信号" in titles
-    vsa_lines = next(l for t, l in sections if t == "VSA 信号")
+    vsa_lines = next(lines for t, lines in sections if t == "VSA 信号")
     joined = "\n".join(vsa_lines)
     assert "信号解释:" in joined
     assert "失效:" in joined

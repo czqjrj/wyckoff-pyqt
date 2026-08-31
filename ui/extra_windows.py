@@ -11,7 +11,6 @@
 import threading
 import time
 
-from wyckoff._log import log_exc
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetrics, QPalette
 from PyQt6.QtWidgets import (
@@ -40,6 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from wyckoff._log import log_exc
 from wyckoff.storage import (
     load_candidates,
     load_settings,

@@ -155,7 +155,7 @@ def test_fetch_kline_sqlite_insufficient_refetches(monkeypatch):
 
 def test_normalize_kline_df_guard():
     """归一化守卫: 30根可接受 (近1月), <20根拒绝。"""
-    rows = [["2024-01-%02d" % (i + 1), 10, 10.2, 9.8, 10.1, 1000] for i in range(30)]
+    rows = [[f"2024-01-{i + 1:02d}", 10, 10.2, 9.8, 10.1, 1000] for i in range(30)]
     df = datasource._normalize_kline_df(rows)
     assert len(df) == 30
     with pytest.raises(RuntimeError):

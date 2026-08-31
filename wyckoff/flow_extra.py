@@ -360,9 +360,6 @@ def fetch_north():
     out = []
     try:
         df = ak.stock_hsgt_fund_flow_summary_em()
-        desc = {
-            "沪股通": "沪股通", "深股通": "深股通", "港股通(沪)": "港股通(沪)",
-            "港股通(深)": "港股通(深)"}
         for _, r in df.iterrows():
             mkt = str(r.get("板块") or "")
             out.append({

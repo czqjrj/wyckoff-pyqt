@@ -18,10 +18,10 @@ class ChartExporter:
         exporter.export_current()  # 导出当前 Tab
         exporter.export_all()      # 导出所有图表
     """
-    
+
     def __init__(self, main_window: MainWindow) -> None:
         self._mw = main_window
-    
+
     def _get_widget(self, tab_idx: int):
         """根据 Tab 索引获取对应的图表 Widget。"""
         widgets = {
@@ -31,13 +31,14 @@ class ChartExporter:
             3: self._mw.mkt_widget,
         }
         return widgets.get(tab_idx)
-    
+
     def _stamp_pixmap(self, pm, title: str = ""):
         """给导出的图表加时间戳水印 (左下角 时间 + 股票)。"""
         from datetime import datetime
+
         from PyQt6.QtCore import QPointF
         from PyQt6.QtGui import QColor, QFont, QPainter
-        
+
         painter = QPainter(pm)
         font = QFont(self._mw.font())
         font.setPointSize(10)
@@ -48,12 +49,12 @@ class ChartExporter:
         painter.drawText(QPointF(6, pm.height() - 8), text)
         painter.end()
         return pm
-    
+
     def save_png(self, widget, base: str, quiet: bool = False) -> str:
         """保存单个图表 Widget 为 PNG。"""
-        from wyckoff.paths import DATA_DIR
         from ui import theme
-        
+        from wyckoff.paths import DATA_DIR
+
         pm = widget.grab_pixmap()
         code = self._mw._current_code or ""
         name = self._mw._current_name or code
@@ -65,7 +66,7 @@ class ChartExporter:
         else:
             self._mw._status(f"已保存 {path}", theme.C_DOWN)
         return path
-    
+
     def export_current(self) -> None:
         """导出当前 Tab 的图表。"""
         idx = self._mw.tabs.currentIndex()
@@ -75,31 +76,31 @@ class ChartExporter:
             return
         code = self._mw._current_code or "chart"
         self.save_png(widget, f"wyckoff_{code}")
-    
+
     def export_kline(self, quiet: bool = False) -> str:
         """导出 K线图。"""
-        return self.save_png(self._mw.kline_widget, 
-                            f"wyckoff_{self._mw._current_code or 'chart'}_kline", 
+        return self.save_png(self._mw.kline_widget,
+                            f"wyckoff_{self._mw._current_code or 'chart'}_kline",
                             quiet=quiet)
-    
+
     def export_pnf(self, quiet: bool = False) -> str:
         """导出 P&F 图。"""
         return self.save_png(self._mw.pnf_widget,
                             f"wyckoff_{self._mw._current_code or 'chart'}_pnf",
                             quiet=quiet)
-    
+
     def export_ind(self, quiet: bool = False) -> str:
         """导出技术指标图。"""
         return self.save_png(self._mw.ind_widget,
                             f"wyckoff_{self._mw._current_code or 'chart'}_ind",
                             quiet=quiet)
-    
+
     def export_mkt(self, quiet: bool = False) -> str:
         """导出资金流图。"""
         return self.save_png(self._mw.mkt_widget,
                             f"wyckoff_{self._mw._current_code or 'chart'}_mkt",
                             quiet=quiet)
-    
+
     def export_all(self) -> None:
         """导出所有图表。"""
         code = self._mw._current_code or "chart"

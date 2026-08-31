@@ -16,8 +16,12 @@ from ._tokens import (
     SEMANTIC_KEYS,
     SPACING,
     TYPE_SCALE,
-    spacing as _spacing,
+)
+from ._tokens import (
     radius as _radius,
+)
+from ._tokens import (
+    spacing as _spacing,
 )
 
 # ── Type Scale 动态缩放 ──

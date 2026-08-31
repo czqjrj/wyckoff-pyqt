@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """PNF 三档目标准确率评估 CLI (薄封装: 库逻辑在 wyckoff.pnf_accuracy)。
 
 用法:
@@ -12,15 +11,19 @@
   python scripts/eval_pnf_tier_accuracy.py --install-task [HH:MM]   # Windows
   python scripts/eval_pnf_tier_accuracy.py --uninstall-task         # Windows
 """
+import json
 import os
 import sys
-import json
 
 # 让脚本被直接执行时能 import wyckoff
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from wyckoff.pnf_accuracy import (
-    PNF_ACC_DIR, PNF_ACC_LATEST, run_eval, install_cron, install_task,
+    PNF_ACC_DIR,
+    PNF_ACC_LATEST,
+    install_cron,
+    install_task,
+    run_eval,
 )
 
 

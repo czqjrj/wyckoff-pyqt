@@ -9,7 +9,7 @@ snap=True 时 X 吸附到最近的整数刻度 (K线图柱索引), 竖线始终�
 on_move(idx) 回调在光标位置变化后触发 (供 OHLC 信息条刷新)。
 """
 import pyqtgraph as pg
-from pyqtgraph.Qt.QtCore import QPointF, Qt, pyqtSignal, QObject
+from pyqtgraph.Qt.QtCore import QObject, QPointF, Qt, pyqtSignal
 from pyqtgraph.Qt.QtGui import QFont
 
 from . import theme

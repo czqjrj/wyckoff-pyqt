@@ -82,6 +82,203 @@ def vol_wave(df, window=40):
     return (up if up == up else 0.0), (dn if dn == dn else 0.0)
 
 
+def parallel_map(codes, fn, workers=8, stop_fn=None, progress=None, on_result=None):
+    """线程池并行映射: 对 codes 逐项调用 fn(code), 收集结果。
+
+    供全市场扫描 (`entries.scan_entries_parallel` 等) 复用; 为并行框架的
+    唯一实现 (避免各扫描引擎各写一套 ThreadPoolExecutor)。
+
+    参数:
+      codes        可迭代的条目 (str 代码)
+      fn(code)     单条处理函数; 正常返回任意结果 (会在结果里收集),
+                   返回 None 或抛异常则跳过该条
+      workers      并发数 (自动 clamp 到 [1, 12]; 0/负/None 视为串行)
+      stop_fn()    可选; 调用返回 True 时尽早停止派发/收集
+      progress(done, total, code)  可选进度回调
+      on_result(r, code) 可选; 每条 fn 返回非 None 结果时的增量回调
+                    (r=结果, code=条目; UI 流式刷新用)
+    返回 [fn(code) for code in codes 中结果非 None 的项] (不保证顺序)。
+    """
+    items = [c for c in (codes or []) if c is not None]
+    total = len(items)
+    if total == 0:
+        return []
+    nw = max(1, min(int(workers or 1), 12)) if workers else 1
+    out = []
+    lock = threading.Lock()
+    done = [0]
+
+    if nw == 1:
+        for i, c in enumerate(items):
+            if stop_fn is not None and stop_fn():
+                break
+            try:
+                if progress is not None:
+                    progress(i + 1, total, c)
+                r = fn(c)
+            except Exception:
+                r = None
+            if r is not None:
+                if on_result is not None:
+                    try:
+                        on_result(r, c)
+                    except Exception:
+                        pass
+                out.append(r)
+        return out
+
+    def _work(c):
+        try:
+            return fn(c)
+        except Exception:
+            return None
+
+    def _done(fut, c):
+        with lock:
+            done[0] += 1
+            if progress is not None:
+                try:
+                    progress(done[0], total, c)
+                except Exception:
+                    pass
+        try:
+            r = fut.result()
+        except Exception:
+            r = None
+        if r is not None:
+            if on_result is not None:
+                try:
+                    on_result(r, c)
+                except Exception:
+                    pass
+            with lock:
+                out.append(r)
+
+    fut_map = {}
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=nw) as ex:
+            for i, c in enumerate(items):
+                if stop_fn is not None and stop_fn():
+                    break
+                fut = ex.submit(_work, c)
+                fut_map[fut] = c
+                fut.add_done_callback(lambda f, _c=c: _done(f, _c))
+            for fut in list(fut_map.keys()):
+                if stop_fn is not None and stop_fn():
+                    break
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+    except Exception:
+        for i, c in enumerate(items):
+            if stop_fn is not None and stop_fn():
+                break
+            try:
+                if progress is not None:
+                    progress(i + 1, total, c)
+                r = fn(c)
+            except Exception:
+                r = None
+            if r is not None:
+                out.append(r)
+    return out
+
+
+def analyze_light(codes_str, datalen=500, scale=240,
+                  fetch_kline=None, add_indicators=None,
+                  find_pivots=None, detect_all=None, judge_phase=None):
+    """单只股票的"轻量"统一分析管线, 供全市场扫描 (`entries._scan_one`) 复用。
+
+    这是全项目技术管线 (K线指标 + 枢轴 + 事件 + 阶段) 的唯一共享入口:
+      scan_adv._load_df / backtest.classify_phase / screener.score_stock /
+      paper.pick_candidates 此前各自手写同一段代码, 参数 (datalen/pivot order/
+      scale) 稍有偏差就会静默分叉。统一收敛到这里, 保证所有扫描同口径。
+
+    参数: 顶层函数注入 (便于测试打桩), 与 entries._scan_one 的调用约定一致。
+      fetch_kline(symbol, datalen=datalen, scale=scale) -> df (含 close/day 列)
+      add_indicators(df, symbol=symbol)           -> 带指标列的 df
+      find_pivots(df, order=6)                     -> pivots
+      detect_all(df, pivots)                       -> events
+      judge_phase(df, pivots, events)              -> (phase, detail)
+    仅网络相关 (板块/资金流/大盘/名称) 由本函数内部抓取 (全部 fail-soft)。
+
+    返回 dict:
+      {df, phase, events, pivots, name, sector, market_series, flow}
+      - sector: {"name": <东财行业板块名>} 或 None (板块缺失时缺省)
+      - flow: 主力资金流 DataFrame (day/main/...) 或 None
+      - market_series: 上证指数日线 (含 price_ma20) 或 None
+      任一步失败不抛异常: 返回的 dict 对应字段为 None/空, 由调用方 fail-soft。
+    """
+    try:
+        from .utils import normalize_symbol
+    except Exception:
+        raise
+    out = {"df": None, "phase": "", "events": None, "pivots": None,
+           "name": "", "sector": None, "market_series": None, "flow": None}
+    if add_indicators is None or find_pivots is None \
+            or detect_all is None or judge_phase is None:
+        return out
+    try:
+        symbol = normalize_symbol(codes_str)
+    except Exception:
+        return out
+
+    # ── 技术管线 (注入) ──
+    df = None
+    try:
+        if fetch_kline is not None:
+            df = fetch_kline(symbol, datalen=datalen, scale=scale)
+        else:
+            from .datasource import fetch_kline as _fk
+            df = _fk(symbol, datalen=datalen, scale=scale)
+        if df is not None and add_indicators is not None:
+            df = add_indicators(df, symbol=symbol)
+    except Exception:
+        df = None
+    out["df"] = df
+    if df is None or len(df) == 0:
+        return out
+
+    pivots = events = None
+    phase = ""
+    try:
+        pivots = find_pivots(df, order=6)
+        events = detect_all(df, pivots)
+        phase, _ = judge_phase(df, pivots, events)
+    except Exception:
+        pass
+    out["pivots"] = pivots
+    out["events"] = events
+    out["phase"] = phase
+
+    # ── 网络字段 (全部 fail-soft) ──
+    try:
+        from .datasource import fetch_name
+        out["name"] = fetch_name(symbol) or ""
+    except Exception:
+        out["name"] = ""
+    try:
+        from .fundamental import fetch_sector
+        _sec = fetch_sector(symbol)
+        if _sec:
+            out["sector"] = {"name": _sec}
+    except Exception:
+        out["sector"] = None
+    try:
+        from .fundamental import fetch_main_flow
+        out["flow"] = fetch_main_flow(symbol, 120)
+    except Exception:
+        out["flow"] = None
+    try:
+        from .market import fetch_market_series
+        out["market_series"] = fetch_market_series()
+    except Exception:
+        out["market_series"] = None
+    return out
+
+
 def run_pending_eval(records, evaluator, horizons, load, save, key,
                      lock, force=False, min_interval=3600, max_records=20):
     """对缺评估周期的记录补评估 (accuracy/signal_accuracy 共用核心)。

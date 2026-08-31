@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QGridLayout,
@@ -143,6 +144,11 @@ class PaperWindow(QDialog):
         self.summary.setWordWrap(True)
         root.addWidget(self.summary)
 
+        # 扫描状态栏
+        self.scan_info = QLabel("扫描就绪")
+        self.scan_info.setStyleSheet("font-size: 12px; color: #666;")
+        root.addWidget(self.scan_info)
+
         # 操作行
         hb = QHBoxLayout()
         self.btn_cycle = _ghost_btn("执行一个周期 (筛选+下单+卖出)")
@@ -171,6 +177,16 @@ class PaperWindow(QDialog):
         hb.addStretch(1)
         root.addLayout(hb)
         root.addLayout(hb_mode)
+        # 手动扫描区域
+        hb_scan = QHBoxLayout()
+        self.cb_scan_type = QComboBox()
+        self.cb_scan_type.addItems(["纪律扫描(强多头+硬门禁)"])
+        self.btn_scan = QPushButton("扫描")
+        self.btn_scan.clicked.connect(self._on_scan_now)
+        hb_scan.addWidget(self.cb_scan_type)
+        hb_scan.addWidget(self.btn_scan)
+        hb_scan.addStretch(1)
+        root.addLayout(hb_scan)
         # 定时器: 每30分钟(默认)或15分钟自动执行周期
         self.timer = QTimer(self)
         # 默认间隔: 30分钟 (auto_on_30 被勾选)
@@ -184,6 +200,7 @@ class PaperWindow(QDialog):
         # 默认启动定时器 (30分钟模式)
         self.timer.start()
         self.timer.timeout.connect(self.refresh)
+        self._scan_count = 0
 
         # 策略参数配置 (放在模拟盘窗口内)
         root.addWidget(self._build_config_group())
@@ -338,6 +355,38 @@ class PaperWindow(QDialog):
         from wyckoff.paper import apply_paper_params
         apply_paper_params(self._settings)
         self.refresh()
+
+    # ── 扫描相关 ──
+    def _update_scan_info(self, st=None):
+        """刷新扫描状态栏 (读取 paper state, 不触发网络/扫描)。"""
+        from wyckoff.paper import load_state
+        if st is None:
+            st = load_state()
+        self._scan_count = st.get("scan_count", 0)
+        last_time = st.get("last_scan_time", "")
+        next_time = st.get("next_scan_time", "")
+        result_str = st.get("last_scan_result", "")
+        _t = ("扫描状态: 完成\n"
+              f"今日次数: {self._scan_count}\n"
+              f"上次扫描: {last_time[:16] if last_time else '--'}\n"
+              f"下次扫描: {next_time[:16] if next_time else '--'}\n"
+              f"结果: {result_str[:30] if result_str else ''}")
+        self.scan_info.setText(_t)
+
+    def _auto_scan(self):
+        """定时器回调: 执行一次扫描并刷新扫描状态。"""
+        self._on_scan_now()
+
+    def _on_scan_now(self):
+        """扫描按钮点击事件 / 定时器回调入口。
+
+        纪律扫描统一走 wyckoff.paper.run_scan, 内部通过 pick_candidates 执行
+        强多头事件 + conf≥阈值 + 大盘/板块/资金流硬门禁。
+        """
+        from wyckoff.paper import load_state, run_scan
+        st = load_state()
+        run_scan(st, scan_type="discipline", n_codes=20)
+        self._update_scan_info(st)
 
     # ── 动作 ──
     def _run_cycle(self):

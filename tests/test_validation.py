@@ -166,8 +166,8 @@ def test_validation_lines_render():
     recs = _mk_records(100, seed=7)
     lines = validation_lines(recs, horizon=20)
     assert isinstance(lines, list) and lines
-    assert any("置信度IC" in l for l in lines)
-    assert any("随机入场基准" in l for l in lines)
+    assert any("置信度IC" in line for line in lines)
+    assert any("随机入场基准" in line for line in lines)
 
 
 # ───────────────────────── 6. 准确性规则化解读 ─────────────────────────

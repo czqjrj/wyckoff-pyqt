@@ -835,7 +835,7 @@ class MktWidget(HoverHighlightMixin, BasePlotWidget):
 
     def _show_shortcuts_help(self):
         """显示快捷键帮助对话框。"""
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
         dlg = QDialog(self)
         dlg.setWindowTitle("资金透视快捷键")
         dlg.setModal(True)

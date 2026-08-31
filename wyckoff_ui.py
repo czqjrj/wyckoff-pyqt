@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Wyckoff 分析客户端 (PyQt6 版) 入口。
 
 用法:

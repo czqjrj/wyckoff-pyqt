@@ -193,7 +193,6 @@ def detect_climaxes(ctx: _EventContext):
     span = np.where(ctx.hi40 - ctx.lo40 > 1e-9, ctx.hi40 - ctx.lo40, 1e-9)
 
     lo_zone = (cvals - ctx.lo40) / span < 0.15
-    hi_zone = (ctx.hi40 - cvals) / span < 0.15
     vol_ok = ctx.vol_ratio_20 >= 1.6
     vol_hi = ctx.vol_ratio_20 >= 2.0
 

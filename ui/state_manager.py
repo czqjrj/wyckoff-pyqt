@@ -1,14 +1,8 @@
 """状态管理器: 统一管理设置持久化、窗口状态、面板宽度等。"""
 from __future__ import annotations
 
-from typing import Any
-from datetime import datetime as _dt
-
-from wyckoff.config import SCALE_OPTIONS, PERIOD_OPTIONS
-from wyckoff.settings_keys import S, DEFAULTS
-from wyckoff.storage import load_settings, save_settings, load_watchlist, save_watchlist
-
-from . import theme
+from wyckoff.settings_keys import DEFAULTS, S
+from wyckoff.storage import load_settings, load_watchlist, save_settings, save_watchlist
 
 
 class StateManager:

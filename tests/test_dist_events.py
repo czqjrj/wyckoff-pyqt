@@ -57,7 +57,8 @@ def _mkdf_dist(pts):
     closes[i0 + 1:i1 + 1] = np.linspace(closes[i0], 9.0, i1 - i0)
     # SOW 后走弱
     closes[pts["sow"] + 1:] = 8.8
-    opens = np.roll(closes, 1); opens[0] = closes[0]
+    opens = np.roll(closes, 1)
+    opens[0] = closes[0]
     highs = np.maximum(opens, closes) * 1.02
     lows = np.minimum(opens, closes) * 0.98
     vols = np.full(n, 1e6)
@@ -182,7 +183,8 @@ def test_shakeout_when_breakdown_recovers():
     df = _mkdf_dist(_PTS)
     # SOW 处放量破位后快速收复 (逐根回升, 不再创出新低)
     df.loc[_PTS["sow"] + 1:, "close"] = np.linspace(9.2, 9.6, len(df) - _PTS["sow"] - 1)
-    df["open"] = np.roll(df["close"], 1); df.loc[0, "open"] = df["close"].iloc[0]
+    df["open"] = np.roll(df["close"], 1)
+    df.loc[0, "open"] = df["close"].iloc[0]
     df["high"] = np.maximum(df["open"], df["close"]) * 1.01
     df["low"] = np.minimum(df["open"], df["close"]) * 0.995
     df = add_indicators(df, symbol="600104")
@@ -215,7 +217,8 @@ def test_shakeout_when_new_low_but_fast_rebound():
         np.full(n_post - 12, 11.5)          # 剩余维持高位
     ])
     df.loc[_PTS["sow"] + 1:, "close"] = closes_post
-    df["open"] = np.roll(df["close"], 1); df.loc[0, "open"] = df["close"].iloc[0]
+    df["open"] = np.roll(df["close"], 1)
+    df.loc[0, "open"] = df["close"].iloc[0]
     df["high"] = np.maximum(df["open"], df["close"]) * 1.01
     df["low"] = np.minimum(df["open"], df["close"]) * 0.995
     df = add_indicators(df, symbol="600104")

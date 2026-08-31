@@ -24,14 +24,13 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QScrollArea
 from pyqtgraph.Qt import QtGui
-from pyqtgraph.Qt.QtCore import Qt
+from pyqtgraph.Qt.QtCore import Qt, pyqtSignal
 
 from wyckoff.config import FONT_CANDIDATES
 
 from . import theme
 from .base_plot import BasePlotWidget, HoverHighlightMixin
 from .constants import IND_ASPECT, IND_DEFAULT_BARS
-from pyqtgraph.Qt.QtCore import pyqtSignal
 
 # 面板注册表 (声明式, 支持扩展) — 见 ui.ind_panels
 from .ind_panels import get_panels  # noqa: E402
@@ -812,7 +811,7 @@ class IndWidget(HoverHighlightMixin, BasePlotWidget):
 
     def _show_shortcuts_help(self):
         """显示快捷键帮助对话框。"""
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
         dlg = QDialog(self)
         dlg.setWindowTitle("技术指标快捷键")
         dlg.setModal(True)

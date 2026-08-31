@@ -103,22 +103,22 @@ def _rebuild_bar_col(df, box, reversal=3):
     cols = []
     bar_col = [0] * n
     for i in range(1, n):
-        h, l = r(highs[i]), r(lows[i])
+        hi, lo = r(highs[i]), r(lows[i])
         if cur["type"] == "X":
             top = cur["rows"][-1]
-            if h > top:
-                cur["rows"].extend(range(top + 1, h + 1))
-            elif l <= top - reversal:
+            if hi > top:
+                cur["rows"].extend(range(top + 1, hi + 1))
+            elif lo <= top - reversal:
                 cols.append(cur)
-                cur = {"type": "O", "rows": list(range(l, top))}
+                cur = {"type": "O", "rows": list(range(lo, top))}
                 bar_col[i] = len(cols)
         else:
             bottom = cur["rows"][0]
-            if l < bottom:
-                cur["rows"] = list(range(l, bottom)) + cur["rows"]
-            elif h >= bottom + reversal:
+            if lo < bottom:
+                cur["rows"] = list(range(lo, bottom)) + cur["rows"]
+            elif hi >= bottom + reversal:
                 cols.append(cur)
-                cur = {"type": "X", "rows": list(range(bottom + 1, h + 1))}
+                cur = {"type": "X", "rows": list(range(bottom + 1, hi + 1))}
                 bar_col[i] = len(cols)
     cols.append(cur)
     out = [c for c in cols if c["rows"]]

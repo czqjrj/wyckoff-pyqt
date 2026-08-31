@@ -1302,14 +1302,13 @@ class MainWindow(QMainWindow):
         # 账户私有仓地址不预填/不写死: 由用户自行输入自己的仓库地址
         def _login():
             from wyckoff import account
-            from wyckoff import profile_sync
             ok, msg = account.login(
                 ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
             if ok:
                 # 自动初始化/应用 profile sync
                 try:
                     psync.setup(account.current_repo_url())
-                except Exception as e:
+                except Exception:
                     pass  # sync init non-fatal, 可在菜单里手动触发
                 dlg.accept()
             else:
@@ -1317,14 +1316,13 @@ class MainWindow(QMainWindow):
 
         def _register():
             from wyckoff import account
-            from wyckoff import profile_sync
             ok, msg = account.register(
                 ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
             if ok:
                 # 注册成功后自动绑定仓并初始化 sync
                 try:
                     psync.setup(account.current_repo_url())
-                except Exception as e:
+                except Exception:
                     pass  # sync init non-fatal
                 dlg.accept()
             else:

@@ -300,7 +300,6 @@ def score_stock(code, datalen=500):
     }
     """
     fund = _ensure_fund()
-    flt = _ensure_filters()
     result = {
         "code": code, "name": "", "last": None, "phase": "",
         "phase_base": "", "signals": [], "signals_valid": [],

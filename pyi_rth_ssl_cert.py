@@ -1,4 +1,6 @@
-import os, sys
+import os
+import sys
+
 if getattr(sys, 'frozen', False):
     _base = sys._MEIPASS
     _cert = os.path.join(_base, 'certifi', 'cacert.pem')

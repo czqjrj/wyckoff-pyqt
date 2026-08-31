@@ -177,7 +177,6 @@ def _build_impulse(pts, seq, end):
             "label": f"{k+1}浪",
         })
     # 浪5结束点 = pts[4] (最后一浪终点)
-    w5_start, w5_end = pts[3][1], pts[4][1]
     # 当前浪位: 若最新枢轴就是 pts[4], 推动浪完成 → 待回调; 否则可能已进入回调
     last_idx = seq[-1][2] if seq else -1
     done = pts[4][2] >= last_idx - 2

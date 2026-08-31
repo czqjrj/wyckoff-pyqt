@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 
-from .config import EVENT_COLORS, event_dir
+from .config import EVENT_COLORS
 from .paths import ONLINE_MODEL_FILE
 
 try:
@@ -394,7 +394,7 @@ def install_cron(hour=None, minute=11):
                                       text=True)
     except subprocess.CalledProcessError:
         cur = ""
-    lines = [l for l in cur.splitlines() if "wyckoff.online_model" not in l]
+    lines = [line for line in cur.splitlines() if "wyckoff.online_model" not in line]
     if hour is not None:
         hour = max(0, min(23, int(hour)))
         minute = max(0, min(59, int(minute)))

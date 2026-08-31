@@ -87,7 +87,6 @@ def test_fundamental_filter_healthy_and_trap():
 
 
 def test_flow_gate_directions():
-    n = 40
     df = _mk_df(n=160)
     inflow = _mk_flow(np.r_[np.full(20, -1e7), np.full(20, 5e7)])
     outflow = _mk_flow(np.r_[np.full(20, 1e7), np.full(20, -5e7)])

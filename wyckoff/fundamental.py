@@ -109,6 +109,27 @@ def fetch_market_universe(n: int = 100):
     return codes
 
 
+def universe(n: int = 100):
+    """全市场活跃股宇宙统一入口: 东财成交额Top-N 优先, 接口失败回退本地抽样。
+
+    返回 (codes, src); src ∈ {"top" (成交额Top), "local" (本地抽样), "" (不可用)}。
+    网络/接口不可用时自动降级为本地 A 股抽样, 不抛异常。
+    """
+    try:
+        codes = fetch_market_universe(n)
+        if codes:
+            return codes, "top"
+    except Exception:
+        pass
+    try:
+        codes = local_universe(n)
+        if codes:
+            return codes, "local"
+    except Exception:
+        pass
+    return [], ""
+
+
 def local_universe(n: int = 300):
     """离线兜底宇宙: 从本地全A名单 (ALL_STOCKS_FILE, ~5900只) 等距抽样 n 只。
 
@@ -283,16 +304,20 @@ def fetch_sector(symbol: str):
         if cached and now - cached[0] < _SECTOR_NAME_TTL:
             return cached[1]
     out = None
-    with _EM_STOCK_SEM:
-        r = _get("https://push2.eastmoney.com/api/qt/stock/get",
-                 {"secid": secid, "fields": "f57,f100,f127"},
-                 {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"})
-    if r is not None:
-        try:
-            d = (r.json().get("data") or {})
-            out = str(d.get("f127") or d.get("f100") or "").strip() or None
-        except (ValueError, KeyError):
-            out = None
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"}
+    # 主用 push2, 失败 (部分网络/地区会 RemoteDisconnected 被墙) 时回退 push2delay
+    for host in ("https://push2.eastmoney.com/api/qt/stock/get",
+                 "https://push2delay.eastmoney.com/api/qt/stock/get"):
+        with _EM_STOCK_SEM:
+            r = _get(host, {"secid": secid, "fields": "f57,f100,f127"}, headers)
+        if r is not None:
+            try:
+                d = (r.json().get("data") or {})
+                out = str(d.get("f127") or d.get("f100") or "").strip() or None
+            except (ValueError, KeyError):
+                out = None
+        if out is not None:
+            break
     with _LOCK:
         _SECTOR_NAME_CACHE[symbol] = (time.time(), out)
     return out
