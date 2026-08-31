@@ -13,7 +13,6 @@
   python scripts/paper_replay_bt.py --export docs/paper_replay_trades.csv
 """
 import argparse
-import json
 import os
 import sys
 
@@ -37,8 +36,8 @@ def load_stock_events(code, min_conf, datalen):
     events: [{idx, type, conf}] 强多头事件 (已经 conf≥min_conf 过滤)。
     """
     from wyckoff.datasource import fetch_kline
-    from wyckoff.indicators import add_indicators, find_pivots
     from wyckoff.events import detect_all
+    from wyckoff.indicators import add_indicators, find_pivots
 
     df = add_indicators(fetch_kline(code, datalen=datalen, scale=240), symbol=code)
     if df is None or len(df) < 120:
@@ -65,7 +64,7 @@ def load_stock_events(code, min_conf, datalen):
         pass
     chain_key = ""
     try:
-        from wyckoff.chain import chain_cap_key, chain_factor_for
+        from wyckoff.chain import chain_cap_key
         chain_key = chain_cap_key(sector) or ""
     except Exception:
         pass
@@ -76,9 +75,33 @@ def load_stock_events(code, min_conf, datalen):
         "day": list(df["day"]),
         "open": list(df["open"].astype(float)),
         "low": list(df["low"].astype(float)),
+        "high": list(df["high"].astype(float)),
         "close": list(df["close"].astype(float)),
+        "volume": list(df["volume"].astype(float)),
         "events": events,
     }
+
+
+def load_market_gate(datalen=850):
+    """加载上证指数日线并构建 date -> (close, ma20) 映射, 供大盘20日线门禁用。
+
+    返回 dict {date: (close, ma20)}; 失败返回 None。
+    注意: 大盘门禁的历史重建用指数历史前缀因果计算 (MA20仅用当日及之前数据, 无前视)。
+    """
+    try:
+        from wyckoff.datasource import fetch_kline
+        from wyckoff.indicators import add_indicators
+        df = add_indicators(fetch_kline("sh000001", datalen=datalen, scale=240))
+        if df is None or len(df) < 60:
+            return None
+        m = {}
+        for d, cl, ma in zip(df["day"], df["close"].astype(float),
+                             df["price_ma20"]):
+            if ma is not None and pd.notna(ma):
+                m[d] = (float(cl), float(ma))
+        return m
+    except Exception:
+        return None
 
 
 def newest_buyable(rec, j, window=10):
@@ -96,7 +119,45 @@ def newest_buyable(rec, j, window=10):
     return best
 
 
-def replay(stocks, params):
+def _flow_score(rec, j, back=5):
+    """资金流分 (因果历史代理): 截至 bar j 的近 back 根量价资金净流入占比 (无量纲)。
+
+    口径与 wyckoff.phases.flow_confirmed 一致: Σ(body×vol)/Σ(|body|×vol) ∈ [-1,1],
+    仅用 <=j 的历史K线 (无前视)。数据不足 → None。
+    """
+    if j < back:
+        return None
+    import numpy as np
+    b = np.asarray(rec["close"][j - back + 1: j + 1]) - np.asarray(rec["open"][j - back + 1: j + 1])
+    v = np.asarray(rec["volume"][j - back + 1: j + 1])
+    num = float(np.sum(b * v))
+    den = float(np.sum(np.abs(b) * v)) or 1.0
+    return num / den
+
+
+def _sector_gate_ok(rec, ts, gate=0.60):
+    """板块强度门禁(历史快照): 信号日板块强度百分位 >= gate。
+
+    口径与模拟盘一致: 用 chain.strength_at 查信号日前最近快照 (无前视)。
+    与实盘不同: 实盘 fetch_sector 若缺失板块会 fail-close; 但回测 K 线里板块映射
+    缺失普遍存在 (load_stock_events 未填 sector), 若照搬 fail-close 会把整段历史
+    清空。故此处按"贴近模拟盘"的回测口径采用 fail-open —— 无板块映射或快照断档
+    时放行, 仅有真实分位 < gate 才拦截 (有数据才真正过滤)。返回 (ok, reason)。
+    """
+    sector = (rec.get("sector") or "").strip()
+    if not sector:
+        return True, "无板块映射(放行)"
+    try:
+        from wyckoff.chain import strength_at
+        pct = strength_at(sector, ts=pd.Timestamp(ts))
+    except Exception:
+        return True, "板块快照查询异常(放行)"
+    if pct is None:
+        return True, f"板块「{sector}」无历史快照(放行)"
+    return (pct >= gate), f"板块强度{pct*100:.0f}分位"
+
+
+def replay(stocks, params, market_gate=None):
     from wyckoff.settings_keys import S
     paper.apply_paper_params({
         S.Paper.INIT_CASH: params["init_cash"],
@@ -189,10 +250,36 @@ def replay(stocks, params):
                         continue
                 except Exception:
                     pass
+            # E: 资金流门禁 (因果历史代理, 跨日截面中位) —
+            #    先收集每只候选的资金流分 (近5根量价净流入占比); None=数据不足 fail-close。
+            flow_score = None
+            if params.get("flow_gate"):
+                flow_score = _flow_score(rec, j)
+                if flow_score is None:
+                    continue
+            # F: 板块强度门禁 (历史快照) — 有快照按分位过滤, 无快照放行
+            if params.get("sect_gate"):
+                s_ok, _sr = _sector_gate_ok(rec, ts=pd.Timestamp(D))
+                if not s_ok:
+                    continue
             cands.append((ev["conf"], code, ev["type"], rec["open"][j],
-                          rec["chain"]))
+                          rec["chain"], flow_score))
         cands.sort(key=lambda x: -x[0])
-        for conf, code, typ, open_px, chain in cands:
+        # 大盘20日线门禁: 仅当日上证收盘 > MA20 才开新仓 (因果历史重建, 无前视)
+        if params.get("mkt_gate") and market_gate is not None:
+            mk = market_gate.get(D)
+            if mk is None or not (mk[0] > mk[1]):
+                cands = []
+        # E: 资金流门禁(因果代理) — 跨日截面: 当日候选池净流入分 ≥ 中位才保留。
+        #    镜像 paper._flow_net5 + pick_candidates 的"净流入>50分位" (fail-close)。
+        if params.get("flow_gate") and cands:
+            scores = sorted([c[5] for c in cands if c[5] is not None])
+            if scores:
+                med = scores[len(scores) // 2]
+                cands = [c for c in cands if c[5] is not None and c[5] >= med]
+            else:
+                cands = []  # 无任何资金流分 → fail-close
+        for conf, code, typ, open_px, chain, flow_score in cands:
             if len(st["positions"]) >= cfg["max_pos"]:
                 break
             if paper.has_position(st, code):
@@ -231,6 +318,24 @@ def build_report(st, params):
              f"conf≥{params['min_conf']} · 持{params['hold_bars']}K · "
              f"止损-{params['stop_loss']*100:.0f}% · 止盈+{params['take_profit']*100:.0f}% · "
              f"单边成本{params['cost']*100:.2f}%")
+    L.append("- 强多头事件过滤: Spring/Shakeout/ST/LPS/SC")
+    gates_on = [
+        ("大盘20日线" if params.get("mkt_gate") else None),
+        ("资金流(因果代理)" if params.get("flow_gate") else None),
+        ("板块强度(历史快照)" if params.get("sect_gate") else None),
+    ]
+    on = [g for g in gates_on if g]
+    L.append(f"- 硬门禁: {('、'.join(on)) if on else '全部关闭'}")
+    L.append("")
+    if params.get("flow_gate") or params.get("sect_gate"):
+        L.append("> 门禁口径备注: 大盘门禁用历史前缀因果重建(收盘>MA20); 资金流门禁用"
+                 "近5根量价净流入占比, 按『当日候选池 ≥ 截面中位』过滤(fail-close, "
+                 "与实盘『净流入>50分位』一致; 属可回测的因果量价代理而非真实主力资金流); "
+                 "板块强度门禁用历史快照分位≥0.6(个股板块已通过 fetch_sector 注入, "
+                 "但板块强度快照仅自 2026-08 起, 回测区间此前无快照故 fail-open 放行, "
+                 "仅末尾有真实分位才过滤)。")
+    else:
+        L.append("> 局限: 板块强度>60分位 与 资金流净流入>50分位 两道门禁缺历史数据，本次回测未执行（仅执行可历史重建的大盘20日线门禁 + 强多头事件 + conf≥90 + 结构位止损 + 持仓上限3）。")
     L.append("")
     L.append("### 收益统计")
     L.append("")
@@ -269,6 +374,18 @@ def build_report(st, params):
         L.append("|---|---|---|---|")
         for t, b in sorted(s["by_type"].items(), key=lambda kv: -kv[1]["n"]):
             L.append(f"| {t} | {b['n']} | {b['win']*100:.0f}% | {b['avg']*100:+.2f}% |")
+    if params.get("sect_gate"):
+        L.append("")
+        L.append("### 局限")
+        L.append("")
+        L.append("- 板块强度门禁虽已通过 fetch_sector 为个股注入真实板块，但板块强度历史快照"
+                 "(wx_board_snap.json) 仅自 2026-08 起，回测区间(2023-06~2026-08)此前信号"
+                 "均落在快照之前 → fail-open 放行，故本门禁在历史回测中近乎空转，"
+                 "仅在末尾快照窗内才有真实过滤。")
+        L.append("- 要让板块门禁真正参与历史回测，需回填板块强度快照的历史序列(按日/按周回填"
+                 "东财行业板块分位)，使 strength_at 在回测区间内均能取到可信分位。")
+        L.append("- 资金流门禁为『近5根量价净流入占比 ≥ 当日候选池截面中位』的因果量价代理，"
+                 "非真实主力资金流(实盘用东财 main 净流入)；两者在量价承接方向一致但取值口径不同。")
     L.append("")
     L.append("*历史回放，不构成投资建议。*")
     return "\n".join(L), s
@@ -290,7 +407,15 @@ def main():
     ap.add_argument("--chain-min-pct", type=float, default=0,
                     help="强链过滤: 只交易信号日板块强度≥该分位(0~1)的链条内个股, "
                          "用历史快照无前视 (0=关闭)")
+    ap.add_argument("--mkt-gate", action="store_true",
+                    help="大盘20日线门禁: 仅当日上证收盘>MA20才开新仓 (因果历史重建)")
+    ap.add_argument("--flow-gate", action="store_true",
+                    help="资金流门禁(因果代理): 信号日近5根量价净流入占比>0 (fail-close)")
+    ap.add_argument("--sect-gate", action="store_true",
+                    help="板块强度门禁: 历史快照分位≥0.6 (无快照期放行, 有数据才过滤)")
     ap.add_argument("--start", default="", help="回放起始日期 YYYY-MM-DD")
+    ap.add_argument("--datalen", type=int, default=700,
+                    help="每只标的拉取的K线根数 (覆盖回放起始前的历史, 建议≥850覆盖3年)")
     ap.add_argument("--report", default="", help="写出报告 md 路径")
     ap.add_argument("--export", default="", help="导出逐笔 CSV 路径")
     args = ap.parse_args()
@@ -308,6 +433,9 @@ def main():
         "chain_cap": args.chain_cap,
         "chain_min_pct": args.chain_min_pct,
         "start": args.start,
+        "mkt_gate": args.mkt_gate,
+        "flow_gate": args.flow_gate,
+        "sect_gate": args.sect_gate,
     }
 
     # universe
@@ -323,11 +451,13 @@ def main():
 
     print(f"扫描 {len(uni)} 只: conf≥{params['min_conf']} 持仓≤{params['max_pos']} "
           f"持{params['hold_bars']}K 止损-{params['stop_loss']*100:.0f}% "
-          f"止盈+{params['take_profit']*100:.0f}% 成本{params['cost']*100:.2f}%")
+          f"止盈+{params['take_profit']*100:.0f}% 成本{params['cost']*100:.2f}% "
+          f"门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
+          f"/板块{'开' if args.sect_gate else '闭'}")
     stocks = []
     for i, code in enumerate(uni):
         try:
-            rec = load_stock_events(code, params["min_conf"], datalen=700)
+            rec = load_stock_events(code, params["min_conf"], datalen=args.datalen)
         except Exception as e:
             print(f"  [{i+1}/{len(uni)}] {code} 失败: {e}")
             rec = None
@@ -337,7 +467,10 @@ def main():
         print(f"  [{i+1}/{len(uni)}] {code} 事件{len(rec['events'])}个", flush=True)
 
     print(f"\n有效股票 {len(stocks)} 只, 开始回放 ...")
-    st = replay(stocks, params)
+    market_gate = load_market_gate() if args.mkt_gate else None
+    if args.mkt_gate:
+        print("大盘20日线门禁: 已启用" if market_gate else "大盘20日线门禁: 已启用(指数数据缺失, 视为不满足)")
+    st = replay(stocks, params, market_gate=market_gate)
 
     if args.export:
         import csv

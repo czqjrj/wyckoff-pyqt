@@ -463,16 +463,19 @@ def scan_sectors():
 
 
 def scan_sector_stocks(bk_code: str, board_name: str, limit: int = 30,
-                       confirm_enabled: bool = True, on_result=None):
+                       confirm_enabled: bool = True, on_result=None,
+                       workers: int = 6):
     """扫描单个板块成份股。
     主源: 东财 push2 fetch_board_constituents → 后备: 全市场活跃股 + 板块名过滤 → 兜底: 空列表。
-    返回 [{code, name, last, phase, conf_q, flow20, sector, score, signals}, ...]。"""
+    返回 [{code, name, last, phase, conf_q, flow20, sector, score, signals}, ...]。
+    workers>1 时用线程池并行扫描 (fundamental 内部有 EM 并发信号量, API 安全)。"""
     stocks = fetch_board_constituents(bk_code, limit=limit)
     if not stocks:
         # 后备: 从全市场活跃股中按板块名匹配 (Sina 数据源可用)
         stocks = _fallback_constituents(board_name, limit)
-    results = []
-    for prefix_code, sname, sprice in stocks:
+
+    def _scan_one_stock(stock):
+        prefix_code, sname, sprice = stock
         code = prefix_code[-6:]
         try:
             r = scan_stock_signals(code, datalen=500, confirm_enabled=confirm_enabled,
@@ -484,11 +487,19 @@ def scan_sector_stocks(bk_code: str, board_name: str, limit: int = 30,
             else:
                 r["sector"] = board_name
             r["score"] = signal_score(r)
-            results.append(r)
+            return r
         except Exception:
-            results.append({"code": code, "name": sname, "phase": "错误", "signals": [],
-                            "last": sprice, "conf_q": "", "flow20": None, "pe": None,
-                            "sector": board_name, "sector20": None, "score": 0})
+            return {"code": code, "name": sname, "phase": "错误", "signals": [],
+                    "last": sprice, "conf_q": "", "flow20": None, "pe": None,
+                    "sector": board_name, "sector20": None, "score": 0}
+
+    if not stocks:
+        return []
+    if workers and workers > 1 and len(stocks) > 1:
+        from ._shared import parallel_map
+        results = parallel_map(stocks, _scan_one_stock, workers=workers)
+    else:
+        results = [_scan_one_stock(s) for s in stocks]
     results.sort(key=lambda x: (-x.get("score", 0), x["code"]))
     return results
 

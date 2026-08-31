@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import statistics
 import threading
@@ -29,7 +28,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
 
 try:
     import numpy as np
@@ -125,21 +123,21 @@ class AdvancedOrder:
     order_type: OrderType
     side: OrderSide
     qty: int
-    price: Optional[float] = None          # 限价
-    stop_price: Optional[float] = None     # 止损触发价
-    limit_price: Optional[float] = None    # 止损限价
-    trail_pct: Optional[float] = None      # 追踪止损百分比
-    trail_price: Optional[float] = None    # 追踪止损激活价
-    parent_id: Optional[str] = None        # 父订单 ID (用于 OCO/括号单)
+    price: float | None = None          # 限价
+    stop_price: float | None = None     # 止损触发价
+    limit_price: float | None = None    # 止损限价
+    trail_pct: float | None = None      # 追踪止损百分比
+    trail_price: float | None = None    # 追踪止损激活价
+    parent_id: str | None = None        # 父订单 ID (用于 OCO/括号单)
     child_ids: list = field(default_factory=list)  # 子订单 ID
     status: OrderStatus = OrderStatus.PENDING
     filled_qty: int = 0
     avg_fill_price: float = 0.0
     created_ts: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
     updated_ts: str = field(default_factory=lambda: time.strftime("%Y-%m-%d %H:%M:%S"))
-    expiry_ts: Optional[str] = None        # 过期时间
+    expiry_ts: str | None = None        # 过期时间
     tags: dict = field(default_factory=dict)  # 自定义标签 (如 strategy, confidence)
-    
+
     def to_dict(self) -> dict:
         return {
             "order_id": self.order_id,
@@ -163,9 +161,9 @@ class AdvancedOrder:
             "expiry_ts": self.expiry_ts,
             "tags": self.tags,
         }
-    
+
     @classmethod
-    def from_dict(cls, d: dict) -> "AdvancedOrder":
+    def from_dict(cls, d: dict) -> AdvancedOrder:
         return cls(
             order_id=d["order_id"],
             symbol=d["symbol"],
@@ -190,7 +188,7 @@ class AdvancedOrder:
         )
 
 
-@dataclass 
+@dataclass
 class PositionRisk:
     """持仓风险指标"""
     symbol: str
@@ -204,7 +202,7 @@ class PositionRisk:
     sector_exposure: float = 0.0           # 行业敞口
     concentration_risk: float = 0.0        # 集中度风险
     liquidity_risk: float = 0.0            # 流动性风险 (基于换手率/市值)
-    
+
     def to_dict(self) -> dict:
         return {
             "symbol": self.symbol,
@@ -281,7 +279,7 @@ _CUR = {
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
 try:
-    from .config import STRONG_TIER_TYPES, event_dir
+    from .config import STRONG_TIER_TYPES
     # SC/SOW_INVALID 方向为中性 (event_dir==0) 但属底部反转/空头失效, 一并纳入
     LONG_EVENT_TYPES = frozenset(
         {"Spring", "Shakeout", "ST", "LPS", "SC", "SOW_INVALID"}
@@ -367,25 +365,25 @@ def check_risk_budget(st, symbol: str, entry_price: float, stop_price: float,
     for p in st["positions"]:
         df_px = p.get("last", p["buy_px"])
         equity_val += df_px * p["qty"]
-    
+
     risk_per_share = abs(entry_price - stop_price)
     total_risk = risk_per_share * qty
     risk_pct = total_risk / equity_val if equity_val > 0 else 1.0
-    
+
     if risk_pct > _CUR["max_risk_pct"]:
         return False, f"单笔风险 {risk_pct*100:.1f}% 超过限制 {_CUR['max_risk_pct']*100:.1f}%"
     return True, ""
 
 
-def check_sector_concentration(st, symbol: str, sector: str, 
+def check_sector_concentration(st, symbol: str, sector: str,
                                new_mv: float, df_by_code: dict) -> tuple[bool, str]:
     """检查行业集中度。返回 (是否通过, 信息)。"""
     if not sector:
         return True, ""
-    
+
     total_mv = new_mv
     sector_mv = new_mv
-    
+
     for p in st["positions"]:
         df = df_by_code.get(p["symbol"])
         px = float(df["close"].iloc[-1]) if df is not None and len(df) else p.get("last", p["buy_px"])
@@ -393,7 +391,7 @@ def check_sector_concentration(st, symbol: str, sector: str,
         total_mv += mv
         if p.get("sector") == sector:
             sector_mv += mv
-    
+
     if total_mv > 0:
         conc = sector_mv / total_mv
         if conc > _CUR["max_sector_conc"]:
@@ -401,7 +399,7 @@ def check_sector_concentration(st, symbol: str, sector: str,
     return True, ""
 
 
-def check_single_concentration(st, symbol: str, new_mv: float, 
+def check_single_concentration(st, symbol: str, new_mv: float,
                                df_by_code: dict) -> tuple[bool, str]:
     """检查单股集中度。返回 (是否通过, 信息)。"""
     total_mv = new_mv
@@ -409,7 +407,7 @@ def check_single_concentration(st, symbol: str, new_mv: float,
         df = df_by_code.get(p["symbol"])
         px = float(df["close"].iloc[-1]) if df is not None and len(df) else p.get("last", p["buy_px"])
         total_mv += px * p["qty"]
-    
+
     if total_mv > 0:
         conc = new_mv / total_mv
         if conc > _CUR["max_single_conc"]:
@@ -422,11 +420,52 @@ def check_capital_usage(st, required_cash: float) -> tuple[bool, str]:
     equity_val = st["cash"]
     for p in st["positions"]:
         equity_val += p.get("last", p["buy_px"]) * p["qty"]
-    
+
     usage = 1.0 - (st["cash"] - required_cash) / equity_val if equity_val > 0 else 1.0
     if usage > _CUR["max_capital_usage"]:
         return False, f"资金利用率 {usage*100:.1f}% 超过限制 {_CUR['max_capital_usage']*100:.1f}%"
     return True, ""
+
+
+def _risk_blocks_entry(st, cand, price) -> bool:
+    """run_cycle 入场前的风控门禁聚合: 任一不满足则拦截该笔 (返回 True=拦截)。
+
+    复用已定义的风控函数 (此前 5 个均为死代码, 现接入入场路径):
+      回撤上限 / 单笔风险预算 / 行业集中度 / 单股集中度 / 资金利用率。
+    按候选现价预估仓位; 数据不足以精确判定时 (同持有 sector 缺失) fail-soft 放行,
+    仅在可判定且超限时拦截。
+    """
+    ok, msg = check_drawdown_limit(st)
+    if not ok:
+        st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+        return True
+    # 预估 qty (与 _make_order 同口径)
+    budget = st["cash"] * (1.0 / max(1, _CUR["max_pos"]))
+    entry = float(price)
+    qty = int(budget // (entry * (1 + SLIP_BUY)) // 100 * 100)
+    if qty <= 0:
+        return False
+    stop = entry * (1 - _CUR["stop_loss"])
+    ok, msg = check_risk_budget(st, cand["code"], entry, stop, qty)
+    if not ok:
+        st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+        return True
+    sector = cand.get("sector", "")
+    if sector:
+        new_mv = entry * qty
+        ok, msg = check_sector_concentration(st, cand["code"], sector, new_mv, {})
+        if not ok:
+            st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+            return True
+        ok, msg = check_single_concentration(st, cand["code"], new_mv, {})
+        if not ok:
+            st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+            return True
+    ok, msg = check_capital_usage(st, entry * qty + entry * qty * _CUR["cost"])
+    if not ok:
+        st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+        return True
+    return False
 
 
 def calculate_kelly_fraction(win_rate: float, avg_win: float, avg_loss: float) -> float:
@@ -454,18 +493,18 @@ def calculate_position_size(st, symbol: str, entry_price: float, stop_price: flo
     """
     if method is None:
         method = _CUR.get("sizing_method", PositionSizingMethod.EQUAL_WEIGHT.value)
-    
+
     equity_val = st["cash"]
     for p in st["positions"]:
         equity_val += p.get("last", p["buy_px"]) * p["qty"]
-    
+
     risk_per_share = abs(entry_price - stop_price)
     if risk_per_share <= 0:
         return 0
-    
+
     max_pos = _CUR["max_pos"]
     base_budget = equity_val / max_pos
-    
+
     if method == PositionSizingMethod.KELLY.value:
         # 基于历史统计计算 Kelly
         s = stats(st)
@@ -496,10 +535,10 @@ def calculate_position_size(st, symbol: str, entry_price: float, stop_price: flo
         budget = base_budget * conf_mult
     else:
         budget = base_budget
-    
+
     budget = min(budget, equity_val * _CUR["max_capital_usage"])
     budget = max(budget, MIN_LOT)
-    
+
     qty = int(budget // (entry_price * (1 + SLIP_BUY)) // 100 * 100)
     return max(0, qty)
 
@@ -518,22 +557,22 @@ def calculate_position_risk(st, symbol: str, df: any, benchmark_df: any = None) 
     pos = _find_pos(st, symbol)
     if pos is None:
         return PositionRisk(symbol, 0, 0, 0)
-    
+
     last_px = pos.get("last", pos["buy_px"])
     mv = last_px * pos["qty"]
     entry_px = pos["buy_px"]
     unrealized = (last_px - entry_px) * pos["qty"]
     unrealized_pct = (last_px / entry_px - 1) if entry_px > 0 else 0
-    
+
     # 计算收益率序列用于 VaR
     rets = []
     if df is not None and len(df) > 20:
         close = df["close"]
         rets = (close.pct_change().dropna()).tolist()
-    
+
     var_95 = calculate_var(rets, 0.95) * mv if rets else 0
     var_99 = calculate_var(rets, 0.99) * mv if rets else 0
-    
+
     # Beta 计算 (相对大盘)
     beta = 1.0
     if benchmark_df is not None and len(benchmark_df) == len(df) and rets:
@@ -545,7 +584,7 @@ def calculate_position_risk(st, symbol: str, df: any, benchmark_df: any = None) 
                 beta = cov / bench_var if bench_var > 0 else 1.0
         except Exception:
             pass
-    
+
     # 流动性风险 (简化: 基于换手率/市值)
     liquidity_risk = 0.0
     try:
@@ -557,7 +596,7 @@ def calculate_position_risk(st, symbol: str, df: any, benchmark_df: any = None) 
                 liquidity_risk = min(1.0, 1e8 / avg_amt)  # 1亿为基准
     except Exception:
         pass
-    
+
     return PositionRisk(
         symbol=symbol,
         market_value=mv,
@@ -575,7 +614,7 @@ def update_portfolio_risk(st, df_by_code: dict, benchmark_df: any = None) -> dic
     risks = {}
     sector_mv = {}
     total_mv = 0
-    
+
     for pos in st["positions"]:
         df = df_by_code.get(pos["symbol"])
         risk = calculate_position_risk(st, pos["symbol"], df, benchmark_df)
@@ -583,7 +622,7 @@ def update_portfolio_risk(st, df_by_code: dict, benchmark_df: any = None) -> dic
         total_mv += risk.market_value
         sector = pos.get("sector", "未知")
         sector_mv[sector] = sector_mv.get(sector, 0) + risk.market_value
-    
+
     # 计算集中度风险
     for symbol, risk in risks.items():
         if total_mv > 0:
@@ -595,13 +634,13 @@ def update_portfolio_risk(st, df_by_code: dict, benchmark_df: any = None) -> dic
                 break
         if total_mv > 0:
             risk.sector_exposure = sector_mv.get(sector, 0) / total_mv
-    
+
     st["risk_metrics"] = {s: r.to_dict() for s, r in risks.items()}
     return risks
 
 
 # ── 高级订单管理 ────────────────────────────────────────────
-def create_oco_order(st, symbol: str, name: str, qty: int, 
+def create_oco_order(st, symbol: str, name: str, qty: int,
                      take_profit_price: float, stop_loss_price: float,
                      side: OrderSide = OrderSide.SELL) -> tuple[str, str]:
     """创建 OCO 订单 (一单成交，一单撤销)。
@@ -609,7 +648,7 @@ def create_oco_order(st, symbol: str, name: str, qty: int,
     返回: (take_profit_order_id, stop_loss_order_id)
     """
     parent_id = f"oco-{int(time.time() * 1_000_000)}"
-    
+
     tp_order = AdvancedOrder(
         order_id=f"{parent_id}-tp",
         symbol=symbol,
@@ -621,7 +660,7 @@ def create_oco_order(st, symbol: str, name: str, qty: int,
         parent_id=parent_id,
         tags={"oco_role": "take_profit"},
     )
-    
+
     sl_order = AdvancedOrder(
         order_id=f"{parent_id}-sl",
         symbol=symbol,
@@ -633,13 +672,13 @@ def create_oco_order(st, symbol: str, name: str, qty: int,
         parent_id=parent_id,
         tags={"oco_role": "stop_loss"},
     )
-    
+
     tp_order.child_ids = [sl_order.order_id]
     sl_order.child_ids = [tp_order.order_id]
-    
+
     st.setdefault("advanced_orders", []).extend([tp_order.to_dict(), sl_order.to_dict()])
     save_state(st)
-    
+
     return tp_order.order_id, sl_order.order_id
 
 
@@ -652,7 +691,7 @@ def create_bracket_order(st, symbol: str, name: str, qty: int,
     返回: 入场单、止盈单、止损单的 ID 字典
     """
     parent_id = f"bracket-{int(time.time() * 1_000_000)}"
-    
+
     entry_order = AdvancedOrder(
         order_id=f"{parent_id}-entry",
         symbol=symbol,
@@ -664,9 +703,9 @@ def create_bracket_order(st, symbol: str, name: str, qty: int,
         parent_id=parent_id,
         tags={"bracket_role": "entry"},
     )
-    
+
     exit_side = OrderSide.SELL if side == OrderSide.BUY else OrderSide.BUY
-    
+
     tp_order = AdvancedOrder(
         order_id=f"{parent_id}-tp",
         symbol=symbol,
@@ -678,7 +717,7 @@ def create_bracket_order(st, symbol: str, name: str, qty: int,
         parent_id=parent_id,
         tags={"bracket_role": "take_profit", "depends_on": entry_order.order_id},
     )
-    
+
     sl_order = AdvancedOrder(
         order_id=f"{parent_id}-sl",
         symbol=symbol,
@@ -690,15 +729,15 @@ def create_bracket_order(st, symbol: str, name: str, qty: int,
         parent_id=parent_id,
         tags={"bracket_role": "stop_loss", "depends_on": entry_order.order_id},
     )
-    
+
     entry_order.child_ids = [tp_order.order_id, sl_order.order_id]
     tp_order.child_ids = [sl_order.order_id]
     sl_order.child_ids = [tp_order.order_id]
-    
+
     orders = [entry_order.to_dict(), tp_order.to_dict(), sl_order.to_dict()]
     st.setdefault("advanced_orders", []).extend(orders)
     save_state(st)
-    
+
     return {
         "entry": entry_order.order_id,
         "take_profit": tp_order.order_id,
@@ -707,7 +746,7 @@ def create_bracket_order(st, symbol: str, name: str, qty: int,
 
 
 def create_scale_in_order(st, symbol: str, name: str, total_qty: int,
-                          entry_prices: list[float], 
+                          entry_prices: list[float],
                           side: OrderSide = OrderSide.BUY) -> list[str]:
     """创建分批建仓订单。
     
@@ -716,12 +755,12 @@ def create_scale_in_order(st, symbol: str, name: str, total_qty: int,
     n_batches = len(entry_prices)
     if n_batches == 0:
         return []
-    
+
     base_qty = total_qty // n_batches
     remainder = total_qty % n_batches
     order_ids = []
     parent_id = f"scalein-{int(time.time() * 1_000_000)}"
-    
+
     for i, price in enumerate(entry_prices):
         qty = base_qty + (1 if i < remainder else 0)
         if qty <= 0:
@@ -739,7 +778,7 @@ def create_scale_in_order(st, symbol: str, name: str, total_qty: int,
         )
         order_ids.append(order.order_id)
         st.setdefault("advanced_orders", []).append(order.to_dict())
-    
+
     save_state(st)
     return order_ids
 
@@ -751,12 +790,12 @@ def create_scale_out_order(st, symbol: str, name: str, total_qty: int,
     n_batches = len(exit_prices)
     if n_batches == 0:
         return []
-    
+
     base_qty = total_qty // n_batches
     remainder = total_qty % n_batches
     order_ids = []
     parent_id = f"scaleout-{int(time.time() * 1_000_000)}"
-    
+
     for i, price in enumerate(exit_prices):
         qty = base_qty + (1 if i < remainder else 0)
         if qty <= 0:
@@ -774,7 +813,7 @@ def create_scale_out_order(st, symbol: str, name: str, total_qty: int,
         )
         order_ids.append(order.order_id)
         st.setdefault("advanced_orders", []).append(order.to_dict())
-    
+
     save_state(st)
     return order_ids
 
@@ -794,7 +833,7 @@ def create_trailing_stop_order(st, symbol: str, name: str, qty: int,
         trail_price=activation_price,
         tags={"trail_activated": activation_price is not None},
     )
-    
+
     st.setdefault("advanced_orders", []).append(order.to_dict())
     save_state(st)
     return order.order_id
@@ -804,23 +843,23 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
     """检查并执行高级订单。返回成交数量。"""
     filled = 0
     orders = st.get("advanced_orders", [])
-    
+
     for order_dict in list(orders):
         if order_dict.get("status") != "pending":
             continue
-        
+
         order = AdvancedOrder.from_dict(order_dict)
         df = df_by_code.get(order.symbol)
         if df is None or len(df) == 0:
             continue
-        
+
         last = float(df["close"].iloc[-1])
         high = float(df["high"].iloc[-1])
         low = float(df["low"].iloc[-1])
-        
+
         executed = False
         fill_price = None
-        
+
         if order.order_type == OrderType.LIMIT:
             if order.side == OrderSide.BUY and low <= order.price:
                 executed = True
@@ -828,7 +867,7 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
             elif order.side == OrderSide.SELL and high >= order.price:
                 executed = True
                 fill_price = max(order.price, float(df["open"].iloc[-1]))
-        
+
         elif order.order_type == OrderType.STOP:
             if order.side == OrderSide.BUY and high >= order.stop_price:
                 executed = True
@@ -836,7 +875,7 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
             elif order.side == OrderSide.SELL and low <= order.stop_price:
                 executed = True
                 fill_price = min(order.stop_price, float(df["open"].iloc[-1]))
-        
+
         elif order.order_type == OrderType.STOP_LIMIT:
             # 止损限价: 触发止损价后按限价成交
             triggered = False
@@ -844,7 +883,7 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
                 triggered = True
             elif order.side == OrderSide.SELL and low <= order.stop_price:
                 triggered = True
-            
+
             if triggered and order.limit_price is not None:
                 if order.side == OrderSide.BUY and low <= order.limit_price:
                     executed = True
@@ -852,7 +891,7 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
                 elif order.side == OrderSide.SELL and high >= order.limit_price:
                     executed = True
                     fill_price = max(order.limit_price, float(df["open"].iloc[-1]))
-        
+
         elif order.order_type == OrderType.TRAILING:
             # 追踪止损: 价格创新高后回撤 trail_pct 触发
             if order.trail_price is None:
@@ -879,7 +918,7 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
                     if high >= stop_trigger:
                         executed = True
                         fill_price = stop_trigger
-        
+
         if executed and fill_price:
             # 执行成交
             fill_price = round(fill_price * (1 + SLIP_BUY if order.side == OrderSide.BUY else 1 - SLIP_SELL), 3)
@@ -887,16 +926,16 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
             order.avg_fill_price = fill_price
             order.status = OrderStatus.FILLED
             order.updated_ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            
+
             # 更新状态
             order_dict.update(order.to_dict())
-            
+
             # 处理 OCO/括号单的联动撤销
             if order.parent_id:
                 _cancel_sibling_orders(st, order)
-            
+
             filled += 1
-    
+
     if filled > 0:
         save_state(st)
     return filled
@@ -931,13 +970,33 @@ def cancel_advanced_order(st, order_id: str) -> bool:
 
 
 # ── 选股: 全市场自动筛选并自动生成条件单 ─────────────────────
+# ── 三重共振纪律硬门禁 (统一数据源见 discipline.py) ──
+# paper 是实际撮合的交关口; 门禁阈值与实现收敛到 discipline.py 单一源。
+# 此处保留模块级名字 (供本模块内部与测试 monkeypatch 引用), 语义完全一致。
+from .discipline import (  # noqa: E402
+    flow_net5 as _flow_net5,
+)
+from .discipline import (
+    market_trend_ok as _market_trend_ok,
+)
+from .discipline import (
+    sector_strength_ok as _sector_strength_ok,
+)
+
+
 def pick_candidates(universe=None, max_codes=60, min_conf=None,
-                    cancel_event=None):
+                    cancel_event=None, skip_gates=False):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
 
     每只股票只留"最近 N 根内最新"的强多头事件; conf 由 event 的 conf 字段
     (启发式 + online model 校准 + 类型封顶后) 提供。universe 为空用全市场。
     min_conf 缺省取当前生效参数 (apply_paper_params 设置或模块默认 90)。
+
+    纪律硬门禁 (缺一不可, 数据不可用即拦截; skip_gates=True 跳过全部门禁,
+    供离线/测试/仅排序场景使用):
+      - 大盘20日线向上 (fetch_market_env)
+      - 板块强度 > 60 分位 (sector_strength_pct)
+      - 资金流近5日主力净流入 > 候选池截面中位 (跨市场截面分位, fetch_main_flow)
 
     新增: 遇到强多头事件时自动添加价格买入条件单 (buy_price),
     触发价设为最近收盘价，触发条件为 "≥ 达上破" (above)。
@@ -946,10 +1005,10 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
     if min_conf is None:
         min_conf = _CUR["min_conf"]
     from .datasource import fetch_kline
-    from .indicators import add_indicators, find_pivots
     from .events import detect_all
+    from .fundamental import fetch_market_universe, fetch_sector
+    from .indicators import add_indicators, find_pivots
     from .utils import normalize_symbol
-    from .fundamental import fetch_sector, fetch_market_universe
 
     if universe is None:
         try:
@@ -957,20 +1016,27 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
         except Exception:
             universe = []
     universe = [normalize_symbol(c) for c in universe]
-    out = []
-    for code in universe[:max_codes]:
+    # 纪律门禁 ①: 大盘20日线向上 (全市场统一, 一次判定; fail-close)
+    if not skip_gates:
+        market_ok, _market_reason = _market_trend_ok()
+        if not market_ok:
+            return []
+
+    def _probe(code):
+        """单只股票的重活: K线+指标+事件+板块+资金流 → 候选 (含 flow 值) 或 None。
+        Gate ③ (资金流截面分位) 是跨市场判定, 故 flow 先随候选带回, 由调用方统一过滤。
+        返回 (code, candidate_or_None, flow_or_None)。"""
         if cancel_event is not None and cancel_event.is_set():
-            break
+            return code, None, None
         try:
             df = add_indicators(fetch_kline(code, datalen=400, scale=240),
                                 symbol=code)
             if df is None or len(df) < 200:
-                continue
+                return code, None, None
             piv = find_pivots(df, order=6)
             evs = detect_all(df, piv)
             if not evs:
-                continue
-            # 仅在最近 10 根内、强多头、conf 达标的事件
+                return code, None, None
             latest = None
             for e in evs:
                 if e["type"] not in LONG_EVENT_TYPES:
@@ -983,7 +1049,7 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                 if latest is None or (e.get("idx") or 0) > latest["idx"]:
                     latest = e
             if latest is None:
-                continue
+                return code, None, None
             base_conf = int(latest.get("conf", 0) or 0)
             latest["code"] = code
             latest["name"] = _stock_name(code)
@@ -993,6 +1059,14 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                 latest["sector"] = fetch_sector(code) or ""
             except Exception:
                 pass
+            flow = None
+            # 纪律门禁 ②: 板块强度 > 60 分位 (fail-close)
+            if not skip_gates:
+                s_ok, _s_reason = _sector_strength_ok(latest["sector"])
+                if not s_ok:
+                    return code, None, None
+                # 纪律门禁 ③: 收集主力净流入供截面分位判定 (稍后统一过滤)
+                flow = _flow_net5(code)
             # A: 产业链加分/门禁 — 不改变 base_conf 的入池过滤, 只影响排序优先级;
             #    数据不可用/无板块 (离线) 时 adj=0 完全退化为原行为。
             try:
@@ -1004,22 +1078,47 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                     latest["chain_adj"] = adj
             except Exception:
                 pass
-            out.append(latest)
 
-            # 【新增】遇到强多头事件时自动添加价格买入条件单
-            # 条件单种类: buy_price (价跌买入), trigger="above" (≥ 达上破)
-            # 触发价设为最近收盘价的微小突破位，防止即时成交而留作待触发
+            # 纪律门禁已在此前判定; 生成自动买入条件单 (触发价=现价+0.2% 上破)
             try:
-                cond_price = round(float(latest["last"]) * 1.002, 3)  # 当前价的 0.2% 上方
-                st = load_state()  # 获取/创建状态
+                cond_price = round(float(latest["last"]) * 1.002, 3)
+                st = load_state()
                 add_condition(st, kind="buy_price",
                               symbol=code, price=cond_price,
                               trigger="above",
                               reason=f"自动:{latest['type']}({latest.get('conf',0)})")
             except Exception:
-                pass  # 若配置有误或环境未准备则静默跳过，不影响选股主流程
+                pass
+            return code, latest, flow
         except Exception:
-            continue
+            return code, None, None
+
+    out = []
+    _flow_map = {}  # code -> 近5日主力净流入
+    _codes = universe[:max_codes]
+    try:
+        from ._shared import parallel_map
+        for code, cand, flow in parallel_map(_codes, _probe, workers=6):
+            if cand is not None:
+                out.append(cand)
+                _flow_map[code] = flow
+    except Exception:
+        for code in _codes:
+            _code, cand, flow = _probe(code)
+            if cand is not None:
+                out.append(cand)
+                _flow_map[_code] = flow
+    # 纪律门禁 ③: 资金流"净流入>50 分位" —— 跨市场截面判定。
+    # 只对拿到净流入数据的候选计算中位; 净流入缺失或低于中位 → 拦截。
+    if not skip_gates:
+        flows = [f for f in _flow_map.values() if f is not None]
+        if flows:
+            med = sorted(flows)[len(flows) // 2]
+            out = [e for e in out
+                   if _flow_map.get(e["code"]) is not None
+                   and _flow_map[e["code"]] >= med]
+        else:
+            out = []  # 无任何资金流数据 → 纪律不满足, fail-close
     out.sort(key=lambda e: -(int(e.get("conf", 0) or 0)))
     return out
 
@@ -1054,8 +1153,11 @@ def has_position(st, code):
     return any(p["symbol"] == code for p in st["positions"])
 
 
-def _make_order(code, name, type_, conf, price, n_total, cash):
-    """构造买单订单公共字段 (qty 按当前现金预算分配, 整手)。"""
+def _make_order(code, name, type_, conf, price, n_total, cash, sector=None):
+    """构造买单订单公共字段 (qty 按当前现金预算分配, 整手)。
+
+    sector 为持仓行业 (用于行业集中度风控 check_sector_concentration)。
+    """
     budget = cash * (1.0 / max(1, _CUR["max_pos"]))
     if budget < MIN_LOT:
         return None
@@ -1067,6 +1169,7 @@ def _make_order(code, name, type_, conf, price, n_total, cash):
         "qty": qty, "price": round(price * (1 + SLIP_BUY), 3), "side": "buy",
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "date": "", "bars": int(n_total) if n_total else 0,
+        "sector": sector or "",
     }
 
 
@@ -1091,9 +1194,9 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True):
         return order, "已下单待撮合"
 
 
-def _enqueue_buy(st, code, name, type_, conf, price):
+def _enqueue_buy(st, code, name, type_, conf, price, sector=None):
     """(进程内) 仅计入 pending, 不校验不落盘。调用方负责校验与 save_state。"""
-    order = _make_order(code, name, type_, conf, price, 0, st["cash"])
+    order = _make_order(code, name, type_, conf, price, 0, st["cash"], sector=sector)
     if order is None:
         return None
     st["pending"].append(order)
@@ -1252,29 +1355,29 @@ def _judge_condition_correct(c, last, entry=None, ret=None, peak=None,
     kind = c.get("kind", "")
     trigger = c.get("trigger", "above")
     price = c.get("price")
-    
+
     if kind in ("buy_price", "sell_price"):
         if trigger == "above":
             return price is not None and last >= price
         else:  # below
             return price is not None and last <= price
-    
+
     if kind == "take_profit":
         if ret is not None and pct is not None:
             return ret >= pct
         return None
-    
+
     if kind == "stop_loss":
         if ret is not None and pct is not None:
             return ret <= -pct
         return None
-    
+
     if kind == "trailing":
         if peak is not None and pct is not None:
             # 触发时: 当前价是否已从峰值回撤 pct
             return last <= peak * (1 - pct)
         return None
-    
+
     return None
 
 
@@ -1284,7 +1387,7 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
     entry_price = None
     condition_ret = None
     condition_peak = None
-    
+
     if side == "buy":
         budget = c.get("amount") or st["cash"]
         order = _make_order(c["symbol"], c.get("name", ""), "条件单",
@@ -1314,19 +1417,19 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
         sell_price = round(last * (1 - SLIP_SELL), 3)
         entry_price = float(pos["buy_px"])
         condition_ret = last / entry_price - 1
-        
+
         # 计算 trailing 的 peak
         if c["kind"] == "trailing" and c.get("peak") is not None:
             condition_peak = c["peak"]
         elif c["kind"] == "trailing":
             # 从持仓峰值计算
             condition_peak = max(last, entry_price)
-        
+
         close_position(st, pos, sell_price, f"条件单:{c['kind']}")
         c["matched_price"] = sell_price
         c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
         c["status"] = "done"
-        
+
         # 判断卖出条件单是否正确
         c["correct"] = _judge_condition_correct(
             c, last, entry=entry_price, ret=condition_ret,
@@ -1347,6 +1450,7 @@ def fill_buy(st, order):
         "type": order["type"], "conf": order.get("conf", 50),
         "qty": qty, "buy_px": price, "cost": round(cost, 2),
         "entry_ts": order["ts"], "entry_bars": order.get("bars", 0),
+        "sector": order.get("sector", ""),
         "staged": False,
     })
     st["orders"].append(order)
@@ -1502,7 +1606,7 @@ def stats(st):
             # 期望值
             out["expectancy"] = round(out["win_rate"] * avg_win - (1 - out["win_rate"]) * avg_loss, 4)
             # Kelly 分数
-            if avg_loss > 0:
+            if avg_loss > 0 and avg_win > 0:
                 out["kelly_fraction"] = round((out["win_rate"] * avg_win - (1 - out["win_rate"]) * avg_loss) / avg_win, 4)
         # 分类型
         by_type = {}
@@ -1515,9 +1619,11 @@ def stats(st):
             rs = b["rets"]
             b["avg"] = round(statistics.mean(rs), 4)
             b["win"] = round(sum(1 for r in rs if r > 0) / len(rs), 4)
-            b["pl_ratio"] = round(
-                statistics.mean([r for r in rs if r > 0]) / abs(statistics.mean([r for r in rs if r <= 0])) 
-                if any(r <= 0 for r in rs) else 0, 3)
+            if any(r > 0 for r in rs) and any(r <= 0 for r in rs):
+                b["pl_ratio"] = round(
+                    statistics.mean([r for r in rs if r > 0]) / abs(statistics.mean([r for r in rs if r <= 0])), 3)
+            else:
+                b["pl_ratio"] = 0
             b.pop("rets", None)
         out["by_type"] = by_type
         # 平仓原因分布
@@ -1560,13 +1666,13 @@ def stats(st):
         eqs = [h.get("equity", init) for h in hist]
         last_hist = eqs[-1]
         out["total_return"] = round(last_hist / init - 1, 4)
-        
+
         # 计算日收益率序列
         daily_rets = []
         for i in range(1, len(eqs)):
             if eqs[i-1] > 0:
                 daily_rets.append(eqs[i] / eqs[i-1] - 1)
-        
+
         if daily_rets and np is not None:
             arr = np.asarray(daily_rets, dtype=float)
             # 年化收益率 (假设日线, 250 个交易日)
@@ -1576,30 +1682,30 @@ def stats(st):
             # 下行波动率 (仅负收益)
             neg_rets = arr[arr < 0]
             out["downside_volatility"] = round(float(neg_rets.std() * np.sqrt(250)), 4) if len(neg_rets) > 1 else 0.0
-            
+
             # 夏普比率 (假设无风险利率 3%)
             rf = 0.03 / 250  # 日无风险利率
             excess = arr - rf
             if excess.std() > 0:
                 out["sharpe_ratio"] = round(float(excess.mean() / excess.std() * np.sqrt(250)), 3)
-            
+
             # 索提诺比率
             if out["downside_volatility"] and out["downside_volatility"] > 0:
                 out["sortino_ratio"] = round(float((arr.mean() - rf) * 250 / out["downside_volatility"]), 3)
-            
+
             # 最大回撤
             peak = np.maximum.accumulate(arr + 1)  # 累积净值
             cum = np.cumprod(arr + 1)
             dd = cum / peak - 1
             out["max_drawdown"] = round(float(dd.min()), 4)
-            
+
             # 卡尔马比率
             if out["max_drawdown"] and out["max_drawdown"] < 0:
                 out["calmar_ratio"] = round(out["annual_return"] / abs(out["max_drawdown"]), 3)
-            
+
             # 平均回撤
             out["avg_drawdown"] = round(float(dd[dd < 0].mean()), 4) if any(dd < 0) else 0.0
-            
+
             # 最大回撤持续时间
             in_dd = dd < 0
             if any(in_dd):
@@ -1608,11 +1714,11 @@ def stats(st):
                 if len(dd_starts) == len(dd_ends):
                     durations = dd_ends - dd_starts
                     out["max_drawdown_duration"] = int(durations.max()) if len(durations) > 0 else 0
-            
+
             # 恢复因子 = 总净收益 / 最大回撤
             if out["max_drawdown"] and out["max_drawdown"] < 0:
                 out["recovery_factor"] = round(out["total_return"] / abs(out["max_drawdown"]), 3)
-    
+
     return out
 
 
@@ -1630,19 +1736,19 @@ def advanced_stats(st, benchmark_returns: list[float] = None) -> dict:
     hist = st.get("equity_hist") or []
     if len(hist) < 2:
         return base
-    
+
     eqs = [h.get("equity", _CUR["init_cash"]) for h in hist]
     daily_rets = []
     for i in range(1, len(eqs)):
         if eqs[i-1] > 0:
             daily_rets.append(eqs[i] / eqs[i-1] - 1)
-    
+
     if not daily_rets or np is None:
         return base
-    
+
     arr = np.asarray(daily_rets, dtype=float)
     out = base.copy()
-    
+
     if benchmark_returns and len(benchmark_returns) == len(arr):
         bench = np.asarray(benchmark_returns, dtype=float)
         # Beta
@@ -1667,12 +1773,12 @@ def advanced_stats(st, benchmark_returns: list[float] = None) -> dict:
             out["up_capture"] = round(float(arr[up_market].mean() / bench[up_market].mean()), 3)
         if any(down_market):
             out["down_capture"] = round(float(arr[down_market].mean() / bench[down_market].mean()), 3)
-    
+
     # 交易成本分析
     total_cost = sum(c.get("cost", 0) for c in st.get("closed", []) if "cost" in c)
     out["total_cost"] = round(total_cost, 2)
     out["cost_drag"] = round(total_cost / _CUR["init_cash"] * 100, 2) if _CUR["init_cash"] > 0 else 0
-    
+
     return out
 
 
@@ -1686,7 +1792,7 @@ def signal_stats_text(st):
              f"已平仓 {s['n_closed']} 笔, 订单 {s['n_orders']} 笔")
     L.append(f"- 条件单: 激活 {s['n_cond_active']} · 已触发 {s['n_cond_done']}")
     L.append(f"- 累计收益: **{s['total_return']*100:+.2f}%**  "
-             f"最大回撤: {f'{s['max_drawdown']*100:.2f}%' if s['max_drawdown'] is not None else '-'}")
+             f"最大回撤: {s['max_drawdown']*100:.2f}% if s['max_drawdown'] is not None else '-'")
     if s["win_rate"] is not None:
         L.append(f"- 胜率: **{s['win_rate']*100:.1f}%**  平均每笔: "
                  f"{s['avg_ret']*100:+.2f}%  盈亏比: {s['pl_ratio']}")
@@ -1720,7 +1826,9 @@ def run_cycle(settings=None, min_conf=None, universe=None):
     # 1) 选股
     cand = pick_candidates(universe=universe, min_conf=min_conf)
     st["candidates"] = cand
-    # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合
+    # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合。
+    #    三大硬门槛已由 pick_candidates 在候选入池时 fail-close 判定
+    #    (大盘↑+板块>60分位+资金>50分位), 这里直接消费精筛后的候选。
     for e in cand:
         if len(st["positions"]) >= _CUR["max_pos"]:
             break
@@ -1730,8 +1838,12 @@ def run_cycle(settings=None, min_conf=None, universe=None):
         px = float(e.get("last", 0) or 0)
         if px <= 0:
             continue
+        # 风控门禁 (此前为死代码, 现接入入场路径):
+        #   回撤上限 / 单笔风险预算 / 行业集中度 / 单股集中度 / 资金利用率
+        if _risk_blocks_entry(st, e, px):
+            continue
         _enqueue_buy(st, code, e.get("name", ""), e["type"],
-                     e.get("conf", 50), px)
+                     e.get("conf", 50), px, sector=e.get("sector", ""))
     # 3) 步进+平仓判定 (持仓 + 待撮合用最新行情)
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
@@ -1745,3 +1857,47 @@ def run_cycle(settings=None, min_conf=None, universe=None):
     step(st, df_by_code)
     save_state(st)
     return stats(st)
+
+
+def run_scan(st, scan_type='discipline', n_codes=20):
+    """运行纪律扫描并更新状态。
+
+    按纪律执行: 强多头事件 (Spring/Shakeout/ST/LPS/SC) + conf≥阈值 + 三大硬门禁
+    (大盘20日线向上 / 板块强度>60分位 / 资金流净流入>50分位截面)。候选写入
+    st["candidates"] 并落盘 (save_state)。返回描述字符串。
+
+    参数:
+        st: 交易状态 dict
+        scan_type: 保留兼容 (旧 "volume_surge"/"pnf_breakout"/"sector_driven"
+                   在纪律下统一走 pick_candidates, 忽略具体类型)
+        n_codes: 要扫描的代码数量 (universe 截取)
+
+    返回:
+        扫描结果字符串描述
+    """
+    st['scan_count'] = st.get('scan_count', 0) + 1
+    now = datetime.now().isoformat()
+    st['last_scan_time'] = now
+
+    # 纪律扫描: 强多头事件 + conf≥min_conf + 三大硬门禁
+    try:
+        cand = pick_candidates(max_codes=n_codes, min_conf=_CUR["min_conf"])
+    except Exception:
+        cand = []
+    cand.sort(key=lambda e: (-int(e.get("conf", 0) or 0), e.get("code", "")))
+    st["candidates"] = cand
+
+    label = "纪律(强多头+硬门禁)"
+    result_str = (f"{label}扫描: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
+                  if cand else
+                  "纪律扫描: 无满足条件的候选 (强多头事件/conf/大盘/板块/资金流门禁)")
+    st['last_scan_result'] = result_str
+    st['next_scan_time'] = (datetime.now() + timedelta(minutes=30)).isoformat()
+
+    # 落盘 (避免 UI 读回旧状态)
+    try:
+        save_state(st)
+    except Exception:
+        pass
+
+    return result_str
