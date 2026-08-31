@@ -324,7 +324,6 @@ def ind_caps(df, index_series=None, rs_series=None):
     panel ∈ price/volume/macd/kdj/rsi/obv/vp/rs。matplotlib plot_indicators
     与 pyqtgraph IndWidget 共用, 保证文案与配色完全一致。
     """
-    n = len(df)
     close = df["close"].values
     last = float(close[-1])
     caps = {}
@@ -1328,7 +1327,6 @@ def plot_market(market, fig):
                           fontweight="bold")
         last_ratio = ratios[-1] if ratios else 0
         trend = "筹码分散" if last_ratio > 0 else "筹码集中" if last_ratio < 0 else "平稳"
-        tc4 = _DN if last_ratio > 0 else _UP if last_ratio < 0 else "#64748b"
         ax4.set_title(f"股东户数变化 (万户)  ·  最新 {last_ratio:+.1f}% ({trend})",
                       fontsize=_fs(1), color="#374151", fontweight="bold")
         ax4.grid(alpha=0.35, lw=0.5, color=C_GRID, axis="y", zorder=0)
@@ -1359,9 +1357,9 @@ def plot_market(market, fig):
         if ratio >= SD_BULL:
             tone, tc = "需求占优 · 买方积极", _UP
         elif ratio <= SD_BEAR:
-            tone, tc = "供给占优 · 卖方主导", _DN
+            tone = "供给占优 · 卖方主导"
         else:
-            tone, tc = "多空均衡", "#d97706"
+            tone = "多空均衡"
         ax_sd.set_title(f"供需强度 (万手)  ·  供需比 {ratio:.2f}  {tone}",
                         fontsize=_fs(1), color="#374151", fontweight="bold")
         ax_sd.legend(fontsize=_fs(-2), loc="upper left", framealpha=0.5,
@@ -1531,7 +1529,7 @@ def build_market_data(market):
             gc = _UP if growth > 0 else _DN if growth < 0 else "#64748b"
             header_items.append(("净利", f"{growth:+.1f}%", gc))
     out["header"] = "  |  ".join(
-        (v if l is None else f"{l} {v}") for l, v, _c in header_items
+        (v if label is None else f"{label} {v}") for label, v, _c in header_items
     ) or None
     out["header_items"] = header_items or None
 
