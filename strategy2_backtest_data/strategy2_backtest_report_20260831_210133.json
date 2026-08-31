@@ -1,0 +1,29 @@
+{
+  "report_generated_at": "2026-08-31T21:01:33.544915",
+  "backtest_period": "过去250天",
+  "holding_horizon": "20天",
+  "stocks_tested": 10,
+  "total_trades": 99,
+  "strategy": "威科夫事件 + 高价值VSA标签 (Strategy 2) - 简化版",
+  "metrics": {
+    "total_trades": 99,
+    "win_rate": 36.36363636363637,
+    "avg_return_per_trade": -1.952701726325365,
+    "total_return": -193.31747090621113,
+    "max_drawdown": 90.71175105142872,
+    "sharpe_ratio": -0.26863782552810284,
+    "profit_factor": 0.4937674883252585,
+    "avg_win": 5.2377053284910415,
+    "avg_loss": -6.061505757649025
+  },
+  "stock_results": {
+    "sh600036": {
+      "total_trades": 11,
+      "win_rate": 63.63636363636363,
+      "avg_return_per_trade": -0.6371947080788407,
+      "total_return": -7.009141788867248,
+      "max_drawdown": 17.453338878766,
+      "sharpe_ratio": -0.14839183271272474,
+      "trades": [
+        {
+          "entry_date": 

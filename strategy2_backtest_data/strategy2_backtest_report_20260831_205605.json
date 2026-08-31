@@ -1,0 +1,101 @@
+{
+  "report_generated_at": "2026-08-31T20:56:05.648029",
+  "backtest_period": "过去250天",
+  "holding_horizon": "20天",
+  "stocks_tested": 10,
+  "total_trades": 0,
+  "strategy": "威科夫事件 + 高价值VSA标签 (Strategy 2)",
+  "metrics": {},
+  "stock_results": {
+    "sh600036": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sh601318": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sz000001": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sh600000": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sz000858": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sh600276": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sz002415": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sh600104": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sz300760": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    },
+    "sh600030": {
+      "total_trades": 0,
+      "win_rate": 0,
+      "avg_return_per_trade": 0,
+      "total_return": 0,
+      "max_drawdown": 0,
+      "sharpe_ratio": 0,
+      "trades": []
+    }
+  }
+}

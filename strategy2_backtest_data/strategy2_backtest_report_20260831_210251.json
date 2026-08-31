@@ -1,0 +1,1012 @@
+{
+  "report_generated_at": "2026-08-31T21:02:51.559629",
+  "backtest_period": "过去250天",
+  "holding_horizon": "20天",
+  "stocks_tested": 10,
+  "total_trades": 99,
+  "strategy": "威科夫事件 + 高价值VSA标签 (Strategy 2) - 简化版",
+  "metrics": {
+    "total_trades": 99,
+    "win_rate": 36.36363636363637,
+    "avg_return_per_trade": -1.952701726325365,
+    "total_return": -193.31747090621113,
+    "max_drawdown": 90.71175105142872,
+    "sharpe_ratio": -0.26863782552810284,
+    "profit_factor": 0.4937674883252585,
+    "avg_win": 5.2377053284910415,
+    "avg_loss": -6.061505757649025
+  },
+  "stock_results": {
+    "sh600036": {
+      "total_trades": 11,
+      "win_rate": 63.63636363636363,
+      "avg_return_per_trade": -0.6371947080788407,
+      "total_return": -7.009141788867248,
+      "max_drawdown": 17.453338878766,
+      "sharpe_ratio": -0.14839183271272474,
+      "trades": [
+        {
+          "entry_date": "2026-01-05 00:00:00",
+          "entry_price": 40.17778392951236,
+          "exit_date": "2026-02-02 00:00:00",
+          "exit_price": 37.42296005326216,
+          "return_rate": -0.07256584925348906,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 37.42296005326216,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 38.172392543275464,
+          "return_rate": 0.01602600780234051,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 37.89987163781608,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 38.20159121171754,
+          "return_rate": 0.003960965588084283,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 38.20159121171754,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 38.678502796271474,
+          "return_rate": 0.008484076433121171,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-04-08 00:00:00",
+          "entry_price": 38.56170812250316,
+          "exit_date": "2026-05-11 00:00:00",
+          "exit_price": 36.95578135818892,
+          "return_rate": -0.04564563351842503,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 38.678502796271474,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 35.953293741677605,
+          "return_rate": -0.07445797684952203,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 35.953293741677605,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 36.40100665778945,
+          "return_rate": 0.008452625879805034,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 37.47162450066562,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 36.54699999999984,
+          "return_rate": -0.028675324675324774,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 36.40100665778945,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 37.99,
+          "return_rate": 0.03965245601993596,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 36.54699999999984,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 39.28,
+          "return_rate": 0.07078041973349856,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 37.99,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 38.29,
+          "return_rate": 0.0038968149513028995,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        }
+      ]
+    },
+    "sh601318": {
+      "total_trades": 11,
+      "win_rate": 18.181818181818183,
+      "avg_return_per_trade": -3.651318531926742,
+      "total_return": -40.16450385119417,
+      "max_drawdown": 40.891531609294304,
+      "sharpe_ratio": -0.6177575380708916,
+      "trades": [
+        {
+          "entry_date": "2026-01-05 00:00:00",
+          "entry_price": 70.01195623957037,
+          "exit_date": "2026-02-02 00:00:00",
+          "exit_price": 63.87768588911602,
+          "return_rate": -0.09161746821448317,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-01-19 00:00:00",
+          "entry_price": 64.14860003708561,
+          "exit_date": "2026-02-24 00:00:00",
+          "exit_price": 62.40700908585253,
+          "return_rate": -0.0311493212669682,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 63.87768588911602,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 60.075212312257115,
+          "return_rate": -0.06352741593456508,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 62.40700908585253,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 56.23403671425967,
+          "return_rate": -0.10291472868217057,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 56.23403671425967,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 56.14695716669802,
+          "return_rate": -0.005548520302821672,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 58.14978676061608,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 51.64784720934586,
+          "return_rate": -0.11581364392678871,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 52.46058965325464,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 50.4,
+          "return_rate": -0.04327881228317074,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 51.64784720934586,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 49.29,
+          "return_rate": -0.04965238120746303,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 50.4,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 52.89,
+          "return_rate": 0.04540476190476195,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 49.29,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 53.93,
+          "return_rate": 0.09013674173260297,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 52.89,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 51.32,
+          "return_rate": -0.03368425033087541,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        }
+      ]
+    },
+    "sz000001": {
+      "total_trades": 12,
+      "win_rate": 50.0,
+      "avg_return_per_trade": 0.26037247048962814,
+      "total_return": 3.124469645875538,
+      "max_drawdown": 10.933976442588571,
+      "sharpe_ratio": 0.08239690459459094,
+      "trades": [
+        {
+          "entry_date": "2026-01-19 00:00:00",
+          "entry_price": 10.765734513274234,
+          "exit_date": "2026-02-24 00:00:00",
+          "exit_price": 10.562424778760962,
+          "return_rate": -0.022884892086330932,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 10.514017699114945,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 10.465610619468928,
+          "return_rate": -0.008604051565377507,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 10.562424778760962,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 10.533380530973352,
+          "return_rate": -0.006749770852428916,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 10.533380530973352,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 10.630194690265386,
+          "return_rate": 0.005191176470588185,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-04-08 00:00:00",
+          "entry_price": 10.86254867256627,
+          "exit_date": "2026-05-11 00:00:00",
+          "exit_price": 10.92063716814149,
+          "return_rate": 0.0013475935828876056,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 10.630194690265386,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 10.339752212389282,
+          "return_rate": -0.03132240437158472,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 10.92063716814149,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 10.678601769911403,
+          "return_rate": -0.026163120567375932,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 10.339752212389282,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 10.71,
+          "return_rate": 0.031808187663054543,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 10.678601769911403,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 10.47,
+          "return_rate": -0.023534558400629704,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 10.71,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 10.84,
+          "return_rate": 0.00813818860877675,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 10.47,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 11.44,
+          "return_rate": 0.08864565425023865,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 10.84,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 11.05,
+          "return_rate": 0.015372693726937347,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        }
+      ]
+    },
+    "sh600000": {
+      "total_trades": 12,
+      "win_rate": 41.66666666666667,
+      "avg_return_per_trade": -2.7958956642000343,
+      "total_return": -33.550747970400415,
+      "max_drawdown": 37.679866823042396,
+      "sharpe_ratio": -0.4086798718007424,
+      "trades": [
+        {
+          "entry_date": "2026-01-05 00:00:00",
+          "entry_price": 11.286766917293114,
+          "exit_date": "2026-02-02 00:00:00",
+          "exit_price": 9.606165413533734,
+          "return_rate": -0.15290016920473767,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-01-19 00:00:00",
+          "entry_price": 10.618345864661542,
+          "exit_date": "2026-02-24 00:00:00",
+          "exit_price": 9.453383458646517,
+          "return_rate": -0.11371223021582734,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 9.606165413533734,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 9.510676691729223,
+          "return_rate": -0.013940357852882763,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 9.453383458646517,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 9.58706766917283,
+          "return_rate": 0.010141414141414038,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-04-08 00:00:00",
+          "entry_price": 9.634812030075086,
+          "exit_date": "2026-05-11 00:00:00",
+          "exit_price": 8.679924812029984,
+          "return_rate": -0.10310802775024763,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 9.176466165413437,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 8.670375939849533,
+          "return_rate": -0.059150884495317316,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 8.679924812029984,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 8.947293233082611,
+          "return_rate": 0.026803080308030577,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 8.670375939849533,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 8.861353383458553,
+          "return_rate": 0.0180264317180616,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 8.947293233082611,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 8.488947368420964,
+          "return_rate": -0.055227321237993315,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 8.861353383458553,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 8.95,
+          "return_rate": 0.006003733369546276,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 8.488947368420964,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 9.4,
+          "return_rate": 0.10332221464444083,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 8.95,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 8.97,
+          "return_rate": -0.001765363128491469,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        }
+      ]
+    },
+    "sz000858": {
+      "total_trades": 14,
+      "win_rate": 28.57142857142857,
+      "avg_return_per_trade": -4.562310810000826,
+      "total_return": -63.872351340011555,
+      "max_drawdown": 54.66536898710843,
+      "sharpe_ratio": -0.6268865096791659,
+      "trades": [
+        {
+          "entry_date": "2026-01-05 00:00:00",
+          "entry_price": 104.25908115183033,
+          "exit_date": "2026-02-02 00:00:00",
+          "exit_price": 103.66966465968375,
+          "return_rate": -0.00965338276181648,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-01-19 00:00:00",
+          "entry_price": 101.02212172774662,
+          "exit_date": "2026-02-24 00:00:00",
+          "exit_price": 101.6115382198932,
+          "return_rate": 0.0018345289335246111,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 103.66966465968375,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 98.60648036649013,
+          "return_rate": -0.05283959362475535,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 101.6115382198932,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 97.92043821989328,
+          "return_rate": -0.04032559908710533,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-03-10 00:00:00",
+          "entry_price": 98.60648036649013,
+          "exit_date": "2026-04-08 00:00:00",
+          "exit_price": 100.67426937172569,
+          "return_rate": 0.01697011268985785,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 97.92043821989328,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 97.24405863874146,
+          "return_rate": -0.010907440299980286,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-04-08 00:00:00",
+          "entry_price": 100.67426937172569,
+          "exit_date": "2026-05-11 00:00:00",
+          "exit_price": 88.71201335078354,
+          "return_rate": -0.12282138400998163,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 97.24405863874146,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 81.3008256544486,
+          "return_rate": -0.1679507154213036,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 88.71201335078354,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 77.26187329842773,
+          "return_rate": -0.13307090730857227,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 81.3008256544486,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 72.23733926701424,
+          "return_rate": -0.11548086522462558,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 77.26187329842773,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 69.29991937172633,
+          "return_rate": -0.10705152576288132,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 72.23733926701424,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 74.38,
+          "return_rate": 0.025661401634212242,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 69.29991937172633,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 76.88,
+          "return_rate": 0.10538080010762983,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 74.38,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 72.56,
+          "return_rate": -0.028468943264318276,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        }
+      ]
+    },
+    "sh600276": {
+      "total_trades": 14,
+      "win_rate": 28.57142857142857,
+      "avg_return_per_trade": -2.223352205012349,
+      "total_return": -31.126930870172885,
+      "max_drawdown": 43.59934769239987,
+      "sharpe_ratio": -0.24897625691234412,
+      "trades": [
+        {
+          "entry_date": "2026-01-05 00:00:00",
+          "entry_price": 62.82357723576994,
+          "exit_date": "2026-02-02 00:00:00",
+          "exit_price": 56.260365853656374,
+          "return_rate": -0.10847051363348124,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-01-19 00:00:00",
+          "entry_price": 60.871544715444806,
+          "exit_date": "2026-02-24 00:00:00",
+          "exit_price": 57.774186991867694,
+          "return_rate": -0.05488350785340307,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 56.260365853656374,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 56.32012195121734,
+          "return_rate": -0.002937865108868994,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 57.774186991867694,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 53.421951219510134,
+          "return_rate": -0.07933183933804523,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-03-10 00:00:00",
+          "entry_price": 56.32012195121734,
+          "exit_date": "2026-04-08 00:00:00",
+          "exit_price": 57.216463414631946,
+          "return_rate": 0.011915119363395368,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 53.421951219510134,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 55.214634146339336,
+          "return_rate": 0.029557046979865807,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-04-08 00:00:00",
+          "entry_price": 57.216463414631946,
+          "exit_date": "2026-05-11 00:00:00",
+          "exit_price": 53.30243902438819,
+          "return_rate": -0.07240731070496086,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 55.214634146339336,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 49.22906504064851,
+          "return_rate": -0.11240548340548345,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 53.30243902438819,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 45.94,
+          "return_rate": -0.14212574357093785,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 49.22906504064851,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 48.98,
+          "return_rate": -0.009059308773035946,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 45.94,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 55.36,
+          "return_rate": 0.2010500653025686,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 48.98,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 54.93,
+          "return_rate": 0.11747815434871382,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 55.36,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 53.42,
+          "return_rate": -0.03904335260115603,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 54.93,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 52.37,
+          "return_rate": -0.05060476970689973,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        }
+      ]
+    },
+    "sz002415": {
+      "total_trades": 3,
+      "win_rate": 66.66666666666666,
+      "avg_return_per_trade": 8.288826726190148,
+      "total_return": 24.866480178570445,
+      "max_drawdown": 21.026461618616867,
+      "sharpe_ratio": 1.3640946246253072,
+      "trades": [
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 30.918939738486433,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 34.56109437180066,
+          "return_rate": 0.11379687997453036,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 33.33063672541071,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 38.02606310403473,
+          "return_rate": 0.13687418783225064,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 34.56109437180066,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 34.629999999998496,
+          "return_rate": -0.0020062660210765342,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + CHOC"
+        }
+      ]
+    },
+    "sh600104": {
+      "total_trades": 7,
+      "win_rate": 28.57142857142857,
+      "avg_return_per_trade": -6.011412439058236,
+      "total_return": -42.079887073407654,
+      "max_drawdown": 42.280643493354084,
+      "sharpe_ratio": -0.7105543711503041,
+      "trades": [
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 13.73486350974987,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 13.490991643454596,
+          "return_rate": -0.021755681818181778,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        },
+        {
+          "entry_date": "2026-04-08 00:00:00",
+          "entry_price": 13.881186629527035,
+          "exit_date": "2026-05-11 00:00:00",
+          "exit_price": 13.227610027855699,
+          "return_rate": -0.05108362614195361,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 13.490991643454596,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 12.027760445682947,
+          "return_rate": -0.1124598698481562,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 13.227610027855699,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 11.188841225627202,
+          "return_rate": -0.15812979351032447,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 12.027760445682947,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 10.057275766017128,
+          "return_rate": -0.16782806163828062,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 10.057275766017128,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 10.203598885794293,
+          "return_rate": 0.010548981571290013,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 9.88168802228453,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 10.710852367688464,
+          "return_rate": 0.07990918065153006,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: ST + CHOC"
+        }
+      ]
+    },
+    "sz300760": {
+      "total_trades": 2,
+      "win_rate": 50.0,
+      "avg_return_per_trade": 4.867863901980308,
+      "total_return": 9.735727803960616,
+      "max_drawdown": 10.114227856691759,
+      "sharpe_ratio": 0.76245644823712,
+      "trades": [
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 138.17,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 154.27,
+          "return_rate": 0.11252312368821035,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 152.25,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 150.55,
+          "return_rate": -0.015165845648604195,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        }
+      ]
+    },
+    "sh600030": {
+      "total_trades": 13,
+      "win_rate": 23.076923076923077,
+      "avg_return_per_trade": -1.0185065877356765,
+      "total_return": -13.240585640563795,
+      "max_drawdown": 27.38961706189492,
+      "sharpe_ratio": -0.1427032940956354,
+      "trades": [
+        {
+          "entry_date": "2026-01-05 00:00:00",
+          "entry_price": 28.56159284746509,
+          "exit_date": "2026-02-02 00:00:00",
+          "exit_price": 27.1301049004561,
+          "return_rate": -0.0541193317422434,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-01-19 00:00:00",
+          "entry_price": 27.178794966680897,
+          "exit_date": "2026-02-24 00:00:00",
+          "exit_price": 27.18610109717875,
+          "return_rate": -0.003731182691991713,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-02-02 00:00:00",
+          "entry_price": 27.1301049004561,
+          "exit_date": "2026-03-10 00:00:00",
+          "exit_price": 25.71019984326025,
+          "return_rate": -0.05633688046565499,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-02-24 00:00:00",
+          "entry_price": 27.18610109717875,
+          "exit_date": "2026-03-24 00:00:00",
+          "exit_price": 23.96863636363642,
+          "return_rate": -0.12234961997828452,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-03-10 00:00:00",
+          "entry_price": 25.71019984326025,
+          "exit_date": "2026-04-08 00:00:00",
+          "exit_price": 24.303173981191282,
+          "return_rate": -0.05872636815920389,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-03-24 00:00:00",
+          "entry_price": 23.96863636363642,
+          "exit_date": "2026-04-22 00:00:00",
+          "exit_price": 26.28088166144207,
+          "return_rate": 0.09246962233169134,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-04-22 00:00:00",
+          "entry_price": 26.28088166144207,
+          "exit_date": "2026-05-25 00:00:00",
+          "exit_price": 25.76923589341699,
+          "return_rate": -0.023468363908648447,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-05-11 00:00:00",
+          "entry_price": 26.890920846395048,
+          "exit_date": "2026-06-08 00:00:00",
+          "exit_price": 25.02144592476495,
+          "return_rate": -0.07352067325283566,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-05-25 00:00:00",
+          "entry_price": 25.76923589341699,
+          "exit_date": "2026-06-23 00:00:00",
+          "exit_price": 28.32,
+          "return_rate": 0.09498485609480677,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-06-08 00:00:00",
+          "entry_price": 25.02144592476495,
+          "exit_date": "2026-07-07 00:00:00",
+          "exit_price": 28.45,
+          "return_rate": 0.13302461822326744,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-06-23 00:00:00",
+          "entry_price": 28.32,
+          "exit_date": "2026-07-21 00:00:00",
+          "exit_price": 28.34,
+          "return_rate": -0.0032937853107344785,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-07 00:00:00",
+          "entry_price": 28.45,
+          "exit_date": "2026-08-04 00:00:00",
+          "exit_price": 28.0,
+          "return_rate": -0.019817223198594,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        },
+        {
+          "entry_date": "2026-07-21 00:00:00",
+          "entry_price": 28.34,
+          "exit_date": "2026-08-18 00:00:00",
+          "exit_price": 27.39,
+          "return_rate": -0.0375215243472124,
+          "confidence": 85,
+          "signal_type": "威科夫事件 + VSA标签: Spring + DEM"
+        }
+      ]
+    }
+  }
+}

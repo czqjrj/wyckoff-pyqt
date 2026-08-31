@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-08-31T19:06:12.482890",
+  "stock_pool_size": 8,
+  "signals_found": 2,
+  "trades_executed": 2,
+  "total_return": 0.044666666666666674,
+  "performance": {
+    "total_trades": 2,
+    "successful_trades": 2,
+    "success_rate": 100.0,
+    "average_return_percent": 2.233333333333334,
+    "last_updated": "2026-08-31T19:06:12.482643"
+  },
+  "executed_trades": [
+    {
+      "stock": "sh600036",
+      "name": "招商银行",
+      "strategy": "wyckoff_plus_vsa",
+      "confidence": 86.66666666666667,
+      "execution_time": "2026-08-31T19:06:12.482573",
+      "simulated_return": 0.022333333333333337,
+      "status": "executed"
+    },
+    {
+      "stock": "sz000001",
+      "name": "平安银行",
+      "strategy": "wyckoff_plus_vsa",
+      "confidence": 86.66666666666667,
+      "execution_time": "2026-08-31T19:06:12.482579",
+      "simulated_return": 0.022333333333333337,
+      "status": "executed"
+    }
+  ]
+}

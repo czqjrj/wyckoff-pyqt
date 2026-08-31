@@ -1,0 +1,34 @@
+[
+  {
+    "stock": "sh600036",
+    "name": "招商银行",
+    "timestamp": "2026-08-31T19:31:45.747478",
+    "strategies_count": {
+      "practical_strategy_1": 11
+    },
+    "total_signals": 11
+  },
+  {
+    "stock": "sz000001",
+    "name": "平安银行",
+    "timestamp": "2026-08-31T19:31:47.337645",
+    "strategies_count": {},
+    "total_signals": 0
+  },
+  {
+    "stock": "sh601318",
+    "name": "中国平安",
+    "timestamp": "2026-08-31T19:31:47.632609",
+    "strategies_count": {
+      "practical_strategy_1": 11
+    },
+    "total_signals": 11
+  },
+  {
+    "stock": "sz000858",
+    "name": "五 粮 液",
+    "timestamp": "2026-08-31T19:31:47.893826",
+    "strategies_count": {},
+    "total_signals": 0
+  }
+]

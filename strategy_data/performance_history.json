@@ -1,0 +1,11 @@
+[
+  {
+    "stock": "sh600036",
+    "timestamp": "2026-08-31T19:00:59.579812",
+    "strategies_count": {
+      "wyckoff_7plus_confirmed": 15,
+      "wyckoff_plus_vsa": 26
+    },
+    "total_signals": 41
+  }
+]
