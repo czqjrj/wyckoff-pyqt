@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""威科夫四大高胜率策略管理系统
+"""威科夫策略管理系统
 
-策略1: 威科夫7项通过 + 确认事件
-策略2: 威科夫事件 + 高价值VSA标签
-策略3: 多因子强化做强多头策略
 策略4: 模拟盘纪律策略 (强多头事件 conf≥90 + 硬门禁, 源自 wyckoff.paper 实证,
        真实K线历史回放胜率~53%、盈亏比~3、累计收益+50%)
 """
@@ -24,7 +21,7 @@ from wyckoff.config import VSA_BULL, VSA_BEAR
 
 
 class WyckoffStrategyManager:
-    """威科夫三大高胜率策略管理器"""
+    """威科夫高胜率策略管理器"""
     
     def __init__(self, data_dir="three_strategy_data"):
         self.data_dir = data_dir
@@ -93,116 +90,6 @@ class WyckoffStrategyManager:
         }
         d.update(overrides)
         return d
-
-    def evaluate_strategy_1(self, df, i, wevents, nt, vsa_labels, params=None):
-        """策略1: 威科夫7项以上通过 + 近期确认事件 + 量比确认 + 位置过滤
-
-        params 可选（用于回测参数扫描/优化）：
-            min_buy_passed: 威科夫通过项下限 (默认 7)
-            max_position:   价格位置上限 (默认 0.9)
-            conf_min:       确认事件置信度下限 (默认 70)
-            event_window:   确认事件距当前的最大K数 (默认 20)
-            min_vr:         VSA量比下限 (默认 1.1)
-        """
-        p = {
-            "min_buy_passed": 7, "max_position": 0.9, "conf_min": 70,
-            "event_window": 20, "min_vr": 1.1,
-        }
-        if params:
-            p.update(params)
-        if nt["buy_passed"] < p["min_buy_passed"]:
-            return None
-        if self._price_position(df, i) > p["max_position"]:
-            return None
-        confirmed_events = [
-            e for e in wevents
-            if e.get("confirmed") is True
-            and e.get("conf", 0) > p["conf_min"]
-            and e["idx"] >= i - p["event_window"]
-        ]
-        if not confirmed_events:
-            return None
-        if not self._high_vsa_near(vsa_labels, i, ["CHOC", "DEM", "SUP", "LPS", "Spring", "ST"], min_vr=p["min_vr"]):
-            return None
-        return {
-            "strategy": "wyckoff_7plus_confirmed",
-            "name": "威科夫7项通过+确认事件",
-            "signal": "high_value_event",
-            "confidence": 90,
-            "details": f"威科夫7项通过 + 确认事件: {confirmed_events[0]['type']} (conf={confirmed_events[0].get('conf')})",
-            "event": confirmed_events[0],
-            "trading": self._trading_discipline()
-        }
-
-    def evaluate_strategy_2(self, df, i, wevents, nt, vsa_labels):
-        """策略2: 威科夫事件 + 高价值VSA标签 (质量+量比+位置过滤)"""
-        if nt["buy_passed"] < 4:
-            return None
-        high_events = [
-            e for e in wevents
-            if e["type"] in ["Spring", "Shakeout", "SOS", "JOC", "ST"]
-            and e.get("conf", 0) > 70
-            and e["idx"] >= i - 25
-        ]
-        if not high_events:
-            return None
-        high_vsa = self._high_vsa_near(
-            vsa_labels, i, ["CHOC", "DEM", "SUP", "LPS", "Spring", "ST"], min_vr=1.2, window=8
-        )
-        if not high_vsa:
-            return None
-        if self._price_position(df, i) > 0.9:
-            return None
-        event_conf = max([e.get("conf", 0) for e in high_events])
-        return {
-            "strategy": "wyckoff_plus_vsa",
-            "name": "威科夫事件+高价值VSA",
-            "signal": "combined_signal",
-            "confidence": min(90, event_conf),
-            "details": f"威科夫高价值事件 + 高价值VSA: {high_events[0]['type']} (conf={event_conf}) + {high_vsa[0]['label']} (vr={high_vsa[0].get('features', {}).get('vr', 0):.1f})",
-            "event": high_events[0],
-            "vsa": high_vsa[0],
-            "price_position": self._price_position(df, i),
-            "trading": self._trading_discipline()
-        }
-
-    def evaluate_strategy_3(self, df, i, wevents, nt, vsa_labels, stock_code):
-        """策略3: 多因子强化做强多头策略 (强信号+量比确认+趋势+位置+风控)"""
-        strong_bull_events = ["Spring", "Shakeout", "ST", "LPS", "SC", "SOS", "JOC"]
-        bull_events = [
-            e for e in wevents
-            if e["type"] in strong_bull_events
-            and e.get("conf", 0) >= 85
-            and e["idx"] >= i - 20
-        ]
-        if not bull_events:
-            return None
-        event = bull_events[0]
-        supporting_vsa = self._high_vsa_near(
-            vsa_labels, i, ["CHOC", "DEM", "SUP", "LPS", "Spring", "ETR"], min_vr=1.2, window=8
-        )
-        if not supporting_vsa:
-            return None
-        if "price_ma20" not in df.columns or df["close"].iloc[i] <= df["price_ma20"].iloc[i]:
-            return None
-        pos = self._price_position(df, i)
-        if pos > 0.9:
-            return None
-        if "vol_ma20" in df.columns:
-            if df["volume"].iloc[i] > df["vol_ma20"].iloc[i] * 3:
-                return None
-        return {
-            "strategy": "multi_factor_bull",
-            "name": "多因子强化做强多头",
-            "signal": "strong_bull_with_conditions",
-            "confidence": 95,
-            "details": f"强多头事件: {event['type']} (conf={event.get('conf')}) + VSA: {supporting_vsa[0]['label']}",
-            "event": event,
-            "vsa_support": supporting_vsa[0],
-            "price_position": pos,
-            "requirements_met": "量比确认+趋势+位置+风控",
-            "trading": self._trading_discipline()
-        }
 
     def evaluate_strategy_4(self, df, i, wevents, nt, vsa_labels, stock_code=None, min_conf=90):
         """策略4: 模拟盘纪律策略 (强多头事件 + high conf + 硬门禁)
@@ -281,7 +168,7 @@ class WyckoffStrategyManager:
         return {"all_pass": bool(pass_), "details": details}
     
     def analyze_stock(self, code, datalen=1000, horizon=20, cost=0.004):
-        """分析股票并应用三大策略"""
+        """分析股票并应用策略"""
         symbol = normalize_symbol(code)
         df = fetch_kline(symbol, datalen=datalen, scale=240)
         # 添加必要的技术指标
@@ -314,21 +201,6 @@ class WyckoffStrategyManager:
             # 获取VSA标签
             vsa_labels = vsa_classify(wdf, scale=240)
             
-            # 应用策略1
-            strategy1_result = self.evaluate_strategy_1(df, i, wevents, nt, vsa_labels)
-            if strategy1_result:
-                current_analysis["strategies_found"].append(strategy1_result)
-            
-            # 应用策略2
-            strategy2_result = self.evaluate_strategy_2(df, i, wevents, nt, vsa_labels)
-            if strategy2_result:
-                current_analysis["strategies_found"].append(strategy2_result)
-            
-            # 应用策略3
-            strategy3_result = self.evaluate_strategy_3(df, i, wevents, nt, vsa_labels, code)
-            if strategy3_result:
-                current_analysis["strategies_found"].append(strategy3_result)
-
             # 应用策略4 (模拟盘纪律策略; 离线历史扫描默认关闭实时门禁, 只出选股信号)
             strategy4_result = self.evaluate_strategy_4(df, i, wevents, nt, vsa_labels)
             if strategy4_result:
@@ -404,24 +276,6 @@ class WyckoffStrategyManager:
     def get_strategy_details(self):
         """获取所有策略的详细说明"""
         return {
-            "strategy_1": {
-                "name": "威科夫7项通过 + 确认事件",
-                "description": "威科夫九大检验点中7项以上通过，并有确认事件的高质量信号",
-                "characteristics": ["高置信度", "事件确认", "精确过滤"],
-                "conditions": ["威科夫7项通过", "事件确认", "位置过滤"]
-            },
-            "strategy_2": {
-                "name": "威科夫事件 + 高价值VSA标签",
-                "description": "威科夫事件与高价值VSA标签的组合验证",
-                "characteristics": ["多维度验证", "量比确认", "价格位置过滤"],
-                "conditions": ["威科夫事件", "高价值VSA标签", "位置过滤"]
-            },
-            "strategy_3": {
-                "name": "多因子强化做强多头策略",
-                "description": "基于强多头事件，结合市场环境条件的强化策略",
-                "characteristics": ["强信号", "量比确认", "趋势+位置+风控"],
-                "conditions": ["强多头事件", "量比确认", "趋势、位置、风控"]
-            },
             "strategy_4": {
                 "name": "模拟盘纪律策略 (强多头 + 硬门禁)",
                 "description": "源自模拟盘实证：强多头事件(conf≥90) + 大盘/板块/资金流硬门禁，配合同持上限3与止盈止损出场纪律",
@@ -434,18 +288,18 @@ class WyckoffStrategyManager:
 
 
 def main():
-    """主函数 - 四大策略管理演示"""
-    print("=== 威科夫四大策略管理系统 ===")
+    """主函数 - 策略管理演示"""
+    print("=== 威科夫策略管理系统（模拟盘纪律策略） ===")
     print()
-    
+
     # 创建策略管理器
     manager = WyckoffStrategyManager()
-    
+
     # 加载历史数据
     manager.load_performance_history()
-    
+
     # 显示策略详情
-    print("🔍 四大策略介绍:")
+    print("🔍 策略介绍:")
     print()
     
     strategy_details = manager.get_strategy_details()
@@ -509,7 +363,7 @@ def main():
     manager.export_strategy_report()
     
     print("\n✅ 系统功能总结:")
-    print("1. 自动识别四大策略信号")
+    print("1. 自动识别策略信号")
     print("2. 记录策略表现历史")
     print("3. 提供策略统计分析")
     print("4. 支持策略报告导出")

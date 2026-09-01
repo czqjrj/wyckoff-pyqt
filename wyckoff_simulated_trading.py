@@ -2,8 +2,8 @@
 """威科夫高胜率策略模拟盘选股系统
 
 基于真实历史K线计算持有收益（不再用置信度公式捏造收益），
-复用 wyckoff_strategies_manager 中优化后的三大策略评估逻辑，
-统计各策略在既定持有周期下的真实胜率与盈利。
+复用 wyckoff_strategies_manager 中优化后的模拟盘纪律策略评估逻辑，
+统计策略在既定持有周期下的真实胜率与盈利。
 """
 
 import numpy as np
@@ -24,11 +24,11 @@ class SimulatedTradingSystem:
         self.watchlist = []
         self.trading_log = []
         self.strategy_performance = defaultdict(list)
-        # 复用优化后的三大策略管理器
+        # 复用优化后的策略管理器
         self.manager = WyckoffStrategyManager()
 
     def _find_best_signal(self, code, datalen=1000, horizon=20, cost=0.004):
-        """扫描个股，返回最近的三大策略最优信号及真实持有收益
+        """扫描个股，返回最近的策略最优信号及真实持有收益
 
         返回 dict 或 None：{strategy, confidence, entry_idx, entry, exit, holding_return}
         """
@@ -55,9 +55,7 @@ class SimulatedTradingSystem:
             vsa_labels = vsa_classify(wdf, scale=240)
 
             candidates = [
-                self.manager.evaluate_strategy_1(df, j, wevents, nt, vsa_labels),
-                self.manager.evaluate_strategy_2(df, j, wevents, nt, vsa_labels),
-                self.manager.evaluate_strategy_3(df, j, wevents, nt, vsa_labels, symbol),
+                self.manager.evaluate_strategy_4(df, j, wevents, nt, vsa_labels),
             ]
 
             for res_ in candidates:

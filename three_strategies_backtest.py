@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""三大高胜率策略回测 - 复用 wyckoff_strategies_manager.py 的 WyckoffStrategyManager
+"""策略回测 - 复用 wyckoff_strategies_manager.py 的 WyckoffStrategyManager
 
-对多只股票应用策略管理器中的三个策略（策略1/2/3），
+对多只股票应用策略管理器中的模拟盘纪律策略（策略4），
 验证每个策略产生的信号在持有 horizon 天后的胜率与收益。
 """
 import sys
@@ -24,8 +24,8 @@ from wyckoff.vsa import vsa_classify
 from wyckoff_strategies_manager import WyckoffStrategyManager
 
 
-class ThreeStrategiesBacktester:
-    """三大高胜率策略回测器"""
+class StrategyBacktester:
+    """策略回测器"""
 
     def __init__(self, data_dir="three_strategy_backtest_data"):
         self.data_dir = data_dir
@@ -79,9 +79,7 @@ class ThreeStrategiesBacktester:
 
             candidates = []
             for res in [
-                self.manager.evaluate_strategy_1(df, i, wevents, nt, vsa_labels),
-                self.manager.evaluate_strategy_2(df, i, wevents, nt, vsa_labels),
-                self.manager.evaluate_strategy_3(df, i, wevents, nt, vsa_labels, symbol),
+                self.manager.evaluate_strategy_4(df, i, wevents, nt, vsa_labels),
             ]:
                 if res:
                     candidates.append(res)
@@ -209,9 +207,7 @@ class ThreeStrategiesBacktester:
             by_strategy.setdefault(t["strategy"], []).append(t)
 
         strategies = {
-            "wyckoff_7plus_confirmed": "策略1: 威科夫7项通过 + 确认事件",
-            "wyckoff_plus_vsa": "策略2: 威科夫事件 + 高价值VSA标签",
-            "multi_factor_bull": "策略3: 多因子强化做强多头策略",
+            "paper_discipline_bull": "策略4: 模拟盘纪律策略",
         }
 
         result = {}
@@ -262,7 +258,7 @@ class ThreeStrategiesBacktester:
 
 
 def main():
-    print("=== 三大高胜率策略回测 ===")
+    print("=== 策略回测（模拟盘纪律策略） ===")
     print("策略来源: wyckoff_strategies_manager.WyckoffStrategyManager")
     print()
 
@@ -276,7 +272,7 @@ def main():
     ]
     stocks = list(dict.fromkeys(stocks))[:30]
 
-    backtester = ThreeStrategiesBacktester()
+    backtester = StrategyBacktester()
 
     # 交易执行规则扫描：探索提高胜率的组合（突破入场 + 止盈止损 + ATR移动止损）
     param_sweeps = [
