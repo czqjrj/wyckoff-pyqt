@@ -143,17 +143,43 @@ def test_pick_candidates_discipline_gate_sector_flow(monkeypatch):
     # 板块强度不足 → fail-close
     monkeypatch.setattr(paper, "_sector_strength_ok", lambda s: (False, "板块强度40分位"))
     assert paper.pick_candidates(universe=["sh600001"], max_codes=5) == []
-    # 板块达标: 需要 _flow_net5; 无资金流数据 → fail-close 拦截
+    # 板块达标; 全部候选无资金流数据 → 数据缺失降级跳过门禁③ (不误杀)
     monkeypatch.setattr(paper, "_sector_strength_ok",
                         lambda s: (True, "板块强度80分位"))
     monkeypatch.setattr(paper, "_flow_net5", lambda c: None)
-    assert paper.pick_candidates(universe=["sh600001"], max_codes=5) == []
-    # 资金流达标 → 候选入池
-    monkeypatch.setattr(paper, "_flow_net5", lambda c: 1_000_000.0)
     monkeypatch.setattr(paper, "add_condition", lambda *a, **k: (None, ""))
     out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
     assert len(out) == 1
     assert out[0]["code"] == "sh600001"
+    # 资金流达标 → 候选入池 (与上同路径, 含数据)
+    monkeypatch.setattr(paper, "_flow_net5", lambda c: 1_000_000.0)
+    out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    assert len(out) == 1
+
+
+def test_pick_candidates_flow_gate_partial_data(monkeypatch):
+    """资金流门禁③: 部分候选有数据时, 中位过滤仍生效, 无数据者按不达标拦截。"""
+    df = _mk(np.linspace(10.0, 10.5, 400))
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline",
+                        lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators",
+                        lambda df, **k: df)
+    monkeypatch.setattr("wyckoff.indicators.find_pivots", lambda *a, **k: [])
+    monkeypatch.setattr("wyckoff.events.detect_all",
+                        lambda *a, **k: [_candidate(code="sh600001", idx=395),
+                                         _candidate(code="sh600002", idx=395)])
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    monkeypatch.setattr(paper, "_market_trend_ok",
+                        lambda: (True, "大盘站上MA20"))
+    monkeypatch.setattr(paper, "_sector_strength_ok",
+                        lambda s: (True, "板块强度80分位"))
+    monkeypatch.setattr(paper, "add_condition", lambda *a, **k: (None, ""))
+    # sh600001 有数据且高于中位, sh600002 无数据
+    monkeypatch.setattr(paper, "_flow_net5",
+                        lambda c: 1_000_000.0 if c == "sh600001" else None)
+    out = paper.pick_candidates(universe=["sh600001", "sh600002"], max_codes=5)
+    codes = [e["code"] for e in out]
+    assert codes == ["sh600001"]
 
 
 # ───────────────────────── 订单/撮合 ─────────────────────────

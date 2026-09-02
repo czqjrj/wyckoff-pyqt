@@ -380,11 +380,13 @@ def check_risk_budget(st, symbol: str, entry_price: float, stop_price: float,
 
 def check_sector_concentration(st, symbol: str, sector: str,
                                new_mv: float, df_by_code: dict) -> tuple[bool, str]:
-    """检查行业集中度。返回 (是否通过, 信息)。"""
+    """检查行业集中度 (分母=账户总权益: 现金+已有持仓+新单)。返回 (是否通过, 信息)。"""
     if not sector:
         return True, ""
 
-    total_mv = new_mv
+    # 行业集中度 = 该行业市值 / 账户总权益; 现金计入分母,
+    # 否则空仓首笔新单会自认 100% 集中而总是被拦。
+    total_mv = new_mv + float(st["cash"])
     sector_mv = new_mv
 
     for p in st["positions"]:
@@ -404,8 +406,8 @@ def check_sector_concentration(st, symbol: str, sector: str,
 
 def check_single_concentration(st, symbol: str, new_mv: float,
                                df_by_code: dict) -> tuple[bool, str]:
-    """检查单股集中度。返回 (是否通过, 信息)。"""
-    total_mv = new_mv
+    """检查单股集中度 (分母=账户总权益: 现金+已有持仓+新单)。返回 (是否通过, 信息)。"""
+    total_mv = new_mv + float(st["cash"])
     for p in st["positions"]:
         df = df_by_code.get(p["symbol"])
         px = float(df["close"].iloc[-1]) if df is not None and len(df) else p.get("last", p["buy_px"])
@@ -1164,7 +1166,10 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                 out.append(cand)
                 _flow_map[_code] = flow
     # 纪律门禁 ③: 资金流"净流入>50 分位" —— 跨市场截面判定。
-    # 只对拿到净流入数据的候选计算中位; 净流入缺失或低于中位 → 拦截。
+    # 只对拿到净流入数据的候选计算中位; 有数据但低于中位 → 拦截。
+    # 若全部候选都拿不到资金流数据 (接口被拒/离线/新股无数据) → 数据缺失不代表
+    # "资金弱", 降级跳过该门禁 (保留 ①大盘 ②板块 fail-close);
+    # 部分有部分无数据时, 无数据者仍按不达标拦截。
     if not skip_gates:
         flows = [f for f in _flow_map.values() if f is not None]
         if flows:
@@ -1173,7 +1178,8 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                    if _flow_map.get(e["code"]) is not None
                    and _flow_map[e["code"]] >= med]
         else:
-            out = []  # 无任何资金流数据 → 纪律不满足, fail-close
+            # 完全无资金流数据 → 门禁降级跳过 (见注释)
+            pass
     out.sort(key=lambda e: -(int(e.get("conf", 0) or 0)))
     return out
 
