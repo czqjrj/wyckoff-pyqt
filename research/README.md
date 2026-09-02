@@ -58,3 +58,40 @@
 
 - 脚本全部在 `research/` 下，可直接 `python factor_mining.py` 等重跑（联网或走 `wyckoff_cache.db`）。
 - 主策略代码：`wyckoff_strategies_manager.py`（当前仅策略4）。
+
+---
+
+# 综合选股预设回测验证：会话成果存档
+
+> 日期：2026-09-02
+> 目标：验证 `wyckoff/screener.py` 综合选股 5 个预设策略是否有实测正期望，决定是否推荐入库
+> 状态：**价值吸筹唯一通过并入库，其余预设已从列表清除**
+
+## 结论速览（必须读完）
+
+5 个预设 + 4 个变体，在 **48 只样本**（含沪深300成分/二线/题材，行业多样）上做与 `three_strategies_backtest.py` 相同口径的滚动回测（采样点 90..len-H-10 步长 5，滚动重算指标/枢轴/事件，事件逐idx去重，next_open 入场，-5%止损/+15%止盈/最多20天/0.4%成本），并做**股票池内/外拆分 + 时间前半/后半**稳定性检查：
+
+1. **价值吸筹（底部整固 + 20根内 {Spring,Shakeout,SC,ST,LPS}）→ 唯一通过，入库标推荐**：
+   全样本 n=130、胜率 49.2%、均收益 +1.12%、PF 1.53、累计 +223.9%；样本内 47.4%（n=66）/ 样本外 51.9%（n=64）；时间前半 48% / 后半 51%。
+   是**"正期望型"（大盈小亏，靠少数大赢单）而非 >60% 高胜率**——用 PF 而非胜率考核。
+2. **强势突破 / 超跌反弹 / 小盘成长 / 资金流向 → 全部未通过**（负期望或不稳定甚至亏损），已从 `PRESET_STRATEGIES` 移除，不推荐使用。
+3. **策略4基线口径（conf≥90 且近10根）当前缓存几乎不可复现**：全样本仅 n=21、胜率 33%。缓存窗口长度下无法获取足够的高 conf 信号，**不可用作判定依据**（这正是模拟盘接入价值吸筹作为无 conf 门槛回退信号的背景）。
+
+## 入库动作
+
+- `wyckoff/screener.py`：`PRESET_STRATEGIES` 精简为仅 `value_accumulation`，带 `verified` 元数据（2026-09-02，recommended=True，n/wr/avg/pf/cum/样本内外/半段），UI 下拉加 ★ 推荐徽标 + 悬浮显示实测统计。
+- `wyckoff_strategies_manager.py`：新增 `evaluate_strategy_value_accumulation`（回测口径一致：阶段=底部整固 + 20根内吸筹事件，无 conf 门槛），接入 `analyze_stock`。
+- 模拟盘 `wyckoff/paper.py`：候选生成改为双策略——纪律（强多头 conf≥阈值，`paper_discipline_bull`）优先，无高 conf 事件时回退价值吸筹（`screener_value_accumulation`）；四表（候选/订单/持仓/已平仓）均带策略标签。
+- 已提交：`c68775f`（回测验证入库+推荐）、`12569ac`（清除未通过预设与 8 个旧策略脚本）、`bd8bdbd`（策略管理器接入模拟盘）。
+
+## 代码与数据文件
+
+| 文件 | 作用 |
+|------|------|
+| `screener_presets_verify.py` | 5 预设 + 变体回测，样本内外 + 时间半段稳定性 |
+| `wyckoff/screener.py` | 综合选股预设（现仅 value_accumulation，含 verified 元数据） |
+
+## 关键公式/参数速查
+
+- 价值吸筹定义：`phases=["底部整固"]` AND 20根内出现 `{Spring, Shakeout, SC, ST, LPS}`（SOS 48% / PSY 42% 已剔除），辅助 `pe_max=35 / pb_max=4`。
+- 重点：**此策略是正期望型，不是高胜率型**——只看胜率会误判，必须以 PF/累计+分段稳定性为准。
