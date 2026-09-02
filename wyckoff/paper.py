@@ -1049,13 +1049,16 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
         min_conf = _CUR["min_conf"]
     from .datasource import fetch_kline
     from .events import detect_all
-    from .fundamental import fetch_market_universe, fetch_sector
+    from .fundamental import fetch_sector
+    from .fundamental import universe as market_universe
     from .indicators import add_indicators, find_pivots
     from .utils import normalize_symbol
 
     if universe is None:
+        # 用带兜底的 universe(): 东财成交额Top-N 优先, 接口不可用时自动降级
+        # 本地全A 抽样, 保证离线/接口被拒时模拟盘仍能选股。
         try:
-            universe = fetch_market_universe(100) or []
+            universe = market_universe(100)[0] or []
         except Exception:
             universe = []
     universe = [normalize_symbol(c) for c in universe]
