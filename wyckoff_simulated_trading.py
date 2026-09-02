@@ -6,10 +6,11 @@
 统计策略在既定持有周期下的真实胜率与盈利。
 """
 
-import numpy as np
-from collections import defaultdict
 import json
+from collections import defaultdict
 from datetime import datetime
+
+import numpy as np
 
 from wyckoff.datasource import fetch_kline, fetch_name
 from wyckoff.utils import normalize_symbol
@@ -37,8 +38,8 @@ class SimulatedTradingSystem:
         if len(df) < 150:
             return None
 
-        from wyckoff.indicators import find_pivots, add_indicators
         from wyckoff.events import detect_all
+        from wyckoff.indicators import add_indicators, find_pivots
         from wyckoff.ninetests import nine_tests
         from wyckoff.vsa import vsa_classify
 
@@ -56,6 +57,8 @@ class SimulatedTradingSystem:
 
             candidates = [
                 self.manager.evaluate_strategy_4(df, j, wevents, nt, vsa_labels),
+                self.manager.evaluate_strategy_value_accumulation(
+                    wdf, j, wevents, wpivots),
             ]
 
             for res_ in candidates:
@@ -184,13 +187,13 @@ def main():
     cost = 0.004
     result = sim_system.run_simulation(stock_pool, days=5, horizon=horizon, cost=cost)
 
-    print(f"\n=== 模拟交易结果 (真实K线收益) ===")
+    print("\n=== 模拟交易结果 (真实K线收益) ===")
     print(f"执行交易数量: {len(result['executed_trades'])}")
     print(f"总持有收益: {result['total_return'] * 100:.2f}%")
 
     perf_report = sim_system.get_performance_report()
     if "message" not in perf_report:
-        print(f"\n=== 性能统计 ===")
+        print("\n=== 性能统计 ===")
         print(f"总交易数:   {perf_report['total_trades']}")
         print(f"成功交易:   {perf_report['successful_trades']}")
         print(f"真实胜率:   {perf_report['success_rate']:.1f}%")

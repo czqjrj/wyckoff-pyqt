@@ -39,6 +39,9 @@ from .settings_keys import S
 
 _LOCK = threading.RLock()
 
+# 策略管理器单例占位 (延迟实例化, 见 _strategy_manager)
+_SMGR = None
+
 # ── 可配置策略参数 ─────────────────────────────────────────
 # 持仓周期 K 根 (日线, ~1 个月)
 HOLD_BARS = 20
@@ -225,7 +228,7 @@ def apply_paper_params(settings=None):
     不传/键缺失时回退到模块常量默认值, 保证与旧行为完全一致 (测试兼容)。
     支持键 (见 settings_keys.Paper): INIT_CASH/MAX_POS/HOLD_BARS/STOP_LOSS/
     TAKE_PROFIT/COST/MIN_CONF。调用方 (run_cycle/UI) 在周期执行前调用即可生效。
-    
+
     新增风控参数: MAX_DRAWDOWN/MAX_RISK_PCT/MAX_SECTOR_CONC/MAX_SINGLE_CONC/
     CORRELATION_THRESHOLD/VOL_ADJUST_ENABLED/MAX_CAPITAL_USAGE
     """
@@ -482,7 +485,7 @@ def calculate_kelly_fraction(win_rate: float, avg_win: float, avg_loss: float) -
 def calculate_position_size(st, symbol: str, entry_price: float, stop_price: float,
                             conf: int, df: any, method: str = None) -> int:
     """计算仓位大小。
-    
+
     支持多种资金管理方法:
     - equal_weight: 等权分配
     - kelly: Kelly 公式 (基于历史胜率/盈亏比)
@@ -644,7 +647,7 @@ def create_oco_order(st, symbol: str, name: str, qty: int,
                      take_profit_price: float, stop_loss_price: float,
                      side: OrderSide = OrderSide.SELL) -> tuple[str, str]:
     """创建 OCO 订单 (一单成交，一单撤销)。
-    
+
     返回: (take_profit_order_id, stop_loss_order_id)
     """
     parent_id = f"oco-{int(time.time() * 1_000_000)}"
@@ -687,7 +690,7 @@ def create_bracket_order(st, symbol: str, name: str, qty: int,
                          stop_loss_price: float,
                          side: OrderSide = OrderSide.BUY) -> dict:
     """创建括号单 (入场单 + 止盈单 + 止损单)。
-    
+
     返回: 入场单、止盈单、止损单的 ID 字典
     """
     parent_id = f"bracket-{int(time.time() * 1_000_000)}"
@@ -749,7 +752,7 @@ def create_scale_in_order(st, symbol: str, name: str, total_qty: int,
                           entry_prices: list[float],
                           side: OrderSide = OrderSide.BUY) -> list[str]:
     """创建分批建仓订单。
-    
+
     entry_prices: 每批的限价列表
     """
     n_batches = len(entry_prices)
@@ -853,7 +856,6 @@ def check_advanced_orders(st, df_by_code: dict) -> int:
         if df is None or len(df) == 0:
             continue
 
-        last = float(df["close"].iloc[-1])
         high = float(df["high"].iloc[-1])
         low = float(df["low"].iloc[-1])
 
@@ -984,6 +986,47 @@ from .discipline import (
 )
 
 
+def _strategy_manager():
+    """策略管理器单例 (延迟实例化, 数据目录落在 DATA_DIR 下避免污染运行目录)。
+
+    供模拟盘候选生成复用: 策略4 (模拟盘纪律, conf≥90) 与 综合选股·价值吸筹
+    (底部整固 + 20根内吸筹事件)。导入失败或数据不可用时返回 None (纯离线降级)。
+    """
+    global _SMGR
+    if _SMGR is None:
+        try:
+            from wyckoff_strategies_manager import WyckoffStrategyManager
+
+            from .paths import DATA_DIR as _DD
+            _SMGR = WyckoffStrategyManager(
+                data_dir=os.path.join(_DD, "strategy_manager_data"))
+        except Exception:
+            _SMGR = False
+    return _SMGR if _SMGR else None
+
+
+def _value_accum_candidate(code, df, piv, evs):
+    """基于策略管理器的「价值吸筹」信号构造候选。
+
+    命中条件 (与回测口径一致, 无 conf 门槛): 阶段=底部整固 且 近20根内出现
+    {Spring,Shakeout,SC,ST,LPS}。返回 {"strategy","type","idx","conf"} 或 None。
+    管理器不可用 / 评估异常时返回 None (纪律候选照常工作)。
+    """
+    m = _strategy_manager()
+    if m is None:
+        return None
+    try:
+        sig = m.evaluate_strategy_value_accumulation(df, len(df) - 1, evs, piv)
+    except Exception:
+        return None
+    if not sig:
+        return None
+    ev = sig["event"]
+    return {"strategy": "screener_value_accumulation",
+            "type": ev["type"], "idx": int(ev.get("idx") or 0),
+            "conf": int(ev.get("conf", 0) or 0)}
+
+
 def pick_candidates(universe=None, max_codes=60, min_conf=None,
                     cancel_event=None, skip_gates=False):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
@@ -1037,6 +1080,7 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
             evs = detect_all(df, piv)
             if not evs:
                 return code, None, None
+            # 纪律信号: 强多头事件 conf≥阈值 (策略管理器·策略4口径, 近10根)
             latest = None
             for e in evs:
                 if e["type"] not in LONG_EVENT_TYPES:
@@ -1048,12 +1092,20 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                     continue
                 if latest is None or (e.get("idx") or 0) > latest["idx"]:
                     latest = e
+            strategy = "paper_discipline_bull"
             if latest is None:
-                return code, None, None
+                # 回退: 策略管理器·价值吸筹 (底部整固 + 20根内吸筹事件, 无 conf 门槛)
+                va = _value_accum_candidate(code, df, piv, evs)
+                if va is None:
+                    return code, None, None
+                latest = {"type": va["type"], "idx": va["idx"],
+                          "conf": va["conf"]}
+                strategy = va["strategy"]
             base_conf = int(latest.get("conf", 0) or 0)
             latest["code"] = code
             latest["name"] = _stock_name(code)
             latest["last"] = round(float(df["close"].iloc[-1]), 2)
+            latest["strategy"] = strategy
             latest["sector"] = ""
             try:
                 latest["sector"] = fetch_sector(code) or ""
@@ -1086,7 +1138,7 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
                 add_condition(st, kind="buy_price",
                               symbol=code, price=cond_price,
                               trigger="above",
-                              reason=f"自动:{latest['type']}({latest.get('conf',0)})")
+                              reason=f"自动:{latest.get('strategy','')}:{latest['type']}({latest.get('conf',0)})")
             except Exception:
                 pass
             return code, latest, flow
@@ -1153,10 +1205,12 @@ def has_position(st, code):
     return any(p["symbol"] == code for p in st["positions"])
 
 
-def _make_order(code, name, type_, conf, price, n_total, cash, sector=None):
+def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
+                strategy=""):
     """构造买单订单公共字段 (qty 按当前现金预算分配, 整手)。
 
-    sector 为持仓行业 (用于行业集中度风控 check_sector_concentration)。
+    sector 为持仓行业 (用于行业集中度风控 check_sector_concentration);
+    strategy 记录信号来源策略 (策略管理器: paper_discipline_bull/价值吸筹)。
     """
     budget = cash * (1.0 / max(1, _CUR["max_pos"]))
     if budget < MIN_LOT:
@@ -1169,11 +1223,12 @@ def _make_order(code, name, type_, conf, price, n_total, cash, sector=None):
         "qty": qty, "price": round(price * (1 + SLIP_BUY), 3), "side": "buy",
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "date": "", "bars": int(n_total) if n_total else 0,
-        "sector": sector or "",
+        "sector": sector or "", "strategy": strategy,
     }
 
 
-def place_buy_order(code, name, type_, conf, price, n_total, execute=True):
+def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
+                    strategy=""):
     """下单买入 (execute=True 直接按现价撮合成交; False 进 pending 待成交)。
 
     独立入口: 自行加载状态、校验持仓/同持上限/资金。返回 (order, msg)。
@@ -1184,7 +1239,8 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True):
             return None, "已持有"
         if len(st["positions"]) >= _CUR["max_pos"]:
             return None, "同持已满"
-        order = _make_order(code, name, type_, conf, price, n_total, st["cash"])
+        order = _make_order(code, name, type_, conf, price, n_total, st["cash"],
+                            strategy=strategy)
         if order is None:
             return None, "金额不足一手"
         if execute:
@@ -1194,9 +1250,10 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True):
         return order, "已下单待撮合"
 
 
-def _enqueue_buy(st, code, name, type_, conf, price, sector=None):
+def _enqueue_buy(st, code, name, type_, conf, price, sector=None, strategy=""):
     """(进程内) 仅计入 pending, 不校验不落盘。调用方负责校验与 save_state。"""
-    order = _make_order(code, name, type_, conf, price, 0, st["cash"], sector=sector)
+    order = _make_order(code, name, type_, conf, price, 0, st["cash"],
+                        sector=sector, strategy=strategy)
     if order is None:
         return None
     st["pending"].append(order)
@@ -1342,7 +1399,7 @@ def _find_pos(st, symbol):
 def _judge_condition_correct(c, last, entry=None, ret=None, peak=None,
                              side="sell", cond_price=None, pct=None):
     """根据条件类型和行情判断是否正确 (True=绿钩, False=红叉, None=未评估)。
-    
+
     判断规则:
       - buy_price/above: 价格 ≥ 触发价 → True
       - buy_price/below: 价格 ≤ 触发价 → True
@@ -1451,6 +1508,7 @@ def fill_buy(st, order):
         "qty": qty, "buy_px": price, "cost": round(cost, 2),
         "entry_ts": order["ts"], "entry_bars": order.get("bars", 0),
         "sector": order.get("sector", ""),
+        "strategy": order.get("strategy", ""),
         "staged": False,
     })
     st["orders"].append(order)
@@ -1522,6 +1580,7 @@ def close_position(st, pos, sell_price, reason):
         "reason": reason, "entry_ts": pos["entry_ts"],
         "close_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "bars": int(pos.get("entry_bars", 0)),
+        "strategy": pos.get("strategy", ""),
     })
     st["positions"] = [p for p in st["positions"] if p is not pos]
     st["equity_hist"].append({
@@ -1545,7 +1604,7 @@ def equity(st, df_by_code):
 # ── 收益统计 ─────────────────────────────────────────────
 def stats(st):
     """账户/策略统计。返回 dict (供 UI/报告)。
-    
+
     包含基础统计 + 高级绩效指标:
     - 夏普比率, 索提诺比率, 卡尔马比率
     - 年化收益/波动率
@@ -1724,11 +1783,11 @@ def stats(st):
 
 def advanced_stats(st, benchmark_returns: list[float] = None) -> dict:
     """高级绩效分析，包含相对基准指标。
-    
+
     Args:
         st: 模拟盘状态
         benchmark_returns: 基准日收益率序列 (如沪深300)
-    
+
     Returns:
         包含 Alpha, Beta, 信息比率, 跟踪误差等的字典
     """
@@ -1843,7 +1902,8 @@ def run_cycle(settings=None, min_conf=None, universe=None):
         if _risk_blocks_entry(st, e, px):
             continue
         _enqueue_buy(st, code, e.get("name", ""), e["type"],
-                     e.get("conf", 50), px, sector=e.get("sector", ""))
+                     e.get("conf", 50), px, sector=e.get("sector", ""),
+                     strategy=e.get("strategy", ""))
     # 3) 步进+平仓判定 (持仓 + 待撮合用最新行情)
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
@@ -1887,7 +1947,7 @@ def run_scan(st, scan_type='discipline', n_codes=20):
     cand.sort(key=lambda e: (-int(e.get("conf", 0) or 0), e.get("code", "")))
     st["candidates"] = cand
 
-    label = "纪律(强多头+硬门禁)"
+    label = "策略管理器扫描(纪律+价值吸筹)"
     result_str = (f"{label}扫描: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
                   if cand else
                   "纪律扫描: 无满足条件的候选 (强多头事件/conf/大盘/板块/资金流门禁)")

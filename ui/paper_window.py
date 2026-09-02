@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .extra_windows import _accent_header, _ghost_btn, _table, retheme_children
+from .extra_windows import _accent_header, _ghost_btn, _table, retheme_children, theme
 
 
 def _fill_paper(table, cols, heads, rows, color_cols=()):
@@ -84,23 +84,34 @@ def _cond_kind_cn(kind):
         "trailing": "追踪止损",
     }.get(kind, kind)
 
-_CN_POS = ("symbol", "name", "type", "conf", "qty", "buy_px", "last",
-           "last_ret", "entry_bars")
-_CN_POS_HEAD = ("代码", "名称", "事件", "置信", "数量", "成本", "现价",
+_CN_POS = ("symbol", "name", "strategy", "type", "conf", "qty", "buy_px",
+           "last", "last_ret", "entry_bars")
+_CN_POS_HEAD = ("代码", "名称", "策略", "事件", "置信", "数量", "成本", "现价",
                 "浮盈亏", "已持K")
-_CN_CLOSED = ("symbol", "name", "type", "reason", "buy_px", "sell_px",
-              "ret", "bars", "close_ts")
-_CN_CLOSED_HEAD = ("代码", "名称", "事件", "平仓原因", "买入价", "卖出价",
-                   "收益", "持有K", "平仓时间")
-_CN_CAND = ("code", "name", "type", "conf", "last")
-_CN_CAND_HEAD = ("代码", "名称", "事件", "置信", "现价")
-_CN_ORD = ("ts", "symbol", "name", "qty", "price", "type", "conf", "side", "date")
-_CN_ORD_HEAD = ("时间", "代码", "名称", "数量", "价格", "事件", "置信",
+_CN_CLOSED = ("symbol", "name", "strategy", "type", "reason", "buy_px",
+              "sell_px", "ret", "bars", "close_ts")
+_CN_CLOSED_HEAD = ("代码", "名称", "策略", "事件", "平仓原因", "买入价",
+                   "卖出价", "收益", "持有K", "平仓时间")
+_CN_CAND = ("code", "name", "strategy", "type", "conf", "last")
+_CN_CAND_HEAD = ("代码", "名称", "策略", "事件", "置信", "现价")
+_CN_ORD = ("ts", "symbol", "name", "strategy", "qty", "price", "type", "conf",
+           "side", "date")
+_CN_ORD_HEAD = ("时间", "代码", "名称", "策略", "数量", "价格", "事件", "置信",
                 "方向", "日期")
 _CN_COND = ("created_ts", "symbol", "name", "kind", "trigger", "cond_price",
             "pct", "qty", "status", "matched_price", "reason")
 _CN_COND_HEAD = ("创建时间", "代码", "名称", "类型", "触发", "触发价", "百分比",
                  "数量", "状态", "成交价", "说明")
+
+# 策略管理器信号来源 → 界中文标签
+_STRAT_CN = {
+    "paper_discipline_bull": "策略4·纪律",
+    "screener_value_accumulation": "价值吸筹",
+}
+
+
+def _strat_cn(s):
+    return _STRAT_CN.get(s or "", s or "-")
 
 
 class _PaperCycleThread(QThread):
@@ -470,6 +481,7 @@ class PaperWindow(QDialog):
         for p in st["positions"]:
             rows.append({
                 "symbol": p["symbol"], "name": p.get("name", ""),
+                "strategy": _strat_cn(p.get("strategy", "")),
                 "type": p.get("type", ""), "conf": float(p.get("conf", 50)),
                 "qty": f"{p['qty']:,}", "buy_px": float(p["buy_px"]),
                 "last": float(p.get("last", p["buy_px"])),
@@ -485,6 +497,7 @@ class PaperWindow(QDialog):
         for c in st["closed"][-200:]:
             rows.append({
                 "symbol": c["symbol"], "name": c.get("name", ""),
+                "strategy": _strat_cn(c.get("strategy", "")),
                 "type": c.get("type", ""), "reason": c.get("reason", ""),
                 "buy_px": float(c["buy_px"]), "sell_px": float(c["sell_px"]),
                 "ret": float(c["ret"] * 100), "bars": c.get("bars", 0),
@@ -500,6 +513,7 @@ class PaperWindow(QDialog):
         for c in st["candidates"]:
             rows.append({
                 "code": c["code"], "name": c.get("name", ""),
+                "strategy": _strat_cn(c.get("strategy", "")),
                 "type": c.get("type", ""), "conf": float(c.get("conf", 0)),
                 "last": float(c.get("last", 0) or 0),
             })
@@ -512,7 +526,9 @@ class PaperWindow(QDialog):
         for o in st["orders"][-200:]:
             rows.append({
                 "ts": o.get("ts", ""), "symbol": o["symbol"],
-                "name": o.get("name", ""), "qty": f"{o.get('qty', 0):,}",
+                "name": o.get("name", ""),
+                "strategy": _strat_cn(o.get("strategy", "")),
+                "qty": f"{o.get('qty', 0):,}",
                 "price": float(o.get("price", 0) or 0),
                 "type": o.get("type", ""), "conf": float(o.get("conf", 0)),
                 "side": o.get("side", ""), "date": o.get("date", ""),
