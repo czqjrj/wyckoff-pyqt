@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-09-01T13:22:14.657741",
+  "backtest_period": "过去500天",
+  "holding_horizon": "20天",
+  "cost": 0.004,
+  "stocks_tested": 10,
+  "total_trades": 2,
+  "strategies": {
+    "wyckoff_7plus_confirmed": {
+      "name": "策略1: 威科夫7项通过 + 确认事件",
+      "trades": [],
+      "total_trades": 0
+    },
+    "wyckoff_plus_vsa": {
+      "name": "策略2: 威科夫事件 + 高价值VSA标签",
+      "total_trades": 2,
+      "win_rate": 50.0,
+      "avg_return_per_trade": -0.12442762730077127,
+      "total_return": -0.31592373749116387,
+      "max_drawdown": -2.7171733771569606,
+      "avg_win": 2.4683181225554134,
+      "avg_loss": -2.7171733771569557,
+      "profit_factor": 0.9084139213589948,
+      "avg_confidence": 80.5,
+      "trades": [
+        {
+          "stock": "sh600036",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 72,
+          "entry_date": "2024-12-24 00:00:00",
+          "exit_date": "2025-01-22 00:00:00",
+          "entry_price": 34.87453765868661,
+          "exit_price": 35.87485034250813,
+          "return_rate": 0.024683181225554133,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=72) + CHOC (vr=1.8)"
+        },
+        {
+          "stock": "sh600276",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 89,
+          "entry_date": "2025-12-23 00:00:00",
+          "exit_date": "2026-01-22 00:00:00",
+          "entry_price": 60.60264227642043,
+          "exit_price": 59.198373983737554,
+          "return_rate": -0.027171733771569558,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=89) + CHOC (vr=1.7)"
+        }
+      ]
+    },
+    "multi_factor_bull": {
+      "name": "策略3: 多因子强化做强多头策略",
+      "trades": [],
+      "total_trades": 0
+    }
+  }
+}

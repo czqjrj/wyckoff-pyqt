@@ -442,3 +442,50 @@ def test_condition_invalid_kind():
                                  save=False)
     assert c is None
     assert "不支持" in msg
+
+
+# ───────────────────────── 净收益口径 (含费用) ─────────────────────────
+def test_float_ret_is_net_of_fees():
+    # 平价浮亏: 即便现价=成本, 扣双边费用后净收益为负
+    ret = paper.float_ret(10.0, 10.0)
+    cost_rate = 1.0 + paper._CUR["cost"]
+    deriv = (10.0 * (1 - paper.SLIP_SELL) * (1 - paper._CUR["cost"])
+             / (10.0 * cost_rate) - 1)
+    assert ret == pytest.approx(deriv, abs=1e-12)
+    assert ret < 0
+    # 现价涨过成本价时, 净收益应为正且小于毛收益率
+    gross = 10.5 / 10.0 - 1
+    assert paper.float_ret(10.0, 10.5) < gross
+
+
+def test_float_ret_zero_guard():
+    assert paper.float_ret(0.0, 10.0) == 0.0
+
+
+def test_close_position_ret_is_net(monkeypatch):
+    monkeypatch.setattr("wyckoff.paper.execute_date", lambda c: "2024-05-01")
+    st = paper._new_state()
+    order = paper._make_order("sh600001", "", "Spring", 95, 10.0, 5,
+                              st["cash"])
+    paper.fill_buy(st, order)
+    pos = st["positions"][0]
+    outlay = pos["buy_px"] * pos["qty"] * paper.net_cost_rate()
+    paper.close_position(st, pos, 10.0, "止盈")
+    proceeds = 10.0 * pos["qty"] * (1 - paper._CUR["cost"])
+    expect = round((proceeds - outlay) / outlay, 4)
+    assert st["closed"][0]["ret"] == pytest.approx(expect, abs=1e-9)
+
+
+def test_stats_equity_includes_positions_mark_to_market():
+    st = paper._new_state()
+    order = paper._make_order("sh600001", "", "Spring", 95, 10.0, 5,
+                              st["cash"])
+    paper.fill_buy(st, order)
+    pos = st["positions"][0]
+    pos["last"] = 11.0  # 模拟现价刷新
+    s = paper.stats(st)
+    assert s["equity"] == pytest.approx(round(st["cash"] + pos["qty"] * 11.0, 2),
+                                        abs=1e-9)
+    init = paper._CUR["init_cash"]
+    assert s["total_return"] == pytest.approx(round(s["equity"] / init - 1, 4),
+                                              abs=1e-9)

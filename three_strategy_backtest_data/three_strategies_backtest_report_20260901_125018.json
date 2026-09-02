@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-09-01T12:50:18.682184",
+  "backtest_period": "过去500天",
+  "holding_horizon": "30天",
+  "cost": 0.004,
+  "stocks_tested": 28,
+  "total_trades": 3,
+  "strategies": {
+    "wyckoff_7plus_confirmed": {
+      "name": "策略1: 威科夫7项通过 + 确认事件",
+      "trades": [],
+      "total_trades": 0
+    },
+    "wyckoff_plus_vsa": {
+      "name": "策略2: 威科夫事件 + 高价值VSA标签",
+      "total_trades": 3,
+      "win_rate": 0.0,
+      "avg_return_per_trade": -5.405905218449606,
+      "total_return": -15.466065974073405,
+      "max_drawdown": -13.37948479921573,
+      "avg_win": 0,
+      "avg_loss": -5.405905218449606,
+      "profit_factor": 0.0,
+      "avg_confidence": 86.0,
+      "trades": [
+        {
+          "stock": "sh600036",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 77,
+          "entry_date": "2025-09-04 00:00:00",
+          "exit_date": "2025-10-24 00:00:00",
+          "entry_price": 40.614189610919105,
+          "exit_price": 39.7983007282891,
+          "return_rate": -0.024088764307404916,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=77) + CHOC (vr=1.9)"
+        },
+        {
+          "stock": "sh600276",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 89,
+          "entry_date": "2025-12-19 00:00:00",
+          "exit_date": "2026-02-03 00:00:00",
+          "entry_price": 59.825813008127774,
+          "exit_price": 57.236382113818934,
+          "return_rate": -0.047282836690527685,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=89) + CHOC (vr=1.7)"
+        },
+        {
+          "stock": "sh600276",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 92,
+          "entry_date": "2026-01-06 00:00:00",
+          "exit_date": "2026-02-25 00:00:00",
+          "entry_price": 63.10243902438781,
+          "exit_price": 57.624796747965256,
+          "return_rate": -0.09080555555555558,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=94) + CHOC (vr=2.6)"
+        }
+      ]
+    },
+    "multi_factor_bull": {
+      "name": "策略3: 多因子强化做强多头策略",
+      "trades": [],
+      "total_trades": 0
+    }
+  }
+}

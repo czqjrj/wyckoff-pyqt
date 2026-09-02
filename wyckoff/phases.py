@@ -316,6 +316,8 @@ def _is_range(df, a, e, band, min_bars, min_crosses=4):
     cl_arr = df["close"].values
     hi = hi_arr[a:e + 1].max()
     lo = lo_arr[a:e + 1].min()
+    if lo <= 0:  # 0 低点 = 停牌/坏数据, 视为非区间
+        return False
     if hi / lo - 1 > band:
         return False
     mid = (hi + lo) / 2

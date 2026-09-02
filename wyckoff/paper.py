@@ -1029,13 +1029,14 @@ def _value_accum_candidate(code, df, piv, evs):
             "conf": int(ev.get("conf", 0) or 0)}
 
 
-def pick_candidates(universe=None, max_codes=60, min_conf=None,
-                    cancel_event=None, skip_gates=False):
+def pick_candidates(universe=None, max_codes=6000, min_conf=None,
+                    cancel_event=None, progress=None, skip_gates=False):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
 
     每只股票只留"最近 N 根内最新"的强多头事件; conf 由 event 的 conf 字段
     (启发式 + online model 校准 + 类型封顶后) 提供。universe 为空用全市场。
     min_conf 缺省取当前生效参数 (apply_paper_params 设置或模块默认 90)。
+    progress(done, total, code) 可选进度回调, 透传给 parallel_map 供 UI 进度条。
 
     纪律硬门禁 (缺一不可, 数据不可用即拦截; skip_gates=True 跳过全部门禁,
     供离线/测试/仅排序场景使用):
@@ -1057,12 +1058,18 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
     from .utils import normalize_symbol
 
     if universe is None:
-        # 用带兜底的 universe(): 东财成交额Top-N 优先, 接口不可用时自动降级
-        # 本地全A 抽样, 保证离线/接口被拒时模拟盘仍能选股。
+        # 全A 市场扫描: 本地全A 名单 (去 ST/退市/新股, ~5900 只) 逐股扫描;
+        # 名单缺失时降级东财成交额 Top-100 / 本地抽样兜底。
         try:
-            universe = market_universe(100)[0] or []
+            from .fundamental import local_universe
+            universe = local_universe(6000)
         except Exception:
             universe = []
+        if not universe:
+            try:
+                universe = market_universe(100)[0] or []
+            except Exception:
+                universe = []
     universe = [normalize_symbol(c) for c in universe]
     # 纪律门禁 ①: 大盘20日线向上 (全市场统一, 一次判定; fail-close)
     if not skip_gates:
@@ -1136,14 +1143,12 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
             except Exception:
                 pass
 
-            # 纪律门禁已在此前判定; 生成自动买入条件单 (触发价=现价+0.2% 上破)
+            # 纪律门禁已在此前判定; 带回应自动生成的条件单数据 (触发价=现价+0.2% 上破)。
+            # 不在此写盘: 全程 6 线程并发的 load/save 会互相覆盖, 且调用方
+            # (run_scan/run_cycle) 的最终 save_state 会用旧快照把这里写掉的
+            # 条件单整个冲掉, 造成"已自动买入却无条件单"。由调用方统一落盘。
             try:
-                cond_price = round(float(latest["last"]) * 1.002, 3)
-                st = load_state()
-                add_condition(st, kind="buy_price",
-                              symbol=code, price=cond_price,
-                              trigger="above",
-                              reason=f"自动:{latest.get('strategy','')}:{latest['type']}({latest.get('conf',0)})")
+                latest["auto_cond_price"] = round(float(latest["last"]) * 1.002, 3)
             except Exception:
                 pass
             return code, latest, flow
@@ -1153,14 +1158,22 @@ def pick_candidates(universe=None, max_codes=60, min_conf=None,
     out = []
     _flow_map = {}  # code -> 近5日主力净流入
     _codes = universe[:max_codes]
+    _total = len(_codes)
     try:
         from ._shared import parallel_map
-        for code, cand, flow in parallel_map(_codes, _probe, workers=6):
+        for code, cand, flow in parallel_map(_codes, _probe, workers=6,
+                                             progress=progress):
             if cand is not None:
                 out.append(cand)
                 _flow_map[code] = flow
     except Exception:
-        for code in _codes:
+        # 串行兜底: 同样上报进度, 保证进度条口径一致
+        for i, code in enumerate(_codes):
+            if progress is not None:
+                try:
+                    progress(i + 1, _total, code)
+                except Exception:
+                    pass
             _code, cand, flow = _probe(code)
             if cand is not None:
                 out.append(cand)
@@ -1312,6 +1325,30 @@ def add_condition(st, kind, symbol, price=None, pct=None, trigger="above",
     if save:
         save_state(st)
     return c, "已添加条件单"
+
+
+def _apply_auto_conditions(st, cand):
+    """为迭代出的候选批量生成 buy_price 条件单 (去重, 不落盘)。
+
+    由 run_scan/run_cycle 在最终 save_state 前调用一次, 避免扫描线程逐条
+    写盘被最终快照覆盖。已存在同代码同类型 active 条件单时跳过。
+    """
+    conds = st.setdefault("conditions", [])
+    added = 0
+    for e in cand or []:
+        price = e.get("auto_cond_price")
+        if not price:
+            continue
+        code = e["code"]
+        if any(c.get("kind") == "buy_price" and c.get("symbol") == code
+               and c.get("status") == "active" for c in conds):
+            continue
+        conds.append(_cond(
+            "buy_price", code, price=float(price), trigger="above",
+            name=e.get("name", ""),
+            reason=f"自动:{e.get('strategy','')}:{e.get('type')}({e.get('conf',0)})"))
+        added += 1
+    return added
 
 
 def place_condition(kind, symbol, price=None, pct=None, trigger="above",
@@ -1541,7 +1578,7 @@ def step(st, df_by_code):
         entry = float(pos["buy_px"])
         ret = last / entry - 1
         pos["last"] = round(last, 3)
-        pos["last_ret"] = round(ret, 4)
+        pos["last_ret"] = round(float_ret(entry, last), 4)
         # 结构位: 用最近 10 根低点做动态支撑 (近似结构关键位)
         support = float(df["low"].iloc[-10:].min())
         stop_px = entry * (1 - _CUR["stop_loss"])
@@ -1580,7 +1617,9 @@ def close_position(st, pos, sell_price, reason):
     fee = gross * _CUR["cost"]
     proceeds = gross - fee
     st["cash"] += proceeds
-    ret_total = (price / pos["buy_px"] - 1)
+    # 实际净收益 = 净卖回款 / 买入含费总支出 - 1 (扣双边费用, 与 float_ret 一致)
+    outlay = pos["buy_px"] * pos["qty"] * net_cost_rate()
+    ret_total = (proceeds - outlay) / outlay
     st["closed"].append({
         "symbol": pos["symbol"], "name": pos.get("name", ""),
         "type": pos["type"], "conf": pos.get("conf", 50),
@@ -1598,6 +1637,26 @@ def close_position(st, pos, sell_price, reason):
         "equity": round(equity(st, {}), 2),
     })
     save_state(st)
+
+
+def net_cost_rate():
+    """含买入费用(单边成本)的每股成本系数 = 1 + cost。"""
+    return 1.0 + _CUR["cost"]
+
+
+def float_ret(buy_px, last):
+    """当前持仓净浮盈 (%)。
+
+    按当前价即时卖出 (扣卖滑点 + 卖出费用) 后的净收益,
+    相对买入含费成本 (买入价含买滑点 + 买入费用)。
+    与 close_position 记录的实际净收益口径一致。
+    """
+    buy_px = float(buy_px)
+    if buy_px <= 0:
+        return 0.0
+    sell_net = float(last) * (1 - SLIP_SELL) * (1 - _CUR["cost"])
+    cost = buy_px * net_cost_rate()
+    return sell_net / cost - 1
 
 
 def equity(st, df_by_code):
@@ -1727,14 +1786,16 @@ def stats(st):
             "avg_hold_bars": round(statistics.mean([c.get("bars", 0) for c in closed]), 1),
         }
 
-    # 总收益率: 当前总资产 (现金+持仓市值) 相对初始模拟资金
-    hist = st.get("equity_hist") or []
+    # 总收益率: 当前总资产 (现金+持仓市值) 相对初始模拟资金, 含未平仓浮盈亏
     init = float(_CUR["init_cash"])
-    if hist:
-        eqs = [h.get("equity", init) for h in hist]
-        last_hist = eqs[-1]
-        out["total_return"] = round(last_hist / init - 1, 4)
+    mv = sum(float(p.get("last", p["buy_px"])) * p["qty"] for p in st["positions"])
+    eq_now = out["cash"] + round(mv, 2)
+    out["equity"] = round(eq_now, 2)
+    out["total_return"] = round(eq_now / init - 1, 4) if init else 0.0
 
+    hist = st.get("equity_hist") or []
+    eqs = [h.get("equity", init) for h in hist] if hist else []
+    if eqs:
         # 计算日收益率序列
         daily_rets = []
         for i in range(1, len(eqs)):
@@ -1875,13 +1936,14 @@ def signal_stats_text(st):
     return "\n".join(L)
 
 
-def run_cycle(settings=None, min_conf=None, universe=None):
+def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
     """无头自动运行一个周期: 筛选→下单→步进→统计。返回统计。
 
     供 cron / 调度线程 / 手动触发。每周期持仓 K 数 +1,
     到期/止盈/止损/破位在该周期内平仓。
     settings 传入界面设置 dict (S.Paper.* 键) 覆盖策略参数; min_conf 显式传入
-    时优先于 settings (兼容旧调用方)。
+    时优先于 settings (兼容旧调用方)。candidates 传入时直接复用 (跳过选股),
+    供"扫描完成→自动买入"避免二次全市场扫描。
     """
     from .datasource import fetch_kline
     from .indicators import add_indicators
@@ -1891,9 +1953,14 @@ def run_cycle(settings=None, min_conf=None, universe=None):
         min_conf = _CUR["min_conf"]
 
     st = load_state()
-    # 1) 选股
-    cand = pick_candidates(universe=universe, min_conf=min_conf)
+    # 1) 选股: candidates 传入时直接复用扫描结果 (扫描已完成选股)
+    if candidates is None:
+        cand = pick_candidates(universe=universe, min_conf=min_conf)
+    else:
+        cand = candidates
     st["candidates"] = cand
+    # 自动买入条件单: 与候选一同在最终 save_state 落盘 (不被快照覆盖)
+    _apply_auto_conditions(st, cand)
     # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合。
     #    三大硬门槛已由 pick_candidates 在候选入池时 fail-close 判定
     #    (大盘↑+板块>60分位+资金>50分位), 这里直接消费精筛后的候选。
@@ -1910,9 +1977,15 @@ def run_cycle(settings=None, min_conf=None, universe=None):
         #   回撤上限 / 单笔风险预算 / 行业集中度 / 单股集中度 / 资金利用率
         if _risk_blocks_entry(st, e, px):
             continue
-        _enqueue_buy(st, code, e.get("name", ""), e["type"],
-                     e.get("conf", 50), px, sector=e.get("sector", ""),
-                     strategy=e.get("strategy", ""))
+        # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
+        # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
+        order = _make_order(code, e.get("name", ""), e["type"],
+                            e.get("conf", 50), px, 0, st["cash"],
+                            sector=e.get("sector", ""),
+                            strategy=e.get("strategy", ""))
+        if order is None:
+            continue
+        fill_buy(st, order)
     # 3) 步进+平仓判定 (持仓 + 待撮合用最新行情)
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
@@ -1928,7 +2001,7 @@ def run_cycle(settings=None, min_conf=None, universe=None):
     return stats(st)
 
 
-def run_scan(st, scan_type='discipline', n_codes=20):
+def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
     """运行纪律扫描并更新状态。
 
     按纪律执行: 强多头事件 (Spring/Shakeout/ST/LPS/SC) + conf≥阈值 + 三大硬门禁
@@ -1939,7 +2012,8 @@ def run_scan(st, scan_type='discipline', n_codes=20):
         st: 交易状态 dict
         scan_type: 保留兼容 (旧 "volume_surge"/"pnf_breakout"/"sector_driven"
                    在纪律下统一走 pick_candidates, 忽略具体类型)
-        n_codes: 要扫描的代码数量 (universe 截取)
+        n_codes: 要扫描的代码数量 (universe 截取, 默认 6000=全A 名单)
+        progress: 可选进度回调 (done, total, code), 透传给 pick_candidates
 
     返回:
         扫描结果字符串描述
@@ -1950,7 +2024,8 @@ def run_scan(st, scan_type='discipline', n_codes=20):
 
     # 纪律扫描: 强多头事件 + conf≥min_conf + 三大硬门禁
     try:
-        cand = pick_candidates(max_codes=n_codes, min_conf=_CUR["min_conf"])
+        cand = pick_candidates(max_codes=n_codes, min_conf=_CUR["min_conf"],
+                               progress=progress)
     except Exception:
         cand = []
     cand.sort(key=lambda e: (-int(e.get("conf", 0) or 0), e.get("code", "")))
@@ -1963,10 +2038,19 @@ def run_scan(st, scan_type='discipline', n_codes=20):
     st['last_scan_result'] = result_str
     st['next_scan_time'] = (datetime.now() + timedelta(minutes=30)).isoformat()
 
-    # 落盘 (避免 UI 读回旧状态)
-    try:
-        save_state(st)
-    except Exception:
-        pass
+    # 落盘: 合并到扫描期间可能被并发修改的最新状态 (保留持仓/待撮合/条件单),
+    # 并统一生成 buy_price 条件单 (由 _probe 带回 auto_cond_price), 避免快照覆盖。
+    with _LOCK:
+        fresh = load_state()
+        fresh['scan_count'] = st['scan_count']
+        fresh['last_scan_time'] = now
+        fresh['next_scan_time'] = st['next_scan_time']
+        fresh['candidates'] = cand
+        fresh['last_scan_result'] = result_str
+        _apply_auto_conditions(fresh, cand)
+        try:
+            save_state(fresh)
+        except Exception:
+            pass
 
     return result_str

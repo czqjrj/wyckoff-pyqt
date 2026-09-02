@@ -2,93 +2,10 @@
   {
     "stock": "sh600036",
     "name": "招商银行",
-    "timestamp": "2026-08-31T19:16:57.602677",
+    "timestamp": "2026-09-02T11:52:08.384810",
     "strategies_count": {
-      "multi_factor_bull": 11
+      "screener_value_accumulation": 8
     },
-    "total_signals": 11
-  },
-  {
-    "stock": "sz000001",
-    "name": "平安银行",
-    "timestamp": "2026-08-31T19:16:59.174010",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sh600036",
-    "name": "招商银行",
-    "timestamp": "2026-08-31T20:49:50.943665",
-    "strategies_count": {
-      "multi_factor_bull": 11
-    },
-    "total_signals": 11
-  },
-  {
-    "stock": "sz000001",
-    "name": "平安银行",
-    "timestamp": "2026-08-31T20:49:52.570133",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sh600036",
-    "name": "招商银行",
-    "timestamp": "2026-08-31T20:50:11.918267",
-    "strategies_count": {
-      "multi_factor_bull": 11
-    },
-    "total_signals": 11
-  },
-  {
-    "stock": "sz000001",
-    "name": "平安银行",
-    "timestamp": "2026-08-31T20:50:13.548143",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sh600036",
-    "name": "招商银行",
-    "timestamp": "2026-08-31T20:50:34.054145",
-    "strategies_count": {
-      "multi_factor_bull": 11
-    },
-    "total_signals": 11
-  },
-  {
-    "stock": "sz000001",
-    "name": "平安银行",
-    "timestamp": "2026-08-31T20:50:35.668996",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sh600036",
-    "name": "招商银行",
-    "timestamp": "2026-08-31T21:11:53.109698",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sz000001",
-    "name": "平安银行",
-    "timestamp": "2026-08-31T21:11:54.636035",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sh600036",
-    "name": "招商银行",
-    "timestamp": "2026-08-31T21:12:25.237187",
-    "strategies_count": {},
-    "total_signals": 0
-  },
-  {
-    "stock": "sz000001",
-    "name": "平安银行",
-    "timestamp": "2026-08-31T21:12:26.728657",
-    "strategies_count": {},
-    "total_signals": 0
+    "total_signals": 8
   }
 ]

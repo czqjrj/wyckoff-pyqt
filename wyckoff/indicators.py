@@ -84,10 +84,12 @@ def add_indicators(df: pd.DataFrame, symbol: str = None) -> pd.DataFrame:
     out["close"] = close
     out["volume"] = volume
 
-    # 基础衍生量
-    ret = np.empty(n)
-    ret[0] = np.nan
-    ret[1:] = np.diff(close) / close[:-1]
+    # 基础衍生量 (交易日 0 收盘价 → NaNs, 避免除零告警/Inf 污染)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ret = np.empty(n)
+        ret[0] = np.nan
+        ret[1:] = np.diff(close) / close[:-1]
+        ret[1:][close[:-1] == 0] = np.nan
     out["ret"] = ret
 
     rng = high - low

@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-09-01T12:30:57.408191",
+  "backtest_period": "过去500天",
+  "holding_horizon": "20天",
+  "cost": 0.004,
+  "stocks_tested": 10,
+  "total_trades": 3,
+  "strategies": {
+    "wyckoff_7plus_confirmed": {
+      "name": "策略1: 威科夫7项通过 + 确认事件",
+      "trades": [],
+      "total_trades": 0
+    },
+    "wyckoff_plus_vsa": {
+      "name": "策略2: 威科夫事件 + 高价值VSA标签",
+      "total_trades": 3,
+      "win_rate": 33.33333333333333,
+      "avg_return_per_trade": -5.257020229119155,
+      "total_return": -15.320513849404149,
+      "max_drawdown": -10.847051363348122,
+      "avg_win": 1.466666666666661,
+      "avg_loss": -8.618863677012062,
+      "profit_factor": 0.08508468874954503,
+      "avg_confidence": 86.0,
+      "trades": [
+        {
+          "stock": "sh600036",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 77,
+          "entry_date": "2025-09-03 00:00:00",
+          "exit_date": "2025-10-09 00:00:00",
+          "entry_price": 40.69957333119433,
+          "exit_price": 38.2613937633349,
+          "return_rate": -0.06390675990675998,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=77) + CHOC (vr=1.9)"
+        },
+        {
+          "stock": "sh600276",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 89,
+          "entry_date": "2025-12-18 00:00:00",
+          "exit_date": "2026-01-19 00:00:00",
+          "entry_price": 59.75609756097331,
+          "exit_price": 60.871544715444806,
+          "return_rate": 0.01466666666666661,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=89) + CHOC (vr=1.7)"
+        },
+        {
+          "stock": "sh600276",
+          "strategy": "wyckoff_plus_vsa",
+          "confidence": 92,
+          "entry_date": "2026-01-05 00:00:00",
+          "exit_date": "2026-02-02 00:00:00",
+          "entry_price": 62.82357723576994,
+          "exit_price": 56.260365853656374,
+          "return_rate": -0.10847051363348126,
+          "details": "威科夫高价值事件 + 高价值VSA: Spring (conf=94) + CHOC (vr=2.6)"
+        }
+      ]
+    },
+    "multi_factor_bull": {
+      "name": "策略3: 多因子强化做强多头策略",
+      "trades": [],
+      "total_trades": 0
+    }
+  }
+}
