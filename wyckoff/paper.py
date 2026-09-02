@@ -1950,7 +1950,7 @@ def run_scan(st, scan_type='discipline', n_codes=20):
     label = "策略管理器扫描(纪律+价值吸筹)"
     result_str = (f"{label}扫描: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
                   if cand else
-                  "纪律扫描: 无满足条件的候选 (强多头事件/conf/大盘/板块/资金流门禁)")
+                  "策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁, 且价值吸筹未现于底部整固)")
     st['last_scan_result'] = result_str
     st['next_scan_time'] = (datetime.now() + timedelta(minutes=30)).isoformat()
 
