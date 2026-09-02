@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .extra_windows import _accent_header, _ghost_btn, _table
+from .extra_windows import _accent_header, _ghost_btn, _table, retheme_children
 
 
 def _fill_paper(table, cols, heads, rows, color_cols=()):
@@ -355,6 +355,31 @@ class PaperWindow(QDialog):
         from wyckoff.paper import apply_paper_params
         apply_paper_params(self._settings)
         self.refresh()
+
+    def apply_theme(self):
+        """主题切换后重刷窗口配色 (表格/按钮等构造期烧入的内联样式 + 资金曲线)。"""
+        retheme_children(self)
+        try:
+            self._refresh_equity_theme()
+        except Exception:
+            pass
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def _refresh_equity_theme(self):
+        """资金曲线 pyqtgraph 配色随主题重刷 (构造期烧入, 切换后残留浅色背景)。"""
+        import pyqtgraph as pg
+
+        from .extra_windows import theme
+        ch = getattr(self, "equity_chart", None)
+        if ch is None:
+            return
+        ch.setBackground(theme.C_BG)
+        ch.getViewBox().setBackgroundColor(pg.mkColor(theme.C_BG))
+        ch.getAxis("bottom").setPen(pg.mkPen(theme.C_MUTED))
+        ch.getAxis("left").setPen(pg.mkPen(theme.C_MUTED))
 
     # ── 扫描相关 ──
     def _update_scan_info(self, st=None):

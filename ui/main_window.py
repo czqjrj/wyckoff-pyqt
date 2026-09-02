@@ -3514,6 +3514,13 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
                 cw.apply_theme()
         except Exception:
             pass
+        # 模拟盘 Tab 随主题重刷 (构造期烧入的内联配色/资金曲线背景残留)
+        try:
+            pt = getattr(self, "paper_tab", None)
+            if pt is not None:
+                pt.apply_theme()
+        except Exception:
+            pass
         # 批量更新: 4图表重渲染 + 主题刷新合并为一次重绘
         self.setUpdatesEnabled(False)
         try:
@@ -3535,21 +3542,21 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
                     pass
             # 再以当前数据重渲染, 刷新数据项配色
             try:
-                self.kline_widget.set_data(**self._last_kline or {})
+                self.kline_widget.set_data(**self._chart_mgr.last_kline or {})
             except Exception:
                 pass
             try:
-                self.pnf_widget.set_data(**self._last_pnf,
+                self.pnf_widget.set_data(**self._chart_mgr.last_pnf,
                                         **({"code": self._current_code}
                                            if self._current_code else {}))
             except Exception:
                 pass
             try:
-                self.ind_widget.set_data(**self._last_ind or {})
+                self.ind_widget.set_data(**self._chart_mgr.last_ind or {})
             except Exception:
                 pass
             try:
-                self.mkt_widget.set_data(**self._last_mkt or {})
+                self.mkt_widget.set_data(**self._chart_mgr.last_mkt or {})
             except Exception:
                 pass
         finally:
