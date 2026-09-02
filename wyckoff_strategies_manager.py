@@ -3,45 +3,51 @@
 
 策略4: 模拟盘纪律策略 (强多头事件 conf≥90 + 硬门禁, 源自 wyckoff.paper 实证,
        真实K线历史回放胜率~53%、盈亏比~3、累计收益+50%)
+
+价值吸筹: 综合选股「价值吸筹」预设 (底部整固 + 20根内吸筹事件, 源自
+       research/screener_presets_verify.py 2026-09-02 回测: 48只样本胜率49.2%、
+       盈亏比1.53、累计收益+224%, 唯一实测正期望的推荐预设)
 """
 
-import numpy as np
-from collections import defaultdict, deque
 import json
 import os
+from collections import defaultdict, deque
 from datetime import datetime
 
-from wyckoff.ninetests import nine_tests
-from wyckoff.events import detect_all
-from wyckoff.indicators import find_pivots, add_indicators
 from wyckoff.datasource import fetch_kline, fetch_name
+from wyckoff.events import detect_all
+from wyckoff.indicators import add_indicators, find_pivots
+from wyckoff.ninetests import nine_tests
+from wyckoff.phases import judge_phase
 from wyckoff.utils import normalize_symbol
 from wyckoff.vsa import vsa_classify
-from wyckoff.config import VSA_BULL, VSA_BEAR
+
+# 多头吸筹事件集: 综合选股「价值吸筹」与策略4共用
+LONG_EVENT_TYPES = ("Spring", "Shakeout", "ST", "LPS", "SC")
 
 
 class WyckoffStrategyManager:
     """威科夫高胜率策略管理器"""
-    
+
     def __init__(self, data_dir="three_strategy_data"):
         self.data_dir = data_dir
         self.strategy_results = defaultdict(list)
         self.performance_log = deque(maxlen=100)
-        
+
         # 创建数据目录
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
-    
+
     def load_performance_history(self):
         """加载历史性能记录"""
         history_file = os.path.join(self.data_dir, "performance_history.json")
         if os.path.exists(history_file):
             try:
-                with open(history_file, 'r', encoding='utf-8') as f:
+                with open(history_file, encoding='utf-8') as f:
                     self.performance_log = deque(json.load(f), maxlen=100)
             except:
                 pass
-    
+
     def save_performance_history(self):
         """保存性能记录"""
         history_file = os.path.join(self.data_dir, "performance_history.json")
@@ -50,7 +56,7 @@ class WyckoffStrategyManager:
                 json.dump(list(self.performance_log), f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"保存历史记录失败: {e}")
-    
+
     @staticmethod
     def _price_position(df, i, window=20):
         """计算当前价格在近 window 日区间的相对位置 (0~1)，越低越安全"""
@@ -103,7 +109,6 @@ class WyckoffStrategyManager:
           该策略的盈利主要通过 同持上限3 + 出场纪律(-5%止损/+15%止盈/结构破位) 实现,
           管理器中仅负责"选股信号"部分; 持仓与出场纪律见 wyckoff.paper。
         """
-        LONG_EVENT_TYPES = ("Spring", "Shakeout", "ST", "LPS", "SC")
         bull_events = [
             e for e in wevents
             if e["type"] in LONG_EVENT_TYPES
@@ -166,17 +171,56 @@ class WyckoffStrategyManager:
             pass_ &= False
             details.append("资金流: 拦截(数据不可用)")
         return {"all_pass": bool(pass_), "details": details}
-    
+
+    def evaluate_strategy_value_accumulation(self, df, i, wevents, wpivots):
+        """综合选股·价值吸筹 (推荐预设): 底部整固 + 20根内吸筹事件
+
+        源自 research/screener_presets_verify.py 2026-09-02 综合选股预设回测,
+        5个预设中唯一实测正期望 (48只样本):
+          胜率 49.2%、盈亏比 1.53、累计收益 +224%, 样本内/外 47.4%/51.9%,
+          时间半段 48/51, 属"正期望型"(大盈小亏) 而非 >60% 高胜率。
+        事件窗口回测口径为 20 根 (比策略4的 conf≥90 + 10根 事件更密, 更稳健)。
+        """
+        window = df.iloc[:i + 1]
+        phase, _ = judge_phase(window, wpivots, wevents)
+        if (phase or "").split(" ")[0] != "底部整固":
+            return None
+        acc_events = [
+            e for e in wevents
+            if e["type"] in LONG_EVENT_TYPES and e["idx"] >= i - 20
+        ]
+        if not acc_events:
+            return None
+        event = acc_events[0]
+        return {
+            "strategy": "screener_value_accumulation",
+            "name": "价值吸筹",
+            "signal": "accumulation_bottom_build",
+            "confidence": int(event.get("conf", 0) or 0),
+            "details": f"价值吸筹: 底部整固 + 吸筹事件 {event['type']} "
+                       f"(近20根, conf={int(event.get('conf', 0) or 0)})",
+            "event": {"type": event["type"], "idx": event["idx"],
+                      "conf": int(event.get("conf", 0) or 0)},
+            "requirements_met": "底部整固 + 多头吸筹事件≤20根",
+            "trading": self._trading_discipline(),
+            "verified": {
+                "date": "2026-09-02", "recommended": True,
+                "n": 130, "wr": 49.2, "pf": 1.53, "cum": 223.9,
+                "note": "唯一实测正期望(PF>1.5)且样本内外+时间半段稳定; "
+                        "正期望型(大盈小亏)而非>60%高胜率",
+            },
+        }
+
     def analyze_stock(self, code, datalen=1000, horizon=20, cost=0.004):
         """分析股票并应用策略"""
         symbol = normalize_symbol(code)
         df = fetch_kline(symbol, datalen=datalen, scale=240)
         # 添加必要的技术指标
         df = add_indicators(df, symbol=symbol)
-        
+
         if len(df) < 150:
             return {"error": "数据不足"}
-        
+
         # 存储当前分析结果
         current_analysis = {
             "stock": code,
@@ -185,7 +229,7 @@ class WyckoffStrategyManager:
             "strategies_found": [],
             "total_samples": len(df)
         }
-        
+
         # 从第90根K线开始分析
         for i in range(90, len(df) - horizon):
             # 用截至当前时刻的数据进行分析
@@ -194,30 +238,36 @@ class WyckoffStrategyManager:
             wdf = add_indicators(wdf, symbol=symbol)
             wpivots = find_pivots(wdf, order=6)
             wevents = detect_all(wdf, wpivots)
-            
+
             # 计算九大检验点
             nt = nine_tests(wdf, wevents, wpivots)
-            
+
             # 获取VSA标签
             vsa_labels = vsa_classify(wdf, scale=240)
-            
+
             # 应用策略4 (模拟盘纪律策略; 离线历史扫描默认关闭实时门禁, 只出选股信号)
             strategy4_result = self.evaluate_strategy_4(df, i, wevents, nt, vsa_labels)
             if strategy4_result:
                 current_analysis["strategies_found"].append(strategy4_result)
-        
+
+            # 应用综合选股·价值吸筹 (推荐预设, 底部整固 + 20根内吸筹事件)
+            value_acc_result = self.evaluate_strategy_value_accumulation(
+                wdf, i, wevents, wpivots)
+            if value_acc_result:
+                current_analysis["strategies_found"].append(value_acc_result)
+
         # 记录性能
         self.record_performance(current_analysis)
-        
+
         return current_analysis
-    
+
     def record_performance(self, analysis_result):
         """记录分析结果到性能历史"""
         # 计算策略表现
         strategy_counts = defaultdict(int)
         for strategy in analysis_result["strategies_found"]:
             strategy_counts[strategy["strategy"]] += 1
-        
+
         performance_record = {
             "stock": analysis_result["stock"],
             "name": analysis_result["name"],
@@ -225,39 +275,39 @@ class WyckoffStrategyManager:
             "strategies_count": dict(strategy_counts),
             "total_signals": len(analysis_result["strategies_found"])
         }
-        
+
         self.performance_log.append(performance_record)
         self.save_performance_history()
-    
+
     def get_strategy_statistics(self):
         """获取策略统计信息"""
         if not self.performance_log:
             return {"message": "暂无历史数据"}
-        
+
         total_analyses = len(self.performance_log)
         strategy_totals = defaultdict(int)
         strategy_details = defaultdict(list)
-        
+
         for record in self.performance_log:
             for strategy, count in record["strategies_count"].items():
                 strategy_totals[strategy] += count
                 strategy_details[strategy].append(count)
-        
+
         stats = {
             "total_analyses": total_analyses,
             "strategy_totals": dict(strategy_totals),
             "strategy_averages": {}
         }
-        
+
         for strategy, counts in strategy_details.items():
             stats["strategy_averages"][strategy] = {
                 "total": sum(counts),
                 "average_per_analysis": sum(counts) / total_analyses if total_analyses > 0 else 0,
                 "max_per_analysis": max(counts) if counts else 0
             }
-        
+
         return stats
-    
+
     def export_strategy_report(self, filename="three_strategy_report.json"):
         """导出策略报告"""
         report = {
@@ -265,14 +315,14 @@ class WyckoffStrategyManager:
             "strategy_statistics": self.get_strategy_statistics(),
             "recent_analyses": list(self.performance_log)[-10:]  # 最近10次分析
         }
-        
+
         try:
             with open(os.path.join(self.data_dir, filename), 'w', encoding='utf-8') as f:
                 json.dump(report, f, ensure_ascii=False, indent=2)
             print(f"策略报告已导出到: {os.path.join(self.data_dir, filename)}")
         except Exception as e:
             print(f"导出报告失败: {e}")
-    
+
     def get_strategy_details(self):
         """获取所有策略的详细说明"""
         return {
@@ -283,6 +333,14 @@ class WyckoffStrategyManager:
                 "conditions": ["强多头事件(Spring/Shakeout/ST/LPS/SC) conf≥90",
                                "硬门禁(大盘20日线/板块>60分位/资金流>中位)",
                                "同持上限3 + 持20K + -5%止损 + +15%止盈 + 结构破位"]
+            },
+            "strategy_value_accumulation": {
+                "name": "综合选股·价值吸筹 (推荐预设)",
+                "description": "源自综合选股预设回测：底部整固阶段 + 20根内吸筹事件(Spring/Shakeout/SC/ST/LPS)，5预设中唯一实测正期望",
+                "characteristics": ["实测胜率49.2%", "盈亏比1.53", "累计收益+224%", "样本内外+时间半段稳定(47.4%/51.9%, 48/51)"],
+                "conditions": ["阶段=底部整固",
+                               "近20根出现 {Spring,Shakeout,SC,ST,LPS}",
+                               "同持上限3 + 持20K + -5%止损 + +15%止盈 + 0.4%成本"]
             }
         }
 
@@ -301,7 +359,7 @@ def main():
     # 显示策略详情
     print("🔍 策略介绍:")
     print()
-    
+
     strategy_details = manager.get_strategy_details()
     for key, strategy in strategy_details.items():
         print(f"🎯 {strategy['name']}")
@@ -309,11 +367,11 @@ def main():
         print(f"   特点: {', '.join(strategy['characteristics'])}")
         print(f"   条件: {', '.join(strategy['conditions'])}")
         print()
-    
+
     # 分析股票
     print("📊 正在分析股票...")
     test_stocks = ["sh600036", "sz000001", "sh601318"]
-    
+
     analysis_results = []
     for stock in test_stocks:
         try:
@@ -322,32 +380,32 @@ def main():
         except Exception as e:
             print(f"分析 {stock} 时出错: {e}")
             analysis_results.append({"stock": stock, "error": str(e)})
-    
+
     # 显示分析结果
     print("\n📈 分析结果汇总:")
     print("=" * 60)
-    
+
     total_strategies = 0
     strategy_counts = {}
-    
+
     for result in analysis_results:
         if "error" not in result:
             count = len(result["strategies_found"])
             total_strategies += count
             print(f"{result['stock']} ({result['name']}): 发现 {count} 个高胜率信号")
-            
+
             # 统计各类策略
             for signal in result["strategies_found"]:
                 strategy = signal.get("name") or signal["strategy"]
                 strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
         else:
             print(f"{result['stock']}: 错误 - {result['error']}")
-    
+
     print(f"\n📋 总计发现高胜率信号: {total_strategies} 个")
     print("各策略分布:")
     for strategy, count in strategy_counts.items():
         print(f"  {strategy}: {count} 个")
-    
+
     # 显示策略统计
     print("\n📊 策略统计信息:")
     stats = manager.get_strategy_statistics()
@@ -358,10 +416,10 @@ def main():
             print(f"  {strategy}: {count} 次")
     else:
         print(stats["message"])
-    
+
     # 导出报告
     manager.export_strategy_report()
-    
+
     print("\n✅ 系统功能总结:")
     print("1. 自动识别策略信号")
     print("2. 记录策略表现历史")

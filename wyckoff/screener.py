@@ -724,6 +724,13 @@ PRESET_STRATEGIES = {
     "value_accumulation": {
         "name": "价值吸筹",
         "desc": "低估值+吸筹阶段+资金流入 → 底部布局",
+        "verified": {
+            "date": "2026-09-02",
+            "recommended": True,
+            "n": 130, "wr": 49.2, "avg": 1.12, "pf": 1.53, "cum": 223.9,
+            "in_wr": 47.4, "oos_wr": 51.9, "half_wr": [48, 51],
+            "note": "唯一实测正期望(PF>1.5)且样本内外+时间半段稳定; 属'正期望型'(大盈小亏)而非>60%高胜率",
+        },
         "filters": {
             "pe_max": 35, "pb_max": 4,
             "phases": ["底部整固"],
@@ -735,6 +742,13 @@ PRESET_STRATEGIES = {
     "momentum_breakout": {
         "name": "强势突破",
         "desc": "上升趋势+多头排列+资金加速流入 → 顺势做多",
+        "verified": {
+            "date": "2026-09-02",
+            "recommended": False,
+            "n": 43, "wr": 44.2, "avg": 0.52, "pf": 1.19, "cum": 13.0,
+            "in_wr": 45.8, "oos_wr": 42.1, "half_wr": [43, 45],
+            "note": "正期望微弱(PF≈1.2)且样本仅43, 不宜单用",
+        },
         "filters": {
             "phases": ["上升趋势", "底部整固"],
             "sort_by": "tech_score", "limit": 30,
@@ -743,6 +757,13 @@ PRESET_STRATEGIES = {
     "oversold_bounce": {
         "name": "超跌反弹",
         "desc": "下跌/派发末期+RSI超卖+资金回流 → 抢反弹",
+        "verified": {
+            "date": "2026-09-02",
+            "recommended": False,
+            "n": 368, "wr": 39.9, "avg": -0.01, "pf": 1.00, "cum": -57.5,
+            "in_wr": 41.7, "oos_wr": 37.8, "half_wr": [44, 36],
+            "note": "无正期望(PF≈1.00, 累计-57%), 抄底无优势",
+        },
         "filters": {
             "pe_max": 50,
             "phases": ["下跌趋势", "顶部构筑", "底部整固"],
@@ -752,6 +773,13 @@ PRESET_STRATEGIES = {
     "small_cap_growth": {
         "name": "小盘成长",
         "desc": "市值<200亿+净利高增+吸筹信号 → 成长股挖掘",
+        "verified": {
+            "date": "2026-09-02",
+            "recommended": False,
+            "n": 17, "wr": 41.2, "avg": 0.06, "pf": 1.02, "cum": -2.6,
+            "in_wr": 20.0, "oos_wr": 71.4, "half_wr": [12, 67],
+            "note": "样本不足(n=17, 无历史市值/净利), 结论不可靠",
+        },
         "filters": {
             "mcap_max": 200, "pe_max": 50,
             "sort_by": "fund_score", "limit": 30,
@@ -760,6 +788,13 @@ PRESET_STRATEGIES = {
     "fund_flow": {
         "name": "主力抢筹",
         "desc": "20日主力强净流入+吸筹/上升阶段 → 跟随主力",
+        "verified": {
+            "date": "2026-09-02",
+            "recommended": False,
+            "n": 267, "wr": 39.7, "avg": 0.22, "pf": 1.08, "cum": -5.9,
+            "in_wr": 41.5, "oos_wr": 36.9, "half_wr": [44, 36],
+            "note": "近似零期望(资金流无历史数据, 用量价代理, PF≈1.08)",
+        },
         "filters": {
             "phases": ["底部整固", "上升趋势"],
             "sort_by": "flow_score", "limit": 30,
@@ -774,6 +809,23 @@ def get_preset(name):
 
 
 def list_presets():
-    """列出所有预设策略。"""
-    return [{"key": k, "name": v["name"], "desc": v["desc"]}
-            for k, v in PRESET_STRATEGIES.items()]
+    """列出所有预设策略 (含实测推荐标记, 供界面打徽标)。"""
+    out = []
+    for k, v in PRESET_STRATEGIES.items():
+        item = {"key": k, "name": v["name"], "desc": v["desc"]}
+        verified = v.get("verified")
+        if verified:
+            item["recommended"] = bool(verified.get("recommended"))
+            item["wr"] = verified.get("wr")
+            item["pf"] = verified.get("pf")
+            item["n"] = verified.get("n")
+            item["note"] = verified.get("note")
+            item["verified_date"] = verified.get("date")
+        out.append(item)
+    return out
+
+
+def recommended_presets():
+    """返回实测正期望且推荐使用的预设 key 列表。"""
+    return [k for k, v in PRESET_STRATEGIES.items()
+            if v.get("verified") and v["verified"].get("recommended")]

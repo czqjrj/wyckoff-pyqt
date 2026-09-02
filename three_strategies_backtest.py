@@ -4,21 +4,21 @@
 对多只股票应用策略管理器中的模拟盘纪律策略（策略4），
 验证每个策略产生的信号在持有 horizon 天后的胜率与收益。
 """
-import sys
-import os
 import json
+import os
+import sys
 import warnings
+
 warnings.filterwarnings('ignore')
 
-import numpy as np
-import pandas as pd
 from datetime import datetime
 
+import numpy as np
+
 sys.path.append('.')
-from wyckoff.datasource import fetch_kline, fetch_name
-from wyckoff.utils import normalize_symbol
-from wyckoff.indicators import find_pivots, add_indicators
+from wyckoff.datasource import fetch_kline
 from wyckoff.events import detect_all
+from wyckoff.indicators import add_indicators, find_pivots
 from wyckoff.ninetests import nine_tests
 from wyckoff.vsa import vsa_classify
 from wyckoff_strategies_manager import WyckoffStrategyManager
@@ -80,6 +80,7 @@ class StrategyBacktester:
             candidates = []
             for res in [
                 self.manager.evaluate_strategy_4(df, i, wevents, nt, vsa_labels),
+                self.manager.evaluate_strategy_value_accumulation(wdf, i, wevents, wpivots),
             ]:
                 if res:
                     candidates.append(res)
@@ -192,7 +193,8 @@ class StrategyBacktester:
                 all_trades.extend(trades)
             except Exception as e:
                 print(f"  -> 出错: {e}")
-                import traceback; traceback.print_exc()
+                import traceback
+                traceback.print_exc()
                 continue
 
         self.all_trades = all_trades
@@ -208,6 +210,7 @@ class StrategyBacktester:
 
         strategies = {
             "paper_discipline_bull": "策略4: 模拟盘纪律策略",
+            "screener_value_accumulation": "综合选股·价值吸筹 (推荐)",
         }
 
         result = {}

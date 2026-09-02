@@ -224,6 +224,17 @@ def _ghost_btn(text):
     return b
 
 
+def _preset_tooltip(p):
+    """预设策略悬浮提示: 推荐标记 + 实测回测结论 (未验证的策略省略)。"""
+    if not p.get("n"):
+        return p.get("desc", "")
+    rec = "★ 实测正期望·推荐\n" if p.get("recommended") else "实测未达推荐线\n"
+    return (rec
+            + f"胜率 {p['wr']:.1f}% · 盈亏比 {p['pf']:.2f} · 样本 {p['n']} · "
+            + f"验证 {p.get('verified_date', '')}\n"
+            + (p.get("note") or ""))
+
+
 def _num_spin(lo, hi, decimals, special=""):
     """区间数值框: 数字居中; 去掉箭头按钮节省宽度, 宽度稍后统一 (见 _unify_spin_widths)。"""
     s = QDoubleSpinBox()
@@ -2935,7 +2946,14 @@ class ScreenerWidget(QWidget):
         presets = list_presets()
         self.cb_preset.addItem("自定义")
         for p in presets:
-            self.cb_preset.addItem(p["name"], p["key"])
+            label = p["name"]
+            if p.get("recommended"):
+                label = f"{p['name']} ★"
+            self.cb_preset.addItem(label, p["key"])
+            tip = _preset_tooltip(p)
+            self.cb_preset.setItemData(
+                self.cb_preset.count() - 1, tip,
+                Qt.ItemDataRole.ToolTipRole)
         self.cb_preset.currentIndexChanged.connect(self._on_preset_changed)
         row1.addWidget(self.cb_preset)
         self.lbl_preset_desc = QLabel("")
@@ -3245,6 +3263,18 @@ class ScreenerWidget(QWidget):
             f["pb_max"] = pbmax
         return f
 
+    def _preset_desc_update(self, preset):
+        """预设描述 + 实测推荐徽标/回测摘要。"""
+        v = preset.get("verified")
+        if not v:
+            self.lbl_preset_desc.setText(preset.get("desc", ""))
+            return
+        badge = "★ 实测正期望·推荐  " if v.get("recommended") else "实测未达推荐线  "
+        rec = (f"{badge}| 胜率 {v.get('wr', 0):.1f}% · 盈亏比 {v.get('pf', 0):.2f}"
+               f" · 样本 {v.get('n', 0)} · 验证 {v.get('date', '')}\n"
+               f"{preset.get('desc', '')}\n{v.get('note', '')}")
+        self.lbl_preset_desc.setText(rec)
+
     def _on_preset_changed(self, idx):
         """切换预设策略 → 填充筛选条件。"""
         if idx <= 0:
@@ -3255,7 +3285,7 @@ class ScreenerWidget(QWidget):
         preset = get_preset(key)
         if not preset:
             return
-        self.lbl_preset_desc.setText(preset.get("desc", ""))
+        self._preset_desc_update(preset)
         pf = preset["filters"]
         # 重置所有控件
         self.chk_phase_acc.setChecked(False)
