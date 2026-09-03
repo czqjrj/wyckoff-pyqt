@@ -1,8 +1,10 @@
 """数据源 K 线时间段回归测试: 无论哪个源返回多少根, fetch_kline 都必须
 只保留最近 datalen 根 (东财 beg=0 时忽略 lmt 返回全历史, 曾在近1月时把
 整个1997年以来的K线灌进来, 导致"时间段没起作用")。"""
+import json
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -337,3 +339,115 @@ def test_fetch_kline_records_source_health(monkeypatch):
     assert h["腾讯"]["ok"] == 1
     datasource.reset_source_health()
     datasource._SOURCE_LOG.clear()
+
+
+def test_is_restricted_board():
+    """板块权限判定: 创业板(300/301)与科创板(688/689)为受限板块, 其余不受限。"""
+    from wyckoff.fundamental import is_restricted_board
+    assert is_restricted_board("sz300750")
+    assert is_restricted_board("sz301029")
+    assert is_restricted_board("sh688981")
+    assert is_restricted_board("sh689009")
+    assert is_restricted_board("300750")
+    assert is_restricted_board("688981")
+    assert not is_restricted_board("sz000001")
+    assert not is_restricted_board("sz002415")
+    assert not is_restricted_board("sh600018")
+    assert not is_restricted_board("bj920056")
+
+
+def test_local_universe_excludes_restricted_boards(monkeypatch):
+    """离线宇宙: 未开通创业/科创板时, 本地宇宙不应包含受限板块代码。"""
+    from wyckoff import fundamental
+    monkeypatch.setattr(
+        fundamental, "ALL_STOCKS_FILE",
+        os.path.join(tempfile.mkdtemp(), "all_test.json"))
+    data = {
+        "300750": {"name": "宁德时代"},
+        "301029": {"name": "怡合达"},
+        "688981": {"name": "中芯国际"},
+        "600018": {"name": "上港集团"},
+        "000001": {"name": "平安银行"},
+        "920056": {"name": "北交所股"},
+    }
+    with open(fundamental.ALL_STOCKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    u = fundamental.local_universe(100)
+    assert "sz300750" not in u
+    assert "sz301029" not in u
+    assert "sh688981" not in u
+    assert "sh600018" in u
+    assert "sz000001" in u
+
+
+def test_fetch_market_universe_excludes_restricted_boards(monkeypatch):
+    """在线宇宙: 即使东财返回创业板/科创板, 构建宇宙时也应排除受限板块。"""
+    from wyckoff import fundamental
+    base = [
+        {"f12": "000001", "f14": "平安银行", "f2": 11, "f3": 0.5},
+        {"f12": "000002", "f14": "万科A", "f2": 7, "f3": 1.0},
+        {"f12": "000063", "f14": "中兴通讯", "f2": 28, "f3": -0.5},
+        {"f12": "000333", "f14": "美的集团", "f2": 60, "f3": 2.0},
+        {"f12": "000651", "f14": "格力电器", "f2": 38, "f3": 1.5},
+        {"f12": "000858", "f14": "五粮液", "f2": 130, "f3": -1.0},
+        {"f12": "600000", "f14": "浦发银行", "f2": 8, "f3": 0.2},
+        {"f12": "600018", "f14": "上港集团", "f2": 5, "f3": 0.5},
+        {"f12": "600036", "f14": "招商银行", "f2": 33, "f3": 0.8},
+        {"f12": "600519", "f14": "贵州茅台", "f2": 1500, "f3": 1.2},
+        {"f12": "601318", "f14": "中国平安", "f2": 48, "f3": 0.6},
+        {"f12": "002594", "f14": "比亚迪", "f2": 240, "f3": -1.0},
+    ]
+
+    def fake_get(url, params=None, headers=None, timeout=4, retries=1,
+                 cache_fail=True):
+        payload = {"data": {"diff": base + [
+            {"f12": "300750", "f14": "宁德时代", "f2": 150, "f3": 1.0},
+            {"f12": "301029", "f14": "怡合达", "f2": 25, "f3": 0.3},
+            {"f12": "688981", "f14": "中芯国际", "f2": 50, "f3": 2.0},
+            {"f12": "689009", "f14": "九号公司", "f2": 30, "f3": 1.0},
+        ]}}
+        r = type("Resp", (), {})()
+        r.json = lambda: payload
+        return r
+
+    monkeypatch.setattr(fundamental, "_get", fake_get)
+    fundamental._MARKET_CACHE.clear()
+    codes = fundamental.fetch_market_universe(50)
+    assert "sz300750" not in codes
+    assert "sz301029" not in codes
+    assert "sh688981" not in codes
+    assert "sh689009" not in codes
+    assert "sh600018" in codes
+    assert "sz002594" in codes
+    assert len(codes) >= 10
+    fundamental._MARKET_CACHE.clear()
+
+
+def test_pick_candidates_filters_restricted_boards(monkeypatch):
+    """扫描选股: 明确传入含受限板块的 universe 时, 应按板块权限过滤后再扫描。"""
+    from wyckoff import _shared, paper
+    paper.apply_paper_params({})  # 默认未开通创业/科创
+    _codes_seen = []
+
+    # 截断 parallel_map, 捕获其收到的 _codes 列表并直接返回 [] (不触发真实 _probe)。
+    def fake_parallel_map(codes, fn, workers=6, progress=None, **kw):
+        _codes_seen.extend(codes)
+        return []
+
+    monkeypatch.setattr(_shared, "parallel_map", fake_parallel_map)
+    u = ["sz300750", "sh688981", "sh600018", "sz000001"]
+    paper.pick_candidates(universe=u, max_codes=4, skip_gates=True)
+    assert "sz300750" not in _codes_seen
+    assert "sh688981" not in _codes_seen
+    assert "sh600018" in _codes_seen
+    assert "sz000001" in _codes_seen
+
+    # 已开通创业板/科创板 → 不再过滤
+    from wyckoff.settings_keys import S
+    paper.apply_paper_params({S.Paper.ENABLE_CHINEXT: True,
+                              S.Paper.ENABLE_STAR: True})
+    _codes_seen.clear()
+    paper.pick_candidates(universe=u, max_codes=4, skip_gates=True)
+    assert "sz300750" in _codes_seen
+    assert "sh688981" in _codes_seen
+    assert "sh600018" in _codes_seen

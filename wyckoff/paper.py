@@ -257,6 +257,9 @@ def apply_paper_params(settings=None):
         "max_capital_usage": float(_get("paper_max_capital_usage", MAX_CAPITAL_USAGE)),
         # 资金管理方式
         "sizing_method": _get("paper_sizing_method", PositionSizingMethod.EQUAL_WEIGHT.value),
+        # 板块权限: 未开通创业板/科创板 → 扫描/选股排除对应代码
+        "enable_chinext": bool(_get(S.Paper.ENABLE_CHINEXT, False)),
+        "enable_star": bool(_get(S.Paper.ENABLE_STAR, False)),
     }
     return _CUR
 
@@ -278,6 +281,8 @@ _CUR = {
     "vol_adjust_enabled": VOL_ADJUST_ENABLED,
     "max_capital_usage": MAX_CAPITAL_USAGE,
     "sizing_method": PositionSizingMethod.EQUAL_WEIGHT.value,
+    "enable_chinext": False,
+    "enable_star": False,
 }
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
@@ -1158,6 +1163,24 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     out = []
     _flow_map = {}  # code -> 近5日主力净流入
     _codes = universe[:max_codes]
+    # 板块权限: 未开通创业板/科创板时, 在并行扫描前统一过滤对应代码, 减少扫描量。
+    if not _CUR.get("enable_chinext") or not _CUR.get("enable_star"):
+        from .fundamental import is_restricted_board
+        allow_chinext = bool(_CUR.get("enable_chinext"))
+        allow_star = bool(_CUR.get("enable_star"))
+        _filtered = []
+        for c in _codes:
+            if not is_restricted_board(c):
+                _filtered.append(c)
+                continue
+            rest = str(c).lower()
+            rest = rest[2:] if rest[:2] in ("sh", "sz", "bj") else rest
+            if rest.startswith(("300", "301")) and not allow_chinext:
+                continue
+            if rest.startswith(("688", "689")) and not allow_star:
+                continue
+            _filtered.append(c)
+        _codes = _filtered
     _total = len(_codes)
     try:
         from ._shared import parallel_map

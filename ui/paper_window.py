@@ -178,8 +178,9 @@ class _ScanThread(QThread):
         self._settings = settings or {}
 
     def run(self):
-        from wyckoff.paper import load_state, run_scan
         from wyckoff._log import log_exc
+        from wyckoff.paper import apply_paper_params, load_state, run_scan
+        apply_paper_params(dict(self._settings or {}))
         _prev = [None]
 
         def _cb(done, total, code):

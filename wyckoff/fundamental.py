@@ -94,7 +94,7 @@ def fetch_market_universe(n: int = 100):
             diff = ((r.json().get("data") or {}).get("diff")) or []
             for b in diff:
                 c6 = str(b.get("f12") or "")
-                if len(c6) == 6 and c6.isdigit():
+                if len(c6) == 6 and c6.isdigit() and not is_restricted_board(c6):
                     pref = ("sh" if c6[0] in "65" else "sz" if c6[0] in "023"
                             else "bj" if c6[0] in "489" else "")
                     if pref:
@@ -107,6 +107,23 @@ def fetch_market_universe(n: int = 100):
         with _LOCK:
             _MARKET_CACHE["universe"] = (time.time(), codes)
     return codes
+
+
+# 需额外开通权限的板块 (未开通则不应扫描/交易): 创业板(300/301)、科创板(688/689)。
+RESTRICTED_BOARD_PREFIXES = ("300", "301", "688", "689")
+
+
+def is_restricted_board(code) -> bool:
+    """是否创业板(300/301)或科创板(688/689) —— 未开通该板块权限的账户应排除。
+
+    入参为带 sh/sz/bj 前缀或裸 6 位代码均可。用于宇宙构建与扫描选股前统一过滤。
+    """
+    sym = str(code).lower()
+    for pref in ("sh", "sz", "bj"):
+        if sym.startswith(pref):
+            sym = sym[len(pref):]
+            break
+    return sym.startswith(RESTRICTED_BOARD_PREFIXES)
 
 
 def universe(n: int = 100):
@@ -147,6 +164,8 @@ def local_universe(n: int = 300):
             continue
         name = (v.get("name") or "") if isinstance(v, dict) else str(v)
         if any(x in name for x in ("ST", "退", "N ", "C ")):
+            continue
+        if is_restricted_board(code):
             continue
         pref = ("sh" if code[0] in "65" else "sz" if code[0] in "023"
                 else "bj" if code[0] in "489" else "")

@@ -87,6 +87,9 @@ class Paper(_Base):
     COST = "paper_cost"
     MIN_CONF = "paper_min_conf"
     SCAN_INTERVAL = "paper_scan_interval"
+    # 板块权限: 未开通创业板/科创板时, 扫描/选股应排除对应代码。
+    ENABLE_CHINEXT = "paper_enable_chinext"
+    ENABLE_STAR = "paper_enable_star"
 
 
 class Watch(_Base):
@@ -211,6 +214,8 @@ DEFAULTS = {
     Paper.COST: 0.004,
     Paper.MIN_CONF: 90,
     Paper.SCAN_INTERVAL: 1800,
+    Paper.ENABLE_CHINEXT: False,
+    Paper.ENABLE_STAR: False,
     AI.FALSIFY_ENABLED: False,
     AI.INTERPRET_ENABLED: False,
     AI.API_KEY: "",
