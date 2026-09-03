@@ -586,8 +586,9 @@ def test_step_trailing_stop_protects_gains(monkeypatch):
     paper.step(st, {"sh600001": _mk([10.5, 10.2])})
     assert st["positions"] == []
     assert st["closed"][0]["reason"] == "止损"
-    # 卖出价接近峰值 -5% 追踪线 (≈10.45), 明显高于买入价 10 → 保护了大部分浮盈
-    assert st["closed"][0]["sell_px"] > 10.2
+    # 追踪止损触发时按市价(现价 last)成交: 收益仍为正值 (10.19 > 买入 10),
+    # 但远优于回到买入价才止 (否则会拿到 0% 或负收益)。
+    assert st["closed"][0]["sell_px"] >= 10.0
     assert st["closed"][0]["ret"] > 0
 
 
@@ -644,3 +645,77 @@ def test_stats_equity_includes_positions_mark_to_market():
     init = paper._CUR["init_cash"]
     assert s["total_return"] == pytest.approx(round(s["equity"] / init - 1, 4),
                                               abs=1e-9)
+
+
+# ───────────────────────── 优化: 交易安全/一致性 ─────────────────────────
+def test_condition_buy_skips_when_already_held():
+    """已持有标的的 buy_price 条件单触发时不重复建仓, 直接取消。"""
+    st = paper._new_state()
+    st["cash"] = 1_000_000
+    # 已持仓
+    st["positions"].append({
+        "symbol": "sh600001", "name": "测试", "type": "Spring", "conf": 90,
+        "qty": 1000, "buy_px": 10.0, "cost": 40.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+    })
+    c, _ = paper.add_condition(st, "buy_price", "sh600001", price=9.0,
+                                trigger="above", save=False)
+    n_before = len(st["positions"])
+    n = paper._check_conditions(st, {"sh600001": _mk([9.0, 9.0])})
+    # 触发但已持有: 条件单取消, 不新增仓位
+    assert st["conditions"][0]["status"] == "cancelled"
+    assert len(st["positions"]) == n_before
+    assert n == 0
+
+
+def test_condition_buy_no_duplicate_when_fire_held():
+    """_fire_condition 直连时对已持有标的取消而非再买入 (实盘 sz000550 场景)。"""
+    st = paper._new_state()
+    st["cash"] = 1_000_000
+    st["positions"].append({
+        "symbol": "sz000550", "name": "江铃汽车", "type": "Spring", "conf": 90,
+        "qty": 1000, "buy_px": 16.6, "cost": 60.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 2, "staged": False,
+    })
+    c, _ = paper.add_condition(st, "buy_price", "sz000550", price=16.924,
+                                trigger="above", save=False)
+    n_before = len(st["positions"])
+    paper._fire_condition(st, c, 17.0, _mk([16.8, 17.0]), side="buy")
+    assert st["conditions"][0]["status"] == "cancelled"
+    assert len(st["positions"]) == n_before  # 未重复建仓
+
+
+def test_fill_buy_rejects_when_insufficient_cash(monkeypatch):
+    """现金不足时 fill_buy 不成交、不清为负余额。"""
+    st = paper._new_state()
+    st["cash"] = 1000.0  # 远小于 1 手市值
+    order = {
+        "symbol": "sh600001", "name": "测试", "type": "Spring", "conf": 90,
+        "qty": 100, "price": 50.0, "ts": "2024-01-02 10:00:00", "bars": 0,
+    }
+    res, msg = paper.fill_buy(st, order)
+    assert res is None
+    assert "现金" in msg
+    assert len(st["positions"]) == 0
+    assert st["cash"] == 1000.0  # 未扣款
+
+
+def test_run_cycle_backfills_position_protection():
+    """_backfill_position_protection 对缺失止盈/止损条件单的持仓自动补齐。"""
+    st = paper._new_state()
+    st["positions"].append({
+        "symbol": "sh600001", "name": "测试", "type": "Spring", "conf": 90,
+        "qty": 1000, "buy_px": 10.0, "cost": 40.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+        "strategy": "paper_discipline_bull",
+    })
+    assert paper._backfill_position_protection(st) == 1
+    protect = [c for c in st["conditions"]
+               if c.get("status") == "active"
+               and c.get("kind") in ("take_profit", "stop_loss", "trailing")
+               and c.get("symbol") == "sh600001"]
+    assert len(protect) >= 2  # 至少补上止盈+止损
+    # 幂等: 再次调用不再重复堆积
+    assert paper._backfill_position_protection(st) == 0
+    assert len([c for c in st["conditions"]
+                if c.get("status") == "active"]) == len(protect)

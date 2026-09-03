@@ -1495,6 +1495,26 @@ def _create_position_conditions(st, symbol, name="", buy_px=None):
                 reason=f"持仓保护:{kind}"))
 
 
+def _backfill_position_protection(st):
+    """对缺失止盈/止损/追踪保护条件单的持仓自动补齐 (幂等)。
+
+    覆盖历史遗留或非 fill_buy 路径建立的仓位。_create_position_conditions
+    已有"同标的 active 保护不重复"的防护, 并顺带消费同标的入场 buy_price 条件单。
+    返回补齐的持仓数量。
+    """
+    n = 0
+    for p in st.get("positions", []):
+        sym = p["symbol"]
+        if any(c.get("kind") in ("take_profit", "stop_loss", "trailing")
+               and c.get("symbol") == sym and c.get("status") == "active"
+               for c in st.get("conditions", [])):
+            continue
+        _create_position_conditions(st, sym, name=p.get("name", ""),
+                                    buy_px=float(p.get("buy_px", 0) or 0))
+        n += 1
+    return n
+
+
 def cancel_condition(st, cid, save=True):
     """取消一条条件单 (status → "cancelled")。返回是否命中。"""
     for c in st.get("conditions", []):
@@ -1536,6 +1556,12 @@ def _check_conditions(st, df_by_code):
 
         if kind == "buy_price":
             if _match_trigger(c["trigger"], last, c["price"]):
+                if has_position(st, sym):
+                    # 已持有该标的则不重复买入, 直接取消入场条件单
+                    c["status"] = "cancelled"
+                    c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    c["note"] = "已持有该标的, 入场条件单取消"
+                    continue
                 _fire_condition(st, c, last, df, side="buy")
                 triggered += 1
         elif kind == "sell_price":
@@ -1629,20 +1655,31 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
         budget = c.get("amount") or st["cash"]
         order = _make_order(c["symbol"], c.get("name", ""), "条件单",
                             c.get("qty", 0) or 0, last, 0, budget)
-        if order is None or len(st["positions"]) >= _CUR["max_pos"]:
+        if has_position(st, c["symbol"]):
+            # 已持有该标的: 取消条件单, 防止对同一标的重建仓 (避免资金/仓位被重复占用)
+            c["status"] = "cancelled"
+            c["note"] = "已持有该标的, 入场条件单取消"
+            c["correct"] = None
+        elif order is None or len(st["positions"]) >= _CUR["max_pos"]:
             # 预算不足/同持已满: 条件单转取消, 防止永久悬挂
             c["status"] = "cancelled"
             c["note"] = "资金/同持上限不足, 未成交"
             c["correct"] = None
         else:
-            fill_buy(st, order)
-            c["matched_price"] = order["price"]
-            c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            c["status"] = "done"
-            # 买入条件单: 判断触发价是否被满足
-            # buy_price: 我们在 pick_candidates 中设置 price = last * 1.002 (略高于当前价)
-            # 触发意味着 last >= price，所以 correct=True
-            c["correct"] = True  # buy_price 已触发突破
+            res, msg = fill_buy(st, order)
+            if res is None:
+                # 现金不足等: 不成交, 取消条件单防止悬挂
+                c["status"] = "cancelled"
+                c["note"] = msg or "未成交"
+                c["correct"] = None
+            else:
+                c["matched_price"] = order["price"]
+                c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                c["status"] = "done"
+                # 买入条件单: 判断触发价是否被满足
+                # buy_price: 我们在 pick_candidates 中设置 price = last * 1.002 (略高于当前价)
+                # 触发意味着 last >= price，所以 correct=True
+                c["correct"] = True  # buy_price 已触发突破
     else:
         if pos is None:
             pos = _find_pos(st, c["symbol"])
@@ -1676,11 +1713,13 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
 
 
 def fill_buy(st, order):
-    """口头成交: 扣现金、建仓。"""
+    """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。"""
     price = order["price"]
     qty = order["qty"]
     cost = qty * price * _CUR["cost"]
     spend = qty * price + cost
+    if st.get("cash", 0) < spend:
+        return None, "现金不足"
     st["cash"] -= spend
     st["positions"].append({
         "symbol": order["symbol"], "name": order.get("name", ""),
@@ -1744,7 +1783,9 @@ def step(st, df_by_code):
         elif held >= _CUR["hold_bars"]:
             reason = "到期"
         if reason:
-            sell_price = max(stop_px, last) * (1 - SLIP_SELL)
+            # 模拟盘按市价即时成交: 一律以现价(含卖滑点)结算, 不再用 max(stop_px,last)
+            # 高估止损价。历史实现止损在 last<stop_px 时按 stop_px 成交, 低估了实际损失。
+            sell_price = last * (1 - SLIP_SELL)
             close_position(st, pos, sell_price, reason)
     # 处理待撮合买单
     for o in list(st["pending"]):
@@ -2111,6 +2152,10 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
         min_conf = _CUR["min_conf"]
 
     st = load_state()
+    # 1) 持仓防护回填: 对缺失止盈/止损保护条件单的已有持仓自动补齐
+    #    (_create_position_conditions 幂等: 已有 active 不重复; 并消费同标的入场单)。
+    #    覆盖历史遗留/非 fill_buy 路径建立的仓位, 避免"裸奔"只有 step 兜底。
+    _backfill_position_protection(st)
     # 1) 选股: candidates 传入时直接复用扫描结果 (扫描已完成选股)
     if candidates is None:
         cand = pick_candidates(universe=universe, min_conf=min_conf)
