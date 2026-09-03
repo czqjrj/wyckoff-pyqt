@@ -1384,6 +1384,34 @@ def place_condition(kind, symbol, price=None, pct=None, trigger="above",
                              reason=reason, save=True)
 
 
+def _create_position_conditions(st, symbol, name="", buy_px=None):
+    """建仓后为持仓自动生成止盈/止损条件单, 并消费同标的入场条件单。
+
+    为 symbol 生成 take_profit (pct=_CUR.take_profit) + stop_loss
+    (pct=_CUR.stop_loss), 使条件单 tab 展示持仓保护, 且 _check_conditions 优先
+    触发; 同标的已有 active 止盈/止损时不重复生成。
+    同时把同标的 active 的 buy_price 入场条件标记为 done (已买入), 防止以后被再次
+    触发造成同仓重复买入。
+    """
+    conds = st.setdefault("conditions", [])
+    for c in conds:
+        if c.get("kind") == "buy_price" and c.get("symbol") == symbol \
+                and c.get("status") == "active":
+            c["status"] = "done"
+            c["note"] = "已买入, 入场条件单消费"
+    if buy_px is not None:
+        for kind, pct in (("take_profit", _CUR["take_profit"]),
+                          ("stop_loss", _CUR["stop_loss"])):
+            if pct is None:
+                continue
+            if any(c.get("kind") == kind and c.get("symbol") == symbol
+                   and c.get("status") == "active" for c in conds):
+                continue
+            conds.append(_cond(
+                kind, symbol, pct=pct, name=name,
+                reason=f"持仓保护:{kind}"))
+
+
 def cancel_condition(st, cid, save=True):
     """取消一条条件单 (status → "cancelled")。返回是否命中。"""
     for c in st.get("conditions", []):
@@ -1581,6 +1609,8 @@ def fill_buy(st, order):
         "staged": False,
     })
     st["orders"].append(order)
+    _create_position_conditions(st, order["symbol"], name=order.get("name", ""),
+                                buy_px=price)
     save_state(st)
     return order, "成交"
 

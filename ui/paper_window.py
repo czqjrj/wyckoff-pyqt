@@ -489,13 +489,14 @@ class PaperWindow(QDialog):
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(4)
         info = QLabel(
-            "条件单由系统自动根据强多头/价值吸筹事件生成\n"
-            "无需手动添加, 系统将根据交易机会实时创建条件单"
+            "条件单由系统自动生成: 扫描入场(buy_price) + 持仓保护(止盈/止损)\n"
+            "买入成交后自动为持仓生成 止盈/止损, 无需手动添加"
         )
         info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info.setStyleSheet(f"font-size:14px;color:{theme.C_MUTED};"
                            "min-height:80px;")
-        lay.addWidget(info, 1)
+        lay.addWidget(info)
+        lay.addWidget(self.t_cond, 1)
         return page
 
     # ── 策略参数配置 ───────────────────────────────────────

@@ -352,7 +352,10 @@ def test_run_cycle_end_to_end(monkeypatch, tmp_path):
     assert s2["n_closed"] == 1
     assert s2["n_positions"] == 0
     st = paper.load_state()
-    assert st["closed"][0]["reason"] == "止盈"
+    # 建仓后自动生成持仓保护条件单; 条件单优先于默认止盈触发平仓
+    assert any(c["kind"] == "take_profit" and c["status"] == "done"
+               for c in st["conditions"])
+    assert st["closed"][0]["reason"] == "条件单:take_profit"
     assert st["closed"][0]["type"] == "Spring"
     assert st["closed"][0]["conf"] == 96
 
@@ -411,6 +414,27 @@ def test_condition_stop_loss():
     assert st["conditions"][0]["status"] == "done"
 
 
+def test_buy_generates_tp_sl_conditions():
+    """建仓后自动生成 止盈/止损 条件单, 并消费同标的入场条件单。"""
+    st = paper._new_state()
+    st["cash"] = paper.INIT_CASH
+    paper.add_condition(st, "buy_price", "sh600001", price=10.0,
+                        trigger="above", name="测试", save=False)
+    o = paper._make_order("sh600001", "测试", "Spring", 90, 10.0, 0, st["cash"])
+    paper.fill_buy(st, o)
+    kinds = {(c["kind"], c["status"]) for c in st["conditions"]}
+    assert ("take_profit", "active") in kinds
+    assert ("stop_loss", "active") in kinds
+    # buy_price 入场条件已被消费, 不会重复买入
+    assert not any(c["kind"] == "buy_price" and c["status"] == "active"
+                   for c in st["conditions"])
+    # 二次买入同标的: 不重复生成保护条件单
+    n_tp = sum(1 for c in st["conditions"] if c["kind"] == "take_profit")
+    paper.fill_buy(st, dict(o, symbol="sh600001"))
+    assert sum(1 for c in st["conditions"]
+               if c["kind"] == "take_profit") == n_tp
+
+
 def test_condition_trailing_stop():
     st = _state_with_cond("trailing", pct=0.05, entry=10.0)
     paper.step(st, {"sh600001": _mk([10.0, 11.0])})  # 建峰
@@ -424,10 +448,14 @@ def test_condition_trailing_stop():
 
 
 def test_condition_not_triggered_when_flat():
-    st = _state_with_cond("buy_price", price=8.0, trigger="below", entry=10.0)
+    st = paper._new_state()
+    st["cash"] = paper.INIT_CASH
+    paper.add_condition(st, "buy_price", "sh600001", price=8.0,
+                        trigger="below", name="测试", save=False)
     df = _mk([10.2, 10.3])  # 现价高于触发价, 未触发
     paper.step(st, {"sh600001": df})
     assert st["conditions"][0]["status"] == "active"
+    assert st["positions"] == []
 
 
 def test_condition_cancel():
