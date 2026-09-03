@@ -90,9 +90,10 @@ class Paper(_Base):
     # 板块权限: 未开通创业板/科创板时, 扫描/选股应排除对应代码。
     ENABLE_CHINEXT = "paper_enable_chinext"
     ENABLE_STAR = "paper_enable_star"
-    # 追踪止损: 从持仓期内最高价回撤 trailing 幅度时平仓 (替代固定止损)
+    # 追踪止损: 从持仓期内最高价回撤 trailing 幅度时平仓。
+    # 默认关闭: 固定 entry-3% 条件单止损总先触发, 追踪通道无效; 网格最优恰为固定-3%。
     TRAILING_STOP = "paper_trailing_stop"
-    # 追踪止损 ATR 缓冲: stop = 杆位*(1-止损) - atr_mult*ATR
+    # 追踪止损 ATR 缓冲: stop = 杆位*(1-止损) - atr_mult*ATR (仅追踪开启时生效)
     TRAIL_ATR_MULT = "paper_trail_atr_mult"
     # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
     REBALANCE = "paper_rebalance"
