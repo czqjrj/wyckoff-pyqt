@@ -44,4 +44,4 @@ fi
 
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM_XCB:-xcb}"
 
-exec "$PY" wyckoff_desktop.py "$@"
+exec "$PY" wyckoff_ui.py "$@"

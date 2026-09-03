@@ -326,7 +326,7 @@ class WyckoffStrategyManager:
     def get_strategy_details(self):
         """获取所有策略的详细说明"""
         return {
-            "strategy_4": {
+            "strategy_discipline": {
                 "name": "模拟盘纪律策略 (强多头 + 硬门禁)",
                 "description": "源自模拟盘实证：强多头事件(conf≥90) + 大盘/板块/资金流硬门禁，配合同持上限3与止盈止损出场纪律",
                 "characteristics": ["真实回测胜率~53%", "盈亏比~3.0", "累计收益+50%"],
