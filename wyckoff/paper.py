@@ -54,9 +54,13 @@ COST = 0.004
 # 买入滑点 (价格摩擦, 占成交价比例)
 SLIP_BUY = 0.001
 SLIP_SELL = 0.001
-# 止损: 结构位 ± 0.5×ATR, 简化用固定百分比 (网格回测 2026-09 实证 -3% 最优:
-# 累计+158.7% > -4%的+155.5% > -5%的+128.0% > -6%的+128.3% > -8%的+141.9%)
-STOP_LOSS = 0.03
+# 止损: 结构位 ± 0.5×ATR, 简化用固定百分比。
+# 由 -3% 放宽至 -6% (docs/winrate_improve_eval.md §五·推荐①核心): 回放胜率 27.8% 与
+# 信号方向命中 75~85% 的巨大落差, 主因是 -3% 止损对日K振幅过紧, 一根回调就把
+# 高命中对单震出 (13/18 笔被 -3% 震出)。放宽后让高命中信号走出来; 亏损单变大,
+# 需结合 conf≥80 + 强梯队门禁对冲 (见下)。盈亏平衡点建议续跑
+# scripts/paper_replay_grid.py 网格 {-3,-4,-5,-6,-8}×{+10,+15,+20}×{70,80,90} 复核。
+STOP_LOSS = 0.06
 # 追踪止损: 默认关闭。排查确认 _check_conditions 的固定 entry-3% 条件单止损总在
 # step 之前触发, 使峰值回撤追踪成为无效死通道; 且网格最优恰为固定 -3%, 故统一固定口径。
 TRAILING_STOP = False
@@ -304,16 +308,19 @@ _CUR = {
     "rebalance": REBALANCE,
 }
 
-# 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
+# 强多头事件: 方向命中显著优于随机且可裸多落地 (见 docs/winrate_improve_eval.md §五)
+# 采用完整强梯队 {Spring,Shakeout,UTAD,LPSY,ST,LPS,SC} (沿 config.STRONG_TIER_TYPES),
+# 命中 76.8% vs 弱梯队 49.8% (差 27pt)。该强梯队为"必选"改进, 弱事件
+# (AR/BC/SOS/JOC/PSY/SOW_INVALID 等) 不单独触发入场, 避免稀释组合质量。
+# 注: UTAD/LPSY 命中 78.5%/78.3%, 高于旧含 SOW_INVALID 的口径, 一并纳入。
 try:
     from .config import STRONG_TIER_TYPES
-    # SC/SOW_INVALID 方向为中性 (event_dir==0) 但属底部反转/空头失效, 一并纳入
-    LONG_EVENT_TYPES = frozenset(
-        {"Spring", "Shakeout", "ST", "LPS", "SC", "SOW_INVALID"}
-    ) & frozenset(STRONG_TIER_TYPES)
+    LONG_EVENT_TYPES = frozenset(STRONG_TIER_TYPES)
+    # SC/SOW_INVALID 方向为中性 (event_dir==0), 但属底部反转/空头失效。
+    # 其中 SC 命中 60.7% 在强梯队内, 保留; SOW_INVALID (71.1%) 非强梯队, 剔除。
 except Exception:  # pragma: no cover - 防御首启缺失
     LONG_EVENT_TYPES = frozenset(
-        {"Spring", "Shakeout", "ST", "LPS", "SC", "SOW_INVALID"})
+        {"Spring", "Shakeout", "UTAD", "LPSY", "ST", "LPS", "SC"})
 
 
 def file_path() -> str:

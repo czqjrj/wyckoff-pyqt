@@ -122,12 +122,14 @@
 
 ## 六、落地与续跑清单（换机器）
 
-- [ ] `paper.py`：止损默认值 `STOP_LOSS` 由 -3% 放宽至 -5%~-6%（或提供追踪止损开关）
-- [ ] `paper.py`：`MIN_CONF` 默认提示至 ≥80
-- [ ] 选股池：强梯队过滤（弱事件 AR/BC/SOS/JOC/PSY 从价值吸筹/纪律回退中剔除）；重新审视 `STRONG_TIER_TYPES` 口径
+- [x] **已完成** `paper.py`：止损默认值 `STOP_LOSS` 由 -3% 放宽至 -6%（`wyckoff/paper.py:63`，`settings_keys.py:219` 同步）
+- [ ] `MIN_CONF` 默认 ≥80 —— 当前默认 90 已满足推荐下限，无需改动
+- [x] **已完成** 选股池：`LONG_EVENT_TYPES` 改为完整强梯队 `{Spring,Shakeout,UTAD,LPSY,ST,LPS,SC}`，即 `config.STRONG_TIER_TYPES` 直取，剔除原 `SOW_INVALID`（命中率低于强梯队阈值）；UTAD/LPSY 命中 78.5%/78.3%，现纳入（`wyckoff/paper.py:318`）
 - [ ] 小规模回放验证（先修速度瓶颈：离线K线缓存 / 仅结尾 `save_state`；脚本 `replay()` 已加"重放内跳过中间落盘"提速）
 - [ ] 复测盈亏平衡点：对 止损{-3,-4,-5,-6} × 止盈{+10,+15,+20} × conf{70,80,90} 做网格（可复用 `scripts/paper_replay_grid.py`），用 win_rate / pl_ratio / 最大回撤 三维选点
-- [ ] 确认后再 git 提交（本次仅写报告，未改引擎参数、未提交）
+- [ ] 确认后再 git 提交
+
+> **本次改动记录**（2026-09-03）：518 tests pass，ruff clean。改动涉及 `paper.py`（强梯队+止损默认值）、`settings_keys.py`（止损默认值同步）、`tests/test_paper_account.py`（UTAD 纳入后断言更新）。未提交，待网格复测确认。
 
 ---
 

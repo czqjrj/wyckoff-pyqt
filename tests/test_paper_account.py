@@ -86,12 +86,13 @@ def test_pick_candidates_filter_and_sort(monkeypatch):
     monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
     out = paper.pick_candidates(universe=["sh600001", "sh600002"],
                                 max_codes=10, min_conf=85, skip_gates=True)
+    # UTAD 现在在强梯队内, conf=97 > Spring=95, 取最高 conf 事件; 旧 LPS(idx=200) 丢弃。
+    # A 取 UTAD(97), B 整只入池 Spring(88)。
     assert len(out) == 2
     confs = sorted(e["conf"] for e in out)
-    assert confs == [88, 95]
-    # A 取最新 Spring95 (旧的 LPS92 丢弃), B 整只入池
+    assert confs == [88, 97]
     by_code = {e["code"]: e["type"] for e in out}
-    assert by_code["sh600001"] == "Spring"
+    assert by_code["sh600001"] == "UTAD"
     assert by_code["sh600002"] == "Spring"
 
 

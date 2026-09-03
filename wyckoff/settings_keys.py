@@ -216,7 +216,7 @@ DEFAULTS = {
     Paper.INIT_CASH: 1_000_000,
     Paper.MAX_POS: 3,
     Paper.HOLD_BARS: 20,
-    Paper.STOP_LOSS: 0.03,
+    Paper.STOP_LOSS: 0.06,
     Paper.TAKE_PROFIT: 0.15,
     Paper.COST: 0.004,
     Paper.MIN_CONF: 90,
