@@ -522,7 +522,7 @@ class PaperWindow(QDialog):
         self.sp_stop.setRange(0.01, 0.30)
         self.sp_stop.setSingleStep(0.005)
         self.sp_stop.setDecimals(3)
-        self.sp_stop.setValue(float(self._settings.get(S.Paper.STOP_LOSS, 0.05)))
+        self.sp_stop.setValue(float(self._settings.get(S.Paper.STOP_LOSS, 0.03)))
 
         self.sp_tp = QDoubleSpinBox()
         self.sp_tp.setRange(0.05, 1.00)

@@ -248,11 +248,13 @@ def test_step_take_profit_closes(monkeypatch):
 
 def test_step_stop_loss_closes():
     st = _state_with_position(entry=10.0)
-    df = _mk([9.4, 9.2])  # 跌破买价 -6%, 触发 -5% 止损
+    df = _mk([9.4, 9.2])  # 跌破买入价 -6%, 触发默认止损 (-3%)
     paper.step(st, {"sh600001": df})
     assert st["closed"][0]["reason"] == "止损"
-    # 止损限价 = 买入价*(1-5%), 卖出价再扣滑点
-    assert st["closed"][0]["sell_px"] < 9.5
+    # 止损限价 = 买入价*(1-默认止损%), 卖出价再扣滑点 (低于止损价成交)
+    stop_px = 10.0 * (1 - paper._CUR["stop_loss"])
+    assert st["closed"][0]["sell_px"] < stop_px
+    assert st["closed"][0]["sell_px"] < 10.0
     assert st["closed"][0]["ret"] < 0
 
 
