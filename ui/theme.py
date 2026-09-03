@@ -100,6 +100,7 @@ class ThemeManager:
         self.C_PANEL = pal["panel"]
         self.C_BORDER = pal["border"]
         self.C_ACCENT = pal["accent"]
+        self.C_BENCH = pal.get("mkt", pal["accent"])
         self.C_GRID = pal["grid"]
         self.C_ZONE_ACC = pal["zone_acc"]
         self.C_ZONE_DIST = pal["zone_dist"]

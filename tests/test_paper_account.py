@@ -466,6 +466,131 @@ def test_condition_cancel():
     assert st["conditions"][0]["status"] == "cancelled"
 
 
+def test_force_close_position_manual():
+    """手动平仓: 按代码平仓, 回收现金并发平仓记录; 不存在返回 None。"""
+    st = paper._new_state()
+    st["cash"] = 100_000
+    pos = {"symbol": "sh600519", "name": "贵州茅台", "type": "Spring",
+           "strategy": "paper_discipline_bull", "conf": 95, "qty": 100,
+           "buy_px": 1200.0, "last": 1300.0, "entry_bars": 5,
+           "entry_ts": "2026-01-01 10:00:00"}
+    st["positions"].append(pos)
+    cash_before = st["cash"]
+    got = paper.force_close_position(st, "sh600519", "手动平仓")
+    assert got is pos
+    assert len(st["positions"]) == 0
+    assert len(st["closed"]) == 1
+    assert st["closed"][0]["symbol"] == "sh600519"
+    assert st["closed"][0]["reason"] == "手动平仓"
+    assert st["cash"] > cash_before
+    # 不存在的代码返回 None
+    assert paper.force_close_position(st, "sh999999") is None
+
+
+# ───────────────────────── 优化: 条件单去重 ─────────────────────────
+def test_apply_auto_conditions_upsert_dedup():
+    """覆盖式去重: 同代码已有 active buy_price 时更新触发价而非堆积重复。"""
+    st = paper._new_state()
+    c1, _ = paper.add_condition(st, "buy_price", "sh600001", price=10.0,
+                                save=False)
+    cand = [{"code": "sh600001", "name": "A", "strategy": "paper_discipline_bull",
+             "type": "Spring", "conf": 95, "auto_cond_price": 11.0}]
+    n = paper._apply_auto_conditions(st, cand)
+    assert n == 1  # 更新计为一次
+    active = [c for c in st["conditions"] if c.get("status") == "active"]
+    assert len(active) == 1  # 不再堆积重复
+    assert active[0]["price"] == 11.0
+    assert active[0]["cid"] == c1["cid"]  # 复用原条件
+
+
+def test_apply_auto_conditions_global_dedup():
+    """全局预清理: 历史遗留下多条同代码 active 条件被合流为一条。"""
+    st = paper._new_state()
+    for px in (10.0, 10.1, 10.2):
+        paper.add_condition(st, "buy_price", "sh600001", price=px, save=False)
+    paper._apply_auto_conditions(st, [])  # 空候选也触发全局清理
+    active = [c for c in st["conditions"] if c.get("status") == "active"]
+    assert len(active) == 1
+
+
+# ───────────────────────── 优化: 低质池过滤 ─────────────────────────
+def test_is_low_quality_filter():
+    assert paper._is_low_quality("bj920056")          # 北交所
+    assert paper._is_low_quality("sh600001", name="ST怪股")
+    assert paper._is_low_quality("sh600001", name="*ST退")
+    assert paper._is_low_quality("sh600001", price=2.0)  # 低价
+    assert not paper._is_low_quality("sh600001", name="贵州茅台", price=100.0)
+
+
+def test_value_accum_excludes_bj_and_st(monkeypatch):
+    """价值吸筹: 北交所 / ST 被过滤, 正常主板保留。"""
+    class FakeMgr:
+        def __init__(self, t):
+            self.t = t
+        def evaluate_strategy_value_accumulation(self, *a, **k):
+            return {"event": {"type": "Spring", "idx": 100, "conf": 90}}
+
+    evs = []
+    piv = []
+    df = _mk(np.linspace(10.0, 11.0, 250))
+    monkeypatch.setattr(paper, "_strategy_manager",
+                        lambda: FakeMgr("Spring"))
+    # 北交所被拒
+    assert paper._value_accum_candidate("bj920056", df, piv, evs) is None
+    # 正常主板保留 (需 ST 名检查来自 _stock_name 空 → 非 ST)
+    monkeypatch.setattr(paper, "_stock_name", lambda c: "正常股")
+    got = paper._value_accum_candidate("sh600001", df, piv, evs)
+    assert got is not None and got["strategy"] == "screener_value_accumulation"
+    # ST 被拒
+    monkeypatch.setattr(paper, "_stock_name", lambda c: "ST怪异")
+    assert paper._value_accum_candidate("sh600001", df, piv, evs) is None
+
+
+# ───────────────────────── 优化: 等权仓位 ─────────────────────────
+def test_make_order_equal_weight_equity():
+    """传入 st 时按账户总权益等权, 修正首批买入吞现金导致权重失衡。"""
+    cash = 400_000.0
+    st = paper._new_state()
+    st["cash"] = cash
+    st["positions"].append({
+        "symbol": "sh600001", "name": "A", "type": "Spring", "conf": 95,
+        "qty": 20000, "buy_px": 10.0, "cost": 1.0, "entry_ts": "t",
+        "entry_bars": 1, "staged": False, "last": 10.0,
+    })
+    order = paper._make_order("sh600002", "", "Spring", 90, 10.0, 0,
+                              st["cash"], st=st)
+    assert order["qty"] % 100 == 0
+    # 总权益 = 400000 + 20000*10 = 600000; 等权 /max_pos(3) = 200000 → 约 20000 股
+    assert order["qty"] >= 19000
+    assert order["qty"] <= 21000
+
+
+# ───────────────────────── 优化: 追踪止损 ─────────────────────────
+def test_step_trailing_stop_protects_gains(monkeypatch):
+    """追踪止损: 持仓从高点回落 stop_loss 幅度时平仓, 而非回到买入价才止。"""
+    monkeypatch.setattr(paper, "_CUR", {
+        **paper._CUR,
+        "trailing_stop": True, "trail_atr_mult": 0.0,
+        "stop_loss": 0.05, "take_profit": 0.15, "hold_bars": paper.HOLD_BARS,
+    })
+    st = paper._new_state()
+    st["positions"].append({
+        "symbol": "sh600001", "name": "测试", "type": "Spring", "conf": 95,
+        "qty": 10000, "buy_px": 10.0, "cost": 40.0,
+        "entry_ts": "2024-03-01 10:00:00", "entry_bars": 1, "staged": False,
+    })
+    # 先冲高到 ~11 (+10%, 峰值≈11, 未及 +15% 止盈), 再回落到 ~10.2
+    # (距峰值约 -7% > 追踪 5%) → 在明显高于买入价处触发追踪止损。
+    paper.step(st, {"sh600001": _mk([10.6, 11.0])})
+    assert st["positions"], "冲高阶段不应平仓"
+    paper.step(st, {"sh600001": _mk([10.5, 10.2])})
+    assert st["positions"] == []
+    assert st["closed"][0]["reason"] == "止损"
+    # 卖出价接近峰值 -5% 追踪线 (≈10.45), 明显高于买入价 10 → 保护了大部分浮盈
+    assert st["closed"][0]["sell_px"] > 10.2
+    assert st["closed"][0]["ret"] > 0
+
+
 def test_condition_invalid_kind():
     st = paper._new_state()
     c, msg = paper.add_condition(st, "not_a_kind", "sh600001", price=9.0,

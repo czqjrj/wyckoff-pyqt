@@ -56,6 +56,10 @@ SLIP_BUY = 0.001
 SLIP_SELL = 0.001
 # 止损: 结构位 ± 0.5×ATR, 简化用固定百分比 (网格回测 2026-09 实证 -3% 优于 -5%~-8%)
 STOP_LOSS = 0.03
+# 追踪止损: 杆位止损 (从持仓期内最高价回撤 stop_loss), 避免固定-3%被噪音洗出
+TRAILING_STOP = True
+# 追踪止损 ATR 缓冲: stop = 杆位*(1-stop_loss) - atr_mult*ATR, 加缓冲防假破位
+TRAIL_ATR_MULT = 0.0  # 默认不开 ATR 缓冲, 保持与网格回测口径一致
 # 止盈: 盈利 +15% 落袋 (结合止损的不对称盈亏比)
 TAKE_PROFIT = 0.15
 # 初始终端资金 (模拟资产)
@@ -260,6 +264,11 @@ def apply_paper_params(settings=None):
         # 板块权限: 未开通创业板/科创板 → 扫描/选股排除对应代码
         "enable_chinext": bool(_get(S.Paper.ENABLE_CHINEXT, False)),
         "enable_star": bool(_get(S.Paper.ENABLE_STAR, False)),
+        # 追踪止损: 杆位止损 (从持仓期内最高价回撤), 避免固定-3%被噪音洗出
+        "trailing_stop": bool(_get(S.Paper.TRAILING_STOP,
+                                   _get("paper_trailing_stop", TRAILING_STOP))),
+        "trail_atr_mult": float(_get(S.Paper.TRAIL_ATR_MULT,
+                                     _get("paper_trail_atr_mult", TRAIL_ATR_MULT))),
     }
     return _CUR
 
@@ -283,6 +292,8 @@ _CUR = {
     "sizing_method": PositionSizingMethod.EQUAL_WEIGHT.value,
     "enable_chinext": False,
     "enable_star": False,
+    "trailing_stop": TRAILING_STOP,
+    "trail_atr_mult": TRAIL_ATR_MULT,
 }
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
@@ -1028,10 +1039,40 @@ def _value_accum_candidate(code, df, piv, evs):
         return None
     if not sig:
         return None
+    # 价值吸筹过滤: 排除北交所 / ST·退市 / 低价仙股, 降低低质垃圾混入候选池
+    # (此前无任何门槛, 曾把 bj 板块与 ST 低价股大量塞入候选, 造成条件单堆积)。
+    if _is_low_quality(sig["event"].get("code") or code):
+        return None
     ev = sig["event"]
     return {"strategy": "screener_value_accumulation",
             "type": ev["type"], "idx": int(ev.get("idx") or 0),
             "conf": int(ev.get("conf", 0) or 0)}
+
+
+# 价值吸筹/候选池低质股票过滤 (见 _value_accum_candidate)。
+#   - 北交所 (bj) 与 三板: 流动性差, 排除
+#   - ST/*ST/退市: 基本面风险高, 排除
+#   - 低价 (< VA_MIN_PRICE): 仙股化, 排除
+VA_EXCLUDE_BJ = True
+VA_EXCLUDE_ST = True
+VA_MIN_PRICE = 3.0
+
+
+def _is_low_quality(code, price=None, name=None) -> bool:
+    """判断标的是否属低质池: 北交所 / ST·退市 / 低价 (可选)。"""
+    c = str(code).lower()
+    if VA_EXCLUDE_BJ and c.startswith("bj"):
+        return True
+    if VA_EXCLUDE_ST:
+        try:
+            nm = name or _stock_name(code)
+        except Exception:
+            nm = name or ""
+        if any(x in nm for x in ("ST", "退", "N ", "C ")):
+            return True
+    if price is not None and VA_MIN_PRICE > 0 and float(price) < VA_MIN_PRICE:
+        return True
+    return False
 
 
 def pick_candidates(universe=None, max_codes=6000, min_conf=None,
@@ -1122,6 +1163,9 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             latest["code"] = code
             latest["name"] = _stock_name(code)
             latest["last"] = round(float(df["close"].iloc[-1]), 2)
+            # 低质池过滤 (北交所/ST/低价) — 纪律与价值吸筹统一适用, 防垃圾入池
+            if _is_low_quality(code, price=latest["last"], name=latest["name"]):
+                return code, None, None
             latest["strategy"] = strategy
             latest["sector"] = ""
             try:
@@ -1251,13 +1295,21 @@ def has_position(st, code):
 
 
 def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
-                strategy=""):
-    """构造买单订单公共字段 (qty 按当前现金预算分配, 整手)。
+                strategy="", st=None):
+    """构造买单订单公共字段 (qty 按全账户总权益等权预算分配, 整手)。
 
     sector 为持仓行业 (用于行业集中度风控 check_sector_concentration);
     strategy 记录信号来源策略 (策略管理器: paper_discipline_bull/价值吸筹)。
+    等权口径: 传入 st 时按 账户总权益/max_pos 分配 (现金+已有持仓市值),
+    避免"首批买入吞掉大部分现金、后续仓权重失衡" (曾出现三仓 33万/17万/14万)。
+    未传 st 时回退 现金/max_pos (兼容旧调用方与测试)。
     """
-    budget = cash * (1.0 / max(1, _CUR["max_pos"]))
+    equity_base = cash
+    if st is not None:
+        mv = sum(float(p.get("last", p["buy_px"])) * p["qty"]
+                 for p in st.get("positions", []))
+        equity_base = float(st["cash"]) + mv
+    budget = equity_base * (1.0 / max(1, _CUR["max_pos"]))
     if budget < MIN_LOT:
         return None
     qty = int(budget // (price * (1 + SLIP_BUY)) // 100 * 100)
@@ -1285,7 +1337,7 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
         if len(st["positions"]) >= _CUR["max_pos"]:
             return None, "同持已满"
         order = _make_order(code, name, type_, conf, price, n_total, st["cash"],
-                            strategy=strategy)
+                            strategy=strategy, st=st)
         if order is None:
             return None, "金额不足一手"
         if execute:
@@ -1298,7 +1350,7 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
 def _enqueue_buy(st, code, name, type_, conf, price, sector=None, strategy=""):
     """(进程内) 仅计入 pending, 不校验不落盘。调用方负责校验与 save_state。"""
     order = _make_order(code, name, type_, conf, price, 0, st["cash"],
-                        sector=sector, strategy=strategy)
+                        sector=sector, strategy=strategy, st=st)
     if order is None:
         return None
     st["pending"].append(order)
@@ -1351,27 +1403,58 @@ def add_condition(st, kind, symbol, price=None, pct=None, trigger="above",
 
 
 def _apply_auto_conditions(st, cand):
-    """为迭代出的候选批量生成 buy_price 条件单 (去重, 不落盘)。
+    """为迭代出的候选批量 upsert buy_price 条件单 (覆盖式去重, 不落盘)。
 
     由 run_scan/run_cycle 在最终 save_state 前调用一次, 避免扫描线程逐条
-    写盘被最终快照覆盖。已存在同代码同类型 active 条件单时跳过。
+    写盘被最终快照覆盖。
+    针对多轮扫描同一标的反复生成造成条件单堆积 (曾出现 42 个同代码重复) 的
+    问题, 采用覆盖式去重:
+      - 候选内同代码至多保留一条 (首次添加后, 后续同代码行仅刷新 name/reason)。
+      - 若已存在同代码同类型 active 条件单, 则更新其触发价/名称/说明并视为新增,
+        避免重复触发堆积; 同时把历史 outdated 的同代码 active 条件单转 cancelled。
+    返回本次有效 upsert/新增的数量。
     """
     conds = st.setdefault("conditions", [])
-    added = 0
+    touched = 0
+    # 全局预清理: 把历史遗留的重复 active buy_price 条件合流为每代码一条
+    # (曾因多轮扫描反复落盘堆积 42 个同代码重复), 先取消多余的再重建。
+    seen = {}
+    for c in conds:
+        if c.get("kind") != "buy_price" or c.get("status") != "active":
+            continue
+        code = c["symbol"]
+        if code in seen:
+            c["status"] = "cancelled"
+            c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            c["note"] = "批量去重: 重复条件单"
+        else:
+            seen[code] = c
+    handled = set()  # 本批已处理(创建/更新)的代码, 保证候选内同代码只保留一条
     for e in cand or []:
         price = e.get("auto_cond_price")
         if not price:
             continue
         code = e["code"]
-        if any(c.get("kind") == "buy_price" and c.get("symbol") == code
-               and c.get("status") == "active" for c in conds):
+        if code in handled:
             continue
-        conds.append(_cond(
+        handled.add(code)
+        reason = f"自动:{e.get('strategy','')}:{e.get('type')}({e.get('conf',0)})"
+        # 覆盖式: 同代码同类型 active 条件单 → 更新触发价等, 而非跳过
+        existing = seen.get(code)
+        if existing is not None:
+            existing["price"] = round(float(price), 3)
+            existing["name"] = e.get("name", "")
+            existing["reason"] = reason
+            existing["updated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            touched += 1
+            continue
+        newc = _cond(
             "buy_price", code, price=float(price), trigger="above",
-            name=e.get("name", ""),
-            reason=f"自动:{e.get('strategy','')}:{e.get('type')}({e.get('conf',0)})"))
-        added += 1
-    return added
+            name=e.get("name", ""), reason=reason)
+        conds.append(newc)
+        seen[code] = newc
+        touched += 1
+    return touched
 
 
 def place_condition(kind, symbol, price=None, pct=None, trigger="above",
@@ -1632,9 +1715,22 @@ def step(st, df_by_code):
         ret = last / entry - 1
         pos["last"] = round(last, 3)
         pos["last_ret"] = round(float_ret(entry, last), 4)
+        # 止损价: 固定-3% 或 追踪止损 (从持仓期内最高价回撤, 防噪音洗出)。
+        if _CUR.get("trailing_stop", TRAILING_STOP):
+            hi = float(df["high"].iloc[-1])
+            peak = float(pos.get("peak") or entry)
+            if hi > peak:
+                peak = hi
+                pos["peak"] = round(peak, 3)
+            stop_px = peak * (1 - _CUR["stop_loss"])
+            atr_mult = float(_CUR.get("trail_atr_mult", TRAIL_ATR_MULT) or 0.0)
+            if atr_mult > 0 and "atr" in df.columns and len(df):
+                atr = float(df["atr"].iloc[-1] or 0.0)
+                stop_px -= atr * atr_mult
+        else:
+            stop_px = entry * (1 - _CUR["stop_loss"])
         # 结构位: 用最近 10 根低点做动态支撑 (近似结构关键位)
         support = float(df["low"].iloc[-10:].min())
-        stop_px = entry * (1 - _CUR["stop_loss"])
         # 卖出判定 (任一触发); 每周期推进持仓 K 数 (run_cycle 末尾落盘)
         pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
         reason = None
@@ -1690,6 +1786,15 @@ def close_position(st, pos, sell_price, reason):
         "equity": round(equity(st, {}), 2),
     })
     save_state(st)
+
+
+def force_close_position(st, symbol: str, reason: str = "手动平仓"):
+    """按代码手动平仓 (供 UI 持仓行操作)。找不到持仓返回 None, 成功返回平仓记录。"""
+    for pos in st["positions"]:
+        if pos["symbol"] == symbol:
+            close_position(st, pos, pos.get("last", pos["buy_px"]), reason)
+            return pos
+    return None
 
 
 def net_cost_rate():
@@ -2035,7 +2140,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
         order = _make_order(code, e.get("name", ""), e["type"],
                             e.get("conf", 50), px, 0, st["cash"],
                             sector=e.get("sector", ""),
-                            strategy=e.get("strategy", ""))
+                            strategy=e.get("strategy", ""), st=st)
         if order is None:
             continue
         fill_buy(st, order)

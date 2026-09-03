@@ -11,6 +11,7 @@ import time
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -19,6 +20,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QProgressBar,
     QSpinBox,
@@ -88,10 +90,17 @@ def _fill_paper(table, cols, heads, rows, color_cols=()):
         table.setUpdatesEnabled(True)
 
 
-def _cond_kind_cn(kind):
+def _cond_kind_cn(kind, trigger=None):
+    """条件单类型中文标签 (与引擎触发语义对齐)。
+
+    buy_price 引擎为 trigger="above" (现价上破触发价时买入) → 价升买入;
+    sell_price 默认 trigger="below" (现价回落触发价时卖出) → 价跌卖出。
+    """
+    if kind == "buy_price":
+        return "价升买入" if trigger != "below" else "价跌买入"
+    if kind == "sell_price":
+        return "价跌卖出" if trigger != "below" else "价升卖出"
     return {
-        "buy_price": "价跌买入",
-        "sell_price": "价升卖出",
         "take_profit": "止盈",
         "stop_loss": "止损",
         "trailing": "追踪止损",
@@ -107,8 +116,8 @@ _CN_CLOSED = ("symbol", "name", "strategy", "type", "reason", "buy_px",
               "sell_px", "ret", "bars", "close_ts")
 _CN_CLOSED_HEAD = ("代码", "名称", "策略", "事件", "平仓原因", "买入价",
                    "卖出价", "收益", "持有K", "平仓时间")
-_CN_CAND = ("code", "name", "strategy", "type", "conf", "last")
-_CN_CAND_HEAD = ("代码", "名称", "策略", "事件", "置信", "现价")
+_CN_CAND = ("code", "name", "strategy", "type", "conf", "last", "auto_px")
+_CN_CAND_HEAD = ("代码", "名称", "策略", "事件", "置信", "现价", "买入触发价")
 _CN_ORD = ("ts", "symbol", "name", "strategy", "qty", "price", "type", "conf",
            "side", "date")
 _CN_ORD_HEAD = ("时间", "代码", "名称", "策略", "数量", "价格", "事件", "置信",
@@ -342,6 +351,16 @@ class PaperWindow(QDialog):
         self.btn_export = _ghost_btn("导出报告")
         self.btn_export.clicked.connect(self._export_report)
         hb.addWidget(self.btn_export)
+        self.btn_close_sel = _ghost_btn("手动平仓所选")
+        self.btn_close_sel.setToolTip(
+            "在 [持仓] 页签选中一行, 按当前现价立即平仓该持仓")
+        self.btn_close_sel.clicked.connect(self._close_selected)
+        hb.addWidget(self.btn_close_sel)
+        self.btn_watch = _ghost_btn("所选候选加入自选")
+        self.btn_watch.setToolTip(
+            "在 [候选] 页签选中一行, 把该股加入主界面自选股监控")
+        self.btn_watch.clicked.connect(self._add_candidate_to_watch)
+        hb.addWidget(self.btn_watch)
         hb.addStretch(1)
         root.addLayout(hb)
 
@@ -375,9 +394,10 @@ class PaperWindow(QDialog):
         hb_scan.addWidget(self.btn_scan)
         self.pb_scan = QProgressBar()
         self.pb_scan.setFixedWidth(170)
-        self.pb_scan.setRange(0, 0)  # 待机状态 (busy 模式显示)
-        self.pb_scan.setFormat("%p%")
-        self.pb_scan.setToolTip("扫描进度")
+        self.pb_scan.setRange(0, 1)  # 待机静止 (避免 busy 自转动画)
+        self.pb_scan.setValue(0)
+        self.pb_scan.setFormat("待机")
+        self.pb_scan.setToolTip("扫描进度 (待机=空闲, 扫描中为流动动画)")
         hb_scan.addWidget(self.pb_scan)
         self.lbl_scan_result = QLabel("")
         self.lbl_scan_result.setStyleSheet(
@@ -429,6 +449,7 @@ class PaperWindow(QDialog):
             self.timer.setInterval(30 * 60 * 1000)
             self.timer.start()
         # idx == 0: 关闭, 不启动
+        self._update_scan_info()
 
     def _on_auto_timer(self):
         """定时回调: 自动执行一个完整周期 (筛选+下单+卖出)。"""
@@ -477,7 +498,7 @@ class PaperWindow(QDialog):
         self.equity_chart.showGrid(x=False, y=True, alpha=0.3)
         self.equity_chart.getAxis("bottom").setPen(pg.mkPen(theme.C_MUTED))
         self.equity_chart.getAxis("left").setPen(pg.mkPen(theme.C_MUTED))
-        self.equity_chart.getAxis("bottom").setLabel("平仓/周期序号")
+        self.equity_chart.getAxis("bottom").setLabel("日期")
         self.equity_chart.getAxis("left").setLabel("总资产")
         self.equity_chart.setMouseEnabled(x=True, y=False)
         lay.addWidget(self.equity_chart)
@@ -490,14 +511,103 @@ class PaperWindow(QDialog):
         lay.setSpacing(4)
         info = QLabel(
             "条件单由系统自动生成: 扫描入场(buy_price) + 持仓保护(止盈/止损)\n"
-            "买入成交后自动为持仓生成 止盈/止损, 无需手动添加"
+            "买入成交后自动为持仓生成 止盈/止损; 也可手动添加价格/百分比条件单"
         )
         info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info.setStyleSheet(f"font-size:14px;color:{theme.C_MUTED};"
-                           "min-height:80px;")
+                           "min-height:40px;")
         lay.addWidget(info)
+
+        form = QHBoxLayout()
+        form.setSpacing(6)
+        self.cd_symbol = QLineEdit()
+        self.cd_symbol.setPlaceholderText("代码 (如 600036)")
+        self.cd_symbol.setFixedWidth(110)
+        self.cd_kind = QComboBox()
+        for kind, label in (("buy_price", "价升买入"),
+                            ("sell_price", "价跌卖出"),
+                            ("take_profit", "止盈"),
+                            ("stop_loss", "止损"),
+                            ("trailing", "追踪止损")):
+            self.cd_kind.addItem(label, kind)
+        self.cd_cd_trigger = QComboBox()
+        self.cd_cd_trigger.addItem("上破≥", "above")
+        self.cd_cd_trigger.addItem("回落≤", "below")
+        self.cd_price = QLineEdit()
+        self.cd_price.setPlaceholderText("触发价/百分比 (如 12.5 或 0.1)")
+        self.cd_price.setFixedWidth(140)
+        self.cd_qty = QSpinBox()
+        self.cd_qty.setRange(0, 10_000_000)
+        self.cd_qty.setValue(0)
+        self.cd_qty.setToolTip("数量 (0=全仓/按资金预算)")
+        btn_add = _ghost_btn("添加条件单")
+        btn_add.clicked.connect(self._add_manual_condition)
+        btn_cancel = _ghost_btn("取消所选")
+        btn_cancel.clicked.connect(self._cancel_selected_cond)
+        btn_cancel.setToolTip("在下方选中一行, 取消其条件单 (仅 active)")
+        for w in (self.cd_symbol, self.cd_kind, self.cd_cd_trigger,
+                  self.cd_price, self.cd_qty, btn_add, btn_cancel):
+            form.addWidget(w)
+        form.addStretch(1)
+        lay.addLayout(form)
         lay.addWidget(self.t_cond, 1)
         return page
+
+    def _add_manual_condition(self):
+        from PyQt6.QtWidgets import QMessageBox
+        symbol = self.cd_symbol.text().strip()
+        if not symbol:
+            QMessageBox.warning(self, "添加条件单", "请输入代码")
+            return
+        kind = self.cd_kind.currentData()
+        trigger = self.cd_cd_trigger.currentData()
+        raw = self.cd_price.text().strip()
+        try:
+            from wyckoff.paper import place_condition
+            if kind in ("buy_price", "sell_price"):
+                price = float(raw)
+                cond, msg = place_condition(
+                    kind, symbol, price=price, trigger=trigger,
+                    qty=self.cd_qty.value(), name="", reason="手动添加")
+            else:
+                pct = float(raw)
+                cond, msg = place_condition(
+                    kind, symbol, pct=pct, trigger=trigger,
+                    qty=self.cd_qty.value(), name="", reason="手动添加")
+        except ValueError:
+            QMessageBox.warning(self, "添加条件单", "价格/百分比需为数字")
+            return
+        if cond is None:
+            QMessageBox.warning(self, "添加条件单", msg)
+            return
+        self.summary.setText(self.summary.text() + f"\n{msg}: {symbol}")
+        self.refresh()
+
+    def _cancel_selected_cond(self):
+        from PyQt6.QtWidgets import QMessageBox
+        sel = self.t_cond.selectedItems()
+        if not sel:
+            QMessageBox.information(self, "取消条件单",
+                                    "请先在条件单表选中一行")
+            return
+        sym_col = _CN_COND.index("symbol")
+        item = self.t_cond.item(sel[0].row(), sym_col)
+        symbol = item.text() if item else ""
+        from wyckoff.paper import cancel_condition, load_state
+        st = load_state()
+        # 取消该代码下同日期的 active 条件 (匹配类型)
+        cancelled = False
+        for c in st.get("conditions", []):
+            if c.get("status") == "active" and c.get("symbol") == symbol:
+                if cancel_condition(st, c["cid"], save=False):
+                    cancelled = True
+        if cancelled:
+            from wyckoff.paper import save_state
+            save_state(st)
+            self.refresh()
+        else:
+            QMessageBox.information(self, "取消条件单",
+                                    f"{symbol} 无 active 条件单")
 
     # ── 策略参数配置 ───────────────────────────────────────
     def _build_config_group(self):
@@ -545,6 +655,23 @@ class PaperWindow(QDialog):
             float(self._settings.get(S.Paper.INIT_CASH, 1_000_000)))
         self.sp_cash.setSuffix(" 元")
 
+        self.ck_trailing = QCheckBox("追踪止损")
+        self.ck_trailing.setChecked(
+            bool(self._settings.get(S.Paper.TRAILING_STOP, False)))
+        self.ck_trailing.setToolTip(
+            "从持仓期内最高价回撤触发平仓, 而非固定百分比止损; "
+            "可避免强势股被结构位 -3% 噪音洗出")
+
+        self.sp_trail_atr = QDoubleSpinBox()
+        self.sp_trail_atr.setRange(0, 10.0)
+        self.sp_trail_atr.setSingleStep(1.0)
+        self.sp_trail_atr.setDecimals(1)
+        self.sp_trail_atr.setValue(
+            float(self._settings.get(S.Paper.TRAIL_ATR_MULT, 0.0)))
+        self.sp_trail_atr.setSuffix(" ATR")
+        self.sp_trail_atr.setToolTip(
+            "止损下沿再扣 ATR 缓冲 (剔除日内噪音), 0 表示不缓冲")
+
         fields = (
             ("同持上限", self.sp_maxpos),
             ("置信度≥", self.sp_conf),
@@ -557,20 +684,26 @@ class PaperWindow(QDialog):
         for i, (label, w) in enumerate(fields):
             grid.addWidget(QLabel(label), 0, i * 2)
             grid.addWidget(w, 0, i * 2 + 1)
+        grid.addWidget(self.ck_trailing, 1, 0, 1, 3)
+        grid.addWidget(QLabel("ATR缓冲"), 1, 3)
+        grid.addWidget(self.sp_trail_atr, 1, 4)
         for w in fields:
             w[1].setToolTip({
                 self.sp_maxpos: "同时持有的最大股票数 (1~5)",
                 self.sp_conf: "策略4·纪律只对置信度≥该值的强多头事件开仓",
                 self.sp_hold: "持有 K 根后到期强制平仓",
-                self.sp_stop: "结构位止损幅度",
+                self.sp_stop: "止损幅度: 勾选用作追踪回撤触发, 否则为固定结构位止损",
                 self.sp_tp: "止盈幅度",
                 self.sp_cost: "单边成本 (佣金+印花税+滑点)",
                 self.sp_cash: "模拟盘初始资金 (更改后需重置账户)",
             }[w[1]])
+        hint = QLabel("回测最优参考: 止损 -3% / 止盈 +15% / 同持上限 3")
+        hint.setStyleSheet(f"color: {theme.C_MUTED};")
+        grid.addWidget(hint, 2, 0, 1, len(fields) * 2 + 1)
 
         btn = _ghost_btn("保存到设置")
         btn.clicked.connect(self._save_config)
-        grid.addWidget(btn, 0, len(fields) * 2)
+        grid.addWidget(btn, 3, len(fields) * 2)
         return group
 
     def _collect_config(self):
@@ -582,6 +715,8 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.TAKE_PROFIT] = self.sp_tp.value()
         self._settings[S.Paper.COST] = self.sp_cost.value()
         self._settings[S.Paper.INIT_CASH] = self.sp_cash.value()
+        self._settings[S.Paper.TRAILING_STOP] = self.ck_trailing.isChecked()
+        self._settings[S.Paper.TRAIL_ATR_MULT] = self.sp_trail_atr.value()
 
     def _save_config(self):
         self._collect_config()
@@ -641,13 +776,15 @@ class PaperWindow(QDialog):
     def _on_scan_progress(self, pct):
         self.pb_scan.setRange(0, 100)
         self.pb_scan.setValue(pct)
+        self.pb_scan.setFormat("%p%")
 
     def _on_scan_done(self, st):
         self.btn_scan.setEnabled(True)
         self.btn_scan.setText("扫描")
-        # 收尾: 无论成功/失败/空池, 进度条落定为完成态
+        # 收尾: 无论成功/失败/空池, 进度条落定为静态完成态 (退出 busy 自转)
         self.pb_scan.setRange(0, 1)
         self.pb_scan.setValue(1)
+        self.pb_scan.setFormat("完成")
         ok = False
         if isinstance(st, dict):
             if st.get("error"):
@@ -672,10 +809,12 @@ class PaperWindow(QDialog):
         last_time = st.get("last_scan_time", "")
         next_time = st.get("next_scan_time", "")
         result_str = st.get("last_scan_result", "")
+        auto_str = self.auto_on.currentText()
         _t = ("扫描状态: 完成\n"
               f"今日次数: {self._scan_count}\n"
               f"上次扫描: {last_time[:16] if last_time else '--'}\n"
               f"下次扫描: {next_time[:16] if next_time else '--'}\n"
+              f"定时执行: {auto_str}\n"
               f"结果: {result_str[:30] if result_str else ''}")
         self.scan_info.setText(_t)
 
@@ -762,6 +901,52 @@ class PaperWindow(QDialog):
             json.dump(report, f, ensure_ascii=False, indent=2, default=str)
         self.summary.setText(self.summary.text() + "\n报告已导出")
 
+    def _close_selected(self):
+        from PyQt6.QtWidgets import QMessageBox
+        sel = self.t_pos.selectedItems()
+        if not sel:
+            QMessageBox.information(self, "手动平仓",
+                                    "请先在 [持仓] 页签选中要平仓的行")
+            return
+        symbol = sel[0].text()
+        from wyckoff.paper import force_close_position, load_state
+        st = load_state()
+        pos = next((p for p in st["positions"] if p["symbol"] == symbol), None)
+        if pos is None:
+            QMessageBox.warning(self, "手动平仓", f"未找到持仓 {symbol}")
+            return
+        last = pos.get("last", pos["buy_px"])
+        ret = (last / pos["buy_px"] - 1) * 100
+        ok = QMessageBox.question(
+            self, "手动平仓",
+            f"按现价 {last:.3f} 平仓 {symbol} {pos.get('name','')} "
+            f"({ret:+.2f}%)？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        force_close_position(load_state(), symbol, "手动平仓")
+        self.refresh()
+
+    def _add_candidate_to_watch(self):
+        from PyQt6.QtWidgets import QMessageBox
+        sel = self.t_cand.selectedItems()
+        if not sel:
+            QMessageBox.information(self, "加入自选",
+                                    "请先在 [候选] 页签选中要加入自选的股票")
+            return
+        code = sel[0].text()
+        from wyckoff.storage import load_watchlist, save_watchlist
+        watch = list(load_watchlist())
+        if code not in watch:
+            watch.append(code)
+            save_watchlist(watch)
+        from wyckoff.paper import load_state
+        st = load_state()
+        name = next((c.get("name", "") for c in st["candidates"]
+                     if c["code"] == code), "")
+        self.summary.setText(
+            self.summary.text() + f"\n已加入自选: {code} {name}")
+
     # ── 渲染 ──────────────────────────────────────────────
     def _strategy_summary(self, st):
         """按策略管理器双策略并行统计。"""
@@ -825,14 +1010,19 @@ class PaperWindow(QDialog):
         win = f"{s['win_rate']*100:.1f}%" if s["win_rate"] is not None else "-"
         dd = (f"{s['max_drawdown']*100:+.2f}%"
               if s["max_drawdown"] is not None else "-")
+        usage = self._usage(st)
+        usage_warn = ""
+        if s["n_positions"] and usage > cfg["max_capital_usage"] * 100:
+            usage_warn = (f" (超上限 {cfg['max_capital_usage']*100:.0f}%)")
         self.summary.setText(
             f"总资产 {s['equity']:,.0f}  持仓 {s['n_positions']} 只 · "
             f"已平仓 {s['n_closed']} 笔 · 累计 {s['total_return']*100:+.2f}% · "
             f"胜率 {win} · 盈亏比 {s['pl_ratio'] or '-'} · "
-            f"最大回撤 {dd} · 资金利用率 {self._usage(st):.0f}%\n"
+            f"最大回撤 {dd} · 资金利用率 {usage:.0f}%{usage_warn}\n"
             f"策略: 同持≤{cfg['max_pos']} · conf≥{cfg['min_conf']} · "
             f"持{cfg['hold_bars']}K · 止损-{cfg['stop_loss']*100:.0f}% · "
-            f"止盈+{cfg['take_profit']*100:.0f}% · 成本{cfg['cost']*100:.1f}%")
+            f"止盈+{cfg['take_profit']*100:.0f}% · 成本{cfg['cost']*100:.1f}%"
+            + (" · 追踪止损" if cfg.get("trailing_stop") else ""))
         self._refresh_strategy_blocks(st)
 
         # 持仓
@@ -880,6 +1070,7 @@ class PaperWindow(QDialog):
                 "strategy": _strat_cn(c.get("strategy", "")),
                 "type": c.get("type", ""), "conf": float(c.get("conf", 0)),
                 "last": float(c.get("last", 0) or 0),
+                "auto_px": float(c.get("auto_cond_price", 0) or 0),
             })
         _fill_paper(self.t_cand, _CN_CAND, dict(zip(_CN_CAND, _CN_CAND_HEAD)),
                     rows)
@@ -920,7 +1111,7 @@ class PaperWindow(QDialog):
             crows.append({
                 "created_ts": c.get("created_ts", ""),
                 "symbol": c.get("symbol", ""), "name": c.get("name", ""),
-                "kind": _cond_kind_cn(c.get("kind", "")),
+                "kind": _cond_kind_cn(c.get("kind", ""), c.get("trigger")),
                 "trigger": ("上破≥" if c.get("trigger") == "above"
                             else "回落≤" if c.get("trigger") == "below" else ""),
                 "cond_price": c.get("price") if c.get("price") is not None else "",
@@ -943,11 +1134,14 @@ class PaperWindow(QDialog):
         hist = st.get("equity_hist") or []
         xs = [0]
         eqs = [float(INIT_CASH)]
+        dates = ["初始"]
         for h in hist:
             xs.append(len(xs))
             eqs.append(float(h.get("equity", INIT_CASH)))
+            dates.append(str(h.get("ts", ""))[:10])
         xs.append(len(xs))
         eqs.append(float(equity(st, {})))
+        dates.append("当前")
 
         ch = self.equity_chart
         ch.clear()
@@ -958,11 +1152,44 @@ class PaperWindow(QDialog):
         ch.plot(xs, [float(INIT_CASH)] * len(xs),
                 pen=pg.mkPen(theme.C_MUTED, width=1,
                              style=Qt.PenStyle.DashLine))
+        # 沪深300 基准对照 (归一化到初始资金, 供 alpha/beta 粗略对比; 拉取失败跳过)
+        try:
+            bench = self._fetch_benchmark(n_points=len(xs))
+            if bench is not None:
+                ch.plot(xs, bench,
+                        pen=pg.mkPen(theme.C_BENCH, width=1, style=Qt.PenStyle.DotLine),
+                        symbol=None)
+        except Exception:
+            pass
         if len(xs) >= 2:
             ced = theme.C_DOWN if eqs[-1] < eqs[0] else theme.C_UP
             cur = ch.plot([xs[-2], xs[-1]], [eqs[-2], eqs[-1]],
                           pen=pg.mkPen(ced, width=2))
             cur.setZValue(10)
+        # 日期刻度 (每隔 N 根显示一个日期避免重叠)
+        axis = ch.getAxis("bottom")
+        max_labels = min(15, len(xs))
+        step = max(1, len(xs) // max_labels)
+        date_ticks = [(xs[i], dates[i]) for i in range(0, len(xs), step)]
+        axis.setTicks([date_ticks])
+
+    def _fetch_benchmark(self, n_points=100):
+        """拉取沪深300 收盘序列, 归一化到初始资金作为基准对照。失败返回 None。"""
+        try:
+            from wyckoff.datasource import fetch_kline
+            df = fetch_kline("sh000300", datalen=400, scale=240)
+            if df is None or len(df) < 2:
+                return None
+            closes = [float(x) for x in df["close"].tail(n_points).tolist()]
+            if not closes or closes[0] <= 0:
+                return None
+            base = float(closes[0])
+            # 基准点序列对齐到资金曲线 x 轴起点 (初始资金, 历史点=0% 基准)
+            from wyckoff.paper import INIT_CASH
+            seg = [float(INIT_CASH)] + [INIT_CASH * (c / base) for c in closes]
+            return seg[-(n_points + 1):] if n_points > 0 else seg
+        except Exception:
+            return None
 
     @staticmethod
     def _usage(st):

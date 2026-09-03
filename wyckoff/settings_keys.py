@@ -90,6 +90,10 @@ class Paper(_Base):
     # 板块权限: 未开通创业板/科创板时, 扫描/选股应排除对应代码。
     ENABLE_CHINEXT = "paper_enable_chinext"
     ENABLE_STAR = "paper_enable_star"
+    # 追踪止损: 从持仓期内最高价回撤 trailing 幅度时平仓 (替代固定止损)
+    TRAILING_STOP = "paper_trailing_stop"
+    # 追踪止损 ATR 缓冲: stop = 杆位*(1-止损) - atr_mult*ATR
+    TRAIL_ATR_MULT = "paper_trail_atr_mult"
 
 
 class Watch(_Base):
