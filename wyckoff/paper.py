@@ -1727,7 +1727,7 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
             # 从持仓峰值计算
             condition_peak = max(last, entry_price)
 
-        close_position(st, pos, sell_price, f"条件单:{c['kind']}")
+        close_position(st, pos, sell_price, f"条件单:{c['kind']}", event_type=None)
         c["matched_price"] = sell_price
         c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
         c["status"] = "done"
@@ -1740,7 +1740,7 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
         )
 
 
-def fill_buy(st, order):
+def fill_buy(st, order, event_type: str = None):
     """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。"""
     price = order["price"]
     qty = order["qty"]
@@ -1757,6 +1757,7 @@ def fill_buy(st, order):
         "sector": order.get("sector", ""),
         "strategy": order.get("strategy", ""),
         "staged": False,
+        "event_type": event_type,
     })
     st["orders"].append(order)
     _create_position_conditions(st, order["symbol"], name=order.get("name", ""),
@@ -1814,7 +1815,7 @@ def step(st, df_by_code):
             # 模拟盘按市价即时成交: 一律以现价(含卖滑点)结算, 不再用 max(stop_px,last)
             # 高估止损价。历史实现止损在 last<stop_px 时按 stop_px 成交, 低估了实际损失。
             sell_price = last * (1 - SLIP_SELL)
-            close_position(st, pos, sell_price, reason)
+            close_position(st, pos, sell_price, reason, event_type=pos.get("event_type"))
     # 处理待撮合买单
     for o in list(st["pending"]):
         df = df_by_code.get(o["symbol"])
@@ -1883,15 +1884,14 @@ def _rebalance_portfolio(st, df_by_code):
     event_type: str = None,
 def close_position(st, pos, sell_price, reason, event_type=None):
     """平仓: 回收现金、记录已平仓与净值。"""
+    from wyckoff.strategies.sell_strategy import evaluate_sell_reason
+    # 基于事件类型的卖出策略
+    reason = evaluate_sell_reason(event_type, reason)
     price = round(sell_price, 3)
     gross = price * pos["qty"]  # 不含卖出成本的口径内部用
     fee = gross * _CUR["cost"]
     proceeds = gross - fee
     st["cash"] += proceeds
-    # 基于事件类型的卖出策略
-    if event_type and event_type in [Spring, Shakeout, ST, LPS]:
-        # 多头事件在特定条件下平仓
-        reason = "空头信号卖出_{event_type}"
     outlay = pos["buy_px"] * pos["qty"] * net_cost_rate()
     ret_total = (proceeds - outlay) / outlay
     st["closed"].append({
