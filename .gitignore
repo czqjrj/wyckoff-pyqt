@@ -68,3 +68,6 @@ debian/
 /wx_*.json
 /wx_machine_id
 /wyckoff_watchlist.json
+
+# ── 回测/回放运行产物 (缓存/独立状态/行情库, 本地生成勿入库) ──
+/data/

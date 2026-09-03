@@ -4,21 +4,33 @@
 复用 wyckoff.paper 的买/卖/止盈止损/持仓上限/成本/统计逻辑, 在真实日线K线上
 逐日回放, 统计累计收益 / CAGR / 最大回撤 / 胜率 / 净值曲线。
 
+与当前模拟盘一致, 选股为双策略:
+  - 纪律 (paper_discipline_bull): 强多头事件 {Spring,Shakeout,ST,LPS,SC} conf≥阈值, 近 window 根;
+  - 价值吸筹 (screener_value_accumulation, 回退): 无纪律信号时, 底部整固 + 近20根内吸筹事件
+    (无 conf 门槛), 复用 wyckoff_strategies_manager 判据 (与 pick_candidates 同口径)。
+
 用法:
   python scripts/paper_replay_bt.py                          # 默认参数, 打印摘要
   python scripts/paper_replay_bt.py --max-codes 80 --conf 80
   python scripts/paper_replay_bt.py --conf 90 --maxpos 2 --hold 20 \
          --stop 0.05 --tp 0.15 --cost 0.004
-  python scripts/paper_replay_bt.py --start 2023-09-01 --report docs/paper_replay_bt.md
-  python scripts/paper_replay_bt.py --export docs/paper_replay_trades.csv
+  python scripts/paper_replay_bt.py --start 2023-06-01 --mkt-gate \
+         --report docs/paper_replay_bt.md --export docs/paper_replay_trades.csv
 """
 import argparse
 import os
 import sys
 
-import pandas as pd
-
+# 回放状态隔离: 回测过程会 paper.save_state() 写模拟盘末态。
+# 这里把整个回测进程的用户数据目录重定向到独立回放目录 (data/paper_replay_data),
+# 保证回测既不读取也不覆盖实盘 wx_paper.json 。必须先于任何 wyckoff.paths 导入设置。
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+os.environ.setdefault(
+    "WYCKOFF_DATA_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "data", "paper_replay_data"),
+)
+
+import pandas as pd
 
 from wyckoff import paper  # noqa: E402
 
@@ -31,9 +43,11 @@ def _sdate(s):
 
 
 def load_stock_events(code, min_conf, datalen):
-    """对单只股票跑完整检测, 返回 (day列表, open, low, high, close, events)。
+    """对单只股票跑完整检测, 返回 (day列表, open, low, high, close, events, df, pivots, all_evs)。
 
-    events: [{idx, type, conf}] 强多头事件 (已经 conf≥min_conf 过滤)。
+    events: [{idx, type, conf}] 强多头事件 (已经 conf≥min_conf 过滤), 供纪律策略用。
+    df/pivots/all_evs: 完整指标K线/枢轴/全量事件 (含低 conf), 供价值吸筹判据用
+    (wyckoff_strategies_manager.evaluate_strategy_value_accumulation 需要完整 df 在任意 bar 求阶段)。
     """
     from wyckoff.datasource import fetch_kline
     from wyckoff.events import detect_all
@@ -79,6 +93,9 @@ def load_stock_events(code, min_conf, datalen):
         "close": list(df["close"].astype(float)),
         "volume": list(df["volume"].astype(float)),
         "events": events,
+        "df": df,
+        "pivots": piv,
+        "all_evs": evs or [],
     }
 
 
@@ -117,6 +134,49 @@ def newest_buyable(rec, j, window=10):
     if best is None:
         return None
     return best
+
+
+_va_cache = {}
+
+
+def va_candidate(rec, j, va_m):
+    """价值吸筹候选 (与 paper._value_accum_candidate/pick_candidates 回退同口径)。
+
+    无 conf 门槛: 阶段=底部整固 且 近20根内出现 {Spring,Shakeout,SC,ST,LPS}。
+    复用 WyckoffStrategyManager.evaluate_strategy_value_accumulation 在 bar j 求判。
+    返回 {"strategy","type","idx","conf"} 或 None; 判据异常时降级 None。
+    先做近20根事件快速预筛, 避免对每个 bar 都跑阶段判定 (整固期事件区才判定)。
+
+    结果仅依赖 (股票数据, bar j), 与止盈/止损/持有参数无关 → 全局缓存
+    (网格扫描跨格复用, 判据计算昂贵 ~0.65s/bar)。
+    """
+    key = (id(rec), j)
+    hit = _va_cache.get(key)
+    if hit is not None:
+        return None if hit is False else dict(hit)
+    evs = rec["all_evs"]
+    if not any(e.get("type") in paper.LONG_EVENT_TYPES
+               and 0 <= j - (e.get("idx") or -1) <= 20 for e in evs):
+        _va_cache[key] = False
+        return None
+    df = rec["df"]
+    if j < 0 or j >= len(df):
+        _va_cache[key] = False
+        return None
+    try:
+        sig = va_m.evaluate_strategy_value_accumulation(df, j, evs, rec["pivots"])
+    except Exception:
+        _va_cache[key] = False
+        return None
+    if not sig:
+        _va_cache[key] = False
+        return None
+    ev = sig["event"]
+    res = {"strategy": "screener_value_accumulation",
+           "type": ev["type"], "idx": int(ev.get("idx") or 0),
+           "conf": int(ev.get("conf", 0) or 0)}
+    _va_cache[key] = res
+    return dict(res)
 
 
 def _flow_score(rec, j, back=5):
@@ -170,6 +230,7 @@ def replay(stocks, params, market_gate=None):
     })
     cfg = paper._CUR
     st = paper._new_state()
+    va_m = paper._strategy_manager()
 
     # 构造 日->bar 索引 每只股票 与 code->rec 索引
     day_to_j = []
@@ -227,7 +288,7 @@ def replay(stocks, params, market_gate=None):
                 sell_price = max(stop_px, last) * (1 - paper.SLIP_SELL)
                 paper.close_position(st, pos, sell_price, reason)
 
-        # 2) 买入: 产生新信号 (前 N 根内事件) 的候选按 conf 填位
+        # 2) 买入: 双策略候选 (纪律优先, 价值吸筹回退) 按 conf 填位
         cands = []
         for k, rec in enumerate(stocks):
             code = rec["code"]
@@ -237,8 +298,12 @@ def replay(stocks, params, market_gate=None):
             if j is None:
                 continue
             ev = newest_buyable(rec, j, window=params["window"])
+            strategy = "paper_discipline_bull"
             if ev is None:
-                continue
+                va = va_candidate(rec, j, va_m)
+                if va is None:
+                    continue
+                ev, strategy = va, va["strategy"]
             # D: 强链过滤 — 只交易信号日链条强度达标的板块内个股。
             #    用历史快照 (strength_at) 无前视; 无历史快照时 fail-open 不筛选
             #    (避免把无数据区间误清空, 覆盖区间内才真正过滤)。
@@ -263,7 +328,7 @@ def replay(stocks, params, market_gate=None):
                 if not s_ok:
                     continue
             cands.append((ev["conf"], code, ev["type"], rec["open"][j],
-                          rec["chain"], flow_score))
+                          rec["chain"], flow_score, strategy))
         cands.sort(key=lambda x: -x[0])
         # 大盘20日线门禁: 仅当日上证收盘 > MA20 才开新仓 (因果历史重建, 无前视)
         if params.get("mkt_gate") and market_gate is not None:
@@ -279,7 +344,7 @@ def replay(stocks, params, market_gate=None):
                 cands = [c for c in cands if c[5] is not None and c[5] >= med]
             else:
                 cands = []  # 无任何资金流分 → fail-close
-        for conf, code, typ, open_px, chain, flow_score in cands:
+        for conf, code, typ, open_px, chain, flow_score, strategy in cands:
             if len(st["positions"]) >= cfg["max_pos"]:
                 break
             if paper.has_position(st, code):
@@ -291,7 +356,8 @@ def replay(stocks, params, market_gate=None):
                               if stocks[code_to_idx[p["symbol"]]].get("chain") == chain)
                 if n_chain >= cc:
                     continue
-            order = paper._make_order(code, "", typ, conf, open_px, 0, st["cash"])
+            order = paper._make_order(code, "", typ, conf, open_px, 0, st["cash"],
+                                      strategy=strategy)
             if order is None:
                 continue
             paper.fill_buy(st, order)
@@ -318,7 +384,8 @@ def build_report(st, params):
              f"conf≥{params['min_conf']} · 持{params['hold_bars']}K · "
              f"止损-{params['stop_loss']*100:.0f}% · 止盈+{params['take_profit']*100:.0f}% · "
              f"单边成本{params['cost']*100:.2f}%")
-    L.append("- 强多头事件过滤: Spring/Shakeout/ST/LPS/SC")
+    L.append("- 双策略选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先, "
+             "无纪律信号时回退价值吸筹(底部整固 + 近20根内吸筹事件, 无conf门槛)")
     gates_on = [
         ("大盘20日线" if params.get("mkt_gate") else None),
         ("资金流(因果代理)" if params.get("flow_gate") else None),
@@ -335,7 +402,7 @@ def build_report(st, params):
                  "但板块强度快照仅自 2026-08 起, 回测区间此前无快照故 fail-open 放行, "
                  "仅末尾有真实分位才过滤)。")
     else:
-        L.append("> 局限: 板块强度>60分位 与 资金流净流入>50分位 两道门禁缺历史数据，本次回测未执行（仅执行可历史重建的大盘20日线门禁 + 强多头事件 + conf≥90 + 结构位止损 + 持仓上限3）。")
+        L.append("> 局限: 板块强度>60分位 与 资金流净流入>50分位 两道门禁缺历史数据，本次回测未执行（仅执行可历史重建的大盘20日线门禁 + 双策略选股[纪律conf≥阈值 / 价值吸筹] + 结构位止损 + 持仓上限）。")
     L.append("")
     L.append("### 收益统计")
     L.append("")
@@ -374,6 +441,23 @@ def build_report(st, params):
         L.append("|---|---|---|---|")
         for t, b in sorted(s["by_type"].items(), key=lambda kv: -kv[1]["n"]):
             L.append(f"| {t} | {b['n']} | {b['win']*100:.0f}% | {b['avg']*100:+.2f}% |")
+    # 按策略拆解
+    by_strat = {}
+    for c in st["closed"]:
+        key = "纪律" if (c.get("strategy") or "paper_discipline_bull") \
+                       == "paper_discipline_bull" else "价值吸筹"
+        by_strat.setdefault(key, []).append(c["ret"])
+    if by_strat:
+        L.append("")
+        L.append("| 策略 | 笔数 | 胜率 | 平均收益 | 收益合计 |")
+        L.append("|---|---|---|---|---|")
+        for key, rets in sorted(by_strat.items(),
+                                key=lambda kv: -sum(kv[1])):
+            n = len(rets)
+            wr = sum(1 for r in rets if r > 0) / n * 100 if n else 0
+            mean = sum(rets) / n if n else 0
+            L.append(f"| {key} | {n} | {wr:.0f}% | {mean*100:+.2f}% | "
+                     f"{sum(rets)*100:+.1f}% |")
     if params.get("sect_gate"):
         L.append("")
         L.append("### 局限")
@@ -476,12 +560,13 @@ def main():
         import csv
         with open(args.export, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["symbol", "type", "conf", "buy_px", "sell_px", "ret",
-                        "reason", "bars", "close"])
+            w.writerow(["symbol", "type", "conf", "strategy", "buy_px",
+                        "sell_px", "ret", "reason", "bars", "close"])
             for c in st["closed"]:
-                w.writerow([c["symbol"], c["type"], c["conf"], c["buy_px"],
-                            c["sell_px"], c["ret"], c["reason"], c["bars"],
-                            c.get("close_ts", "")])
+                w.writerow([c["symbol"], c["type"], c["conf"],
+                            c.get("strategy", "paper_discipline_bull"),
+                            c["buy_px"], c["sell_px"], c["ret"],
+                            c["reason"], c["bars"], c.get("close_ts", "")])
         print(f"已导出逐笔: {args.export}")
 
     md, s = build_report(st, params)
