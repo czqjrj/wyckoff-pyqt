@@ -23,8 +23,28 @@ def _save_settings(s):
     save_settings(s)
 
 
+# 固定共享校准仓: 与 UI (calibration_center.CALIB_SYNC_REPO) 同源, 供未初始化
+# UI 时 (CLI / 自动同步 / 直接调用) 也能自动回填, 避免 "未配置校准仓库 URL"。
+DEFAULT_CALIB_URL = "git@github.com:czqjrj/wyckoff-calib.git"
+
+
 def configured_url():
-    return str(_settings().get("calib_repo_url") or "").strip()
+    """返回当前校准仓 URL; 未配置(空)时自动回填到固定共享仓并落盘。
+
+    UI 校准中心打开时既会 refresh_sync_url() 回填该值; 此处兜底保证任何入口
+    (python -m sync / 自动同步) 在校准仓尚未登记时也能定位到固定共享仓。
+    """
+    url = str(_settings().get("calib_repo_url") or "").strip()
+    if url:
+        return url
+    if DEFAULT_CALIB_URL:
+        try:
+            s = _settings()
+            s["calib_repo_url"] = DEFAULT_CALIB_URL
+            _save_settings(s)
+        except Exception:
+            pass
+    return DEFAULT_CALIB_URL
 
 
 def save_creds(url, username="", password=""):
