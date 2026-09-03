@@ -60,11 +60,11 @@ def test_load_state_bad_file():
 # ───────────────────────── 选股筛选 ─────────────────────────
 def test_pick_candidates_filter_and_sort(monkeypatch):
     df = _mk(np.linspace(10.0, 10.5, 400))
-    # 两只股票: A 有新 Spring95 + 旧 LPS92(应丢弃); B 有 Spring88(整只入池)
+    # 两只股票: A 有 Spring + LPS(应丢弃，非强多头); B 有 Spring88(整只入池)
+    # 注: UTAD(空头)和SC(中性)已从LONG_EVENT_TYPES中移除，仅保留Spring/Shakeout/ST/LPS
     events_a = [
         _candidate(code="sh600001", type_="Spring", conf=95, idx=395),
         _candidate(code="sh600001", type_="LPS", conf=92, idx=200),
-        _candidate(code="sh600001", type_="UTAD", conf=97, idx=396),
     ]
     events_b = [
         _candidate(code="sh600002", type_="Spring", conf=88, idx=390),
@@ -86,13 +86,14 @@ def test_pick_candidates_filter_and_sort(monkeypatch):
     monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
     out = paper.pick_candidates(universe=["sh600001", "sh600002"],
                                 max_codes=10, min_conf=85, skip_gates=True)
-    # UTAD 现在在强梯队内, conf=97 > Spring=95, 取最高 conf 事件; 旧 LPS(idx=200) 丢弃。
-    # A 取 UTAD(97), B 整只入池 Spring(88)。
+    # 仅保留多头事件: Spring/LPS/Shakeout/ST
+    # A: Spring(95) 最高; LPS(92) 在强梯队内但被保留
+    # B: Spring(88) 整只入池
     assert len(out) == 2
     confs = sorted(e["conf"] for e in out)
-    assert confs == [88, 97]
+    assert confs == [88, 95]
     by_code = {e["code"]: e["type"] for e in out}
-    assert by_code["sh600001"] == "UTAD"
+    assert by_code["sh600001"] == "Spring"
     assert by_code["sh600002"] == "Spring"
 
 
