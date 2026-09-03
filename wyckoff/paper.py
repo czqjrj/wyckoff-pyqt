@@ -1880,14 +1880,18 @@ def _rebalance_portfolio(st, df_by_code):
     return rebalanced
 
 
-def close_position(st, pos, sell_price, reason):
+    event_type: str = None,
+def close_position(st, pos, sell_price, reason, event_type=None):
     """平仓: 回收现金、记录已平仓与净值。"""
     price = round(sell_price, 3)
     gross = price * pos["qty"]  # 不含卖出成本的口径内部用
     fee = gross * _CUR["cost"]
     proceeds = gross - fee
     st["cash"] += proceeds
-    # 实际净收益 = 净卖回款 / 买入含费总支出 - 1 (扣双边费用, 与 float_ret 一致)
+    # 基于事件类型的卖出策略
+    if event_type and event_type in [Spring, Shakeout, ST, LPS]:
+        # 多头事件在特定条件下平仓
+        reason = "空头信号卖出_{event_type}"
     outlay = pos["buy_px"] * pos["qty"] * net_cost_rate()
     ret_total = (proceeds - outlay) / outlay
     st["closed"].append({
