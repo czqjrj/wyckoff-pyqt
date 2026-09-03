@@ -719,3 +719,87 @@ def test_run_cycle_backfills_position_protection():
     assert paper._backfill_position_protection(st) == 0
     assert len([c for c in st["conditions"]
                 if c.get("status") == "active"]) == len(protect)
+
+
+# ───────────────────── 策略核心优化: 等权口径/再平衡/候选分层 ─────────────────────
+def test_condition_buy_uses_equity_weight():
+    """条件单买入统一权益/3 等权口径: 不再按剩余现金/3 导致顺序衰减。"""
+    st = paper._new_state()
+    # 已有重仓 (市值 40万), 现金 30万 → 权益 70万
+    st["cash"] = 300_000.0
+    st["positions"].append({
+        "symbol": "sh600001", "name": "A", "type": "Spring", "conf": 95,
+        "qty": 40000, "buy_px": 10.0, "last": 10.0, "cost": 1600.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+        "strategy": "paper_discipline_bull",
+    })
+    c, _ = paper.add_condition(st, "buy_price", "sh600002", price=10.0,
+                               trigger="above", save=False)
+    paper._check_conditions(st, {"sh600002": _mk([10.0, 10.2])})
+    assert st["conditions"][0]["status"] == "done"
+    assert len(st["positions"]) == 2
+    # 权益/3 口径: 权益=70万, 目标 23.3万/仓; 现金/3 口径则仅 10万
+    new_pos = st["positions"][-1]
+    new_mv = new_pos["qty"] * new_pos["buy_px"]
+    assert new_mv > 200_000  # 权益/3 (23.3万) 明显大于现金/3 (10万)
+
+
+def test_rebalance_topup_low_weight_position(monkeypatch):
+    """满仓且现金富余时, 把权重过低的持仓补足到等权目标。"""
+    monkeypatch.setattr(paper, "_CUR", {
+        **paper._CUR, "max_pos": 3, "rebalance": True,
+    })
+    st = paper._new_state()
+    st["cash"] = 400_000.0
+    # 满3仓, 但其中一只占比过低 (模拟顺序衰减后的失衡)
+    st["positions"] = [
+        {"symbol": "sh600001", "name": "A", "type": "Spring", "conf": 95,
+         "qty": 2500, "buy_px": 10.0, "last": 12.0, "cost": 100.0,
+         "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+         "strategy": "paper_discipline_bull"},
+        {"symbol": "sh600002", "name": "B", "type": "Spring", "conf": 95,
+         "qty": 3000, "buy_px": 10.0, "last": 11.0, "cost": 120.0,
+         "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+         "strategy": "paper_discipline_bull"},
+        {"symbol": "sh600003", "name": "C", "type": "Spring", "conf": 95,
+         "qty": 500, "buy_px": 10.0, "last": 10.0, "cost": 20.0,  # 权重明显过低
+         "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+         "strategy": "paper_discipline_bull"},
+    ]
+    df_by_code = {p["symbol"]: _mk([10.0, 11.0]) for p in st["positions"]}
+    cash_before = st["cash"]
+    n = paper._rebalance_portfolio(st, df_by_code)
+    assert n >= 1  # 低权重仓被补
+    # 权重过低的 C 被加仓
+    c_pos = next(p for p in st["positions"] if p["symbol"] == "sh600003")
+    assert c_pos["qty"] > 500
+    assert st["cash"] < cash_before  # 用了现金补仓
+
+
+def test_rebalance_skips_when_not_full(monkeypatch):
+    """未满仓时不触发再平衡 (交给建仓路径即可)。"""
+    monkeypatch.setattr(paper, "_CUR", {
+        **paper._CUR, "max_pos": 3, "rebalance": True,
+    })
+    st = paper._new_state()
+    st["cash"] = 500_000.0
+    st["positions"] = [{
+        "symbol": "sh600001", "name": "A", "type": "Spring", "conf": 95,
+        "qty": 1000, "buy_px": 10.0, "last": 10.0, "cost": 40.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+        "strategy": "paper_discipline_bull",
+    }]
+    assert paper._rebalance_portfolio(st, {}) == 0
+
+
+def test_value_accum_conf_floor():
+    """价值吸筹候选需满足 VA_MIN_CONF 下限, 低 conf 不入选。"""
+    # 通过 monkeypatch 供给一个低 conf 的价值吸筹信号
+    class FakeMgr:
+        def evaluate_strategy_value_accumulation(self, *a, **k):
+            return {"event": {"type": "Spring", "conf": 60, "code": "sh600001"}}
+    paper._strategy_manager = lambda: FakeMgr()
+    try:
+        assert paper._value_accum_candidate("sh600001", None, None, None) is None
+    finally:
+        pass

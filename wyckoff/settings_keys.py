@@ -94,6 +94,8 @@ class Paper(_Base):
     TRAILING_STOP = "paper_trailing_stop"
     # 追踪止损 ATR 缓冲: stop = 杆位*(1-止损) - atr_mult*ATR
     TRAIL_ATR_MULT = "paper_trail_atr_mult"
+    # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
+    REBALANCE = "paper_rebalance"
 
 
 class Watch(_Base):

@@ -60,6 +60,9 @@ STOP_LOSS = 0.03
 TRAILING_STOP = True
 # 追踪止损 ATR 缓冲: stop = 杆位*(1-stop_loss) - atr_mult*ATR, 加缓冲防假破位
 TRAIL_ATR_MULT = 0.0  # 默认不开 ATR 缓冲, 保持与网格回测口径一致
+# 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到 总权益/max_pos,
+# 消除"先买的大、后买的小"的顺序衰减与资金闲置 (利用率仅 ~66% 的根因)。
+REBALANCE = True
 # 止盈: 盈利 +15% 落袋 (结合止损的不对称盈亏比)
 TAKE_PROFIT = 0.15
 # 初始终端资金 (模拟资产)
@@ -269,6 +272,8 @@ def apply_paper_params(settings=None):
                                    _get("paper_trailing_stop", TRAILING_STOP))),
         "trail_atr_mult": float(_get(S.Paper.TRAIL_ATR_MULT,
                                      _get("paper_trail_atr_mult", TRAIL_ATR_MULT))),
+        # 周期级等权再平衡
+        "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
     }
     return _CUR
 
@@ -294,6 +299,7 @@ _CUR = {
     "enable_star": False,
     "trailing_stop": TRAILING_STOP,
     "trail_atr_mult": TRAIL_ATR_MULT,
+    "rebalance": REBALANCE,
 }
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (与 docs/profitability_bt.md 一致)
@@ -460,8 +466,10 @@ def _risk_blocks_entry(st, cand, price) -> bool:
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
         return True
-    # 预估 qty (与 _make_order 同口径)
-    budget = st["cash"] * (1.0 / max(1, _CUR["max_pos"]))
+    # 预估 qty (与 _make_order 同口径: 按账户总权益等权, 而非剩余现金)
+    mv = sum(float(p.get("last", p["buy_px"])) * p["qty"]
+             for p in st.get("positions", []))
+    budget = (float(st["cash"]) + mv) * (1.0 / max(1, _CUR["max_pos"]))
     entry = float(price)
     qty = int(budget // (entry * (1 + SLIP_BUY)) // 100 * 100)
     if qty <= 0:
@@ -1026,8 +1034,9 @@ def _strategy_manager():
 def _value_accum_candidate(code, df, piv, evs):
     """基于策略管理器的「价值吸筹」信号构造候选。
 
-    命中条件 (与回测口径一致, 无 conf 门槛): 阶段=底部整固 且 近20根内出现
-    {Spring,Shakeout,SC,ST,LPS}。返回 {"strategy","type","idx","conf"} 或 None。
+    命中条件 (与回测口径一致): 阶段=底部整固 且 近20根内出现
+    {Spring,Shakeout,SC,ST,LPS}。作为纪律候选的信封兜底, 需满足 conf 下限
+    (VA_MIN_CONF) 与低质过滤, 防止低质候选稀释组合质量。
     管理器不可用 / 评估异常时返回 None (纪律候选照常工作)。
     """
     m = _strategy_manager()
@@ -1039,11 +1048,14 @@ def _value_accum_candidate(code, df, piv, evs):
         return None
     if not sig:
         return None
+    ev = sig["event"]
+    # 价值吸筹 conf 下限: 与纪律(MIN_CONF=90)分档, 兜底信号也须有足够置信度
+    if int(ev.get("conf", 0) or 0) < VA_MIN_CONF:
+        return None
     # 价值吸筹过滤: 排除北交所 / ST·退市 / 低价仙股, 降低低质垃圾混入候选池
     # (此前无任何门槛, 曾把 bj 板块与 ST 低价股大量塞入候选, 造成条件单堆积)。
     if _is_low_quality(sig["event"].get("code") or code):
         return None
-    ev = sig["event"]
     return {"strategy": "screener_value_accumulation",
             "type": ev["type"], "idx": int(ev.get("idx") or 0),
             "conf": int(ev.get("conf", 0) or 0)}
@@ -1056,6 +1068,8 @@ def _value_accum_candidate(code, df, piv, evs):
 VA_EXCLUDE_BJ = True
 VA_EXCLUDE_ST = True
 VA_MIN_PRICE = 3.0
+# 价值吸筹 conf 下限: 兜底信号也须有足够置信度, 避免低质候选稀释组合
+VA_MIN_CONF = 80
 
 
 def _is_low_quality(code, price=None, name=None) -> bool:
@@ -1652,9 +1666,11 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
     condition_peak = None
 
     if side == "buy":
+        # 统一权益/3 等权口径: 传 st 让 _make_order 按 账户总权益/max_pos 分配,
+        # 避免条件单路径走现金/3 导致「先买的大、后买的小」的顺序衰减与资金闲置。
         budget = c.get("amount") or st["cash"]
         order = _make_order(c["symbol"], c.get("name", ""), "条件单",
-                            c.get("qty", 0) or 0, last, 0, budget)
+                            c.get("qty", 0) or 0, last, 0, budget, st=st)
         if has_position(st, c["symbol"]):
             # 已持有该标的: 取消条件单, 防止对同一标的重建仓 (避免资金/仓位被重复占用)
             c["status"] = "cancelled"
@@ -1798,6 +1814,58 @@ def step(st, df_by_code):
             order = dict(o)
             st["pending"].remove(o)
             fill_buy(st, order)
+
+
+def _rebalance_portfolio(st, df_by_code):
+    """满仓时向等权目标收敛, 把权重过低的持仓补足到 总权益/max_pos。
+
+    仅在 len(positions)==max_pos (已满仓) 且现金富余时触发, 避免建仓期干扰。
+    加仓直接合并进已有持仓 (摊薄成本), 不新增同标的多仓; 保留已建立的追踪 peak 与
+    entry_bars (加仓不改变止损保护起点)。返回补仓笔数。
+
+    df_by_code: 需含待补仓标的当根行情 (用于现价与成交)。
+    """
+    if not _CUR.get("rebalance", False):
+        return 0
+    if len(st.get("positions", [])) < _CUR["max_pos"]:
+        return 0
+    positions = st.get("positions", [])
+    mv_total = sum(float(p.get("last", p["buy_px"])) * p["qty"] for p in positions)
+    equity = float(st["cash"]) + mv_total
+    target = equity / max(1, _CUR["max_pos"])
+    rebalanced = 0
+    for pos in positions:
+        sym = pos["symbol"]
+        last = float(pos.get("last") or pos["buy_px"])
+        cur_mv = float(pos.get("last", pos["buy_px"])) * pos["qty"]
+        # 容忍带: 仅当权重明显不足 (< 目标*0.75) 且现金可覆盖时才补
+        short = target * 0.75 - cur_mv
+        if short <= 0:
+            continue
+        cost = last * (1 + SLIP_BUY)
+        qty = int(short // (cost) // 100 * 100)  # 整手(百股)
+        if qty <= 0:
+            continue
+        fee = qty * cost * _CUR["cost"]
+        spend = qty * cost + fee
+        if st["cash"] < spend:
+            continue
+        # 合并进已有持仓: 追加数量 + 摊薄成本
+        old_qty = pos["qty"]
+        pos["qty"] = int(old_qty) + qty
+        new_buy = (float(pos["buy_px"]) * old_qty + cost * qty) / pos["qty"]
+        pos["buy_px"] = round(new_buy, 3)
+        pos["cost"] = round(float(pos.get("cost", 0)) + fee, 2)
+        pos["last"] = round(last, 3)
+        st["cash"] -= spend
+        st["orders"].append({
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "symbol": sym,
+            "name": pos.get("name", ""), "strategy": pos.get("strategy", ""),
+            "qty": qty, "price": round(cost, 3), "type": "再平衡加仓",
+            "conf": pos.get("conf", 0), "side": "buy", "date": "",
+        })
+        rebalanced += 1
+    return rebalanced
 
 
 def close_position(st, pos, sell_price, reason):
@@ -2200,6 +2268,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
         except Exception:
             pass
     step(st, df_by_code)
+    # 4) 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到等权目标,
+    #    消除资金利用率不足(~66%)与单仓过度集中。
+    _rebalance_portfolio(st, df_by_code)
     save_state(st)
     return stats(st)
 
