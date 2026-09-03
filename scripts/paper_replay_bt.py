@@ -217,12 +217,42 @@ def _sector_gate_ok(rec, ts, gate=0.60):
     return (pct >= gate), f"板块强度{pct*100:.0f}分位"
 
 
+def _window_df(rec, D, day_to_j):
+    """返回 rec 的指标 df 窗口, 截到 <=D 的最后一根 (供 step 以 D 当日收盘/止损判定)。"""
+    j = day_to_j.get(D)
+    df = rec["df"]
+    if j is None:
+        sub = df[df["day"] <= D]  # 停牌日 carry 最近一根
+        return sub if len(sub) else df.iloc[0:0]
+    return df.iloc[:j + 1]
+
+
 def replay(stocks, params, market_gate=None):
+    """逐日重放, 复用模拟盘引擎 (paper.step / _rebalance_portfolio / _make_order / fill_buy)。
+
+    与实盘同口径: 固定 -3% 止损 / +15% 止盈 / 破位 / 结构位, 市价成交 (含滑点);
+    满足平仓条件即平仓, 不因短期持有到期强制平仓 (hold 设很大作安全上限)。
+    建仓等权 (总权益/max_pos)。
+    """
     from wyckoff.settings_keys import S
+    hold = int(params.get("hold_bars") or 10**6)
+    # 提速: 重放过程中 fill_buy/close_position 会反复 save_state 原子落盘,
+    # 对网格对比是纯开销。这里临时把 save_state 降级为 no-op, 仅在回放结束时真落盘一次。
+    _real_save = paper.save_state
+    paper.save_state = lambda st: None
+    try:
+        st = _replay_impl(paper, hold, stocks, params, market_gate, S)
+        _real_save(st)
+        return st
+    finally:
+        paper.save_state = _real_save
+
+
+def _replay_impl(paper, hold, stocks, params, market_gate, S):
     paper.apply_paper_params({
         S.Paper.INIT_CASH: params["init_cash"],
         S.Paper.MAX_POS: params["max_pos"],
-        S.Paper.HOLD_BARS: params["hold_bars"],
+        S.Paper.HOLD_BARS: hold,
         S.Paper.STOP_LOSS: params["stop_loss"],
         S.Paper.TAKE_PROFIT: params["take_profit"],
         S.Paper.COST: params["cost"],
@@ -232,7 +262,6 @@ def replay(stocks, params, market_gate=None):
     st = paper._new_state()
     va_m = paper._strategy_manager()
 
-    # 构造 日->bar 索引 每只股票 与 code->rec 索引
     day_to_j = []
     code_to_idx = {}
     for k, rec in enumerate(stocks):
@@ -242,53 +271,22 @@ def replay(stocks, params, market_gate=None):
         day_to_j.append(m)
         code_to_idx[rec["code"]] = k
 
-    # 主时间轴 = 所有交易日并集
     all_days = sorted({d for rec in stocks for d in rec["day"]})
     start = params.get("start")
     if start:
         all_days = [d for d in all_days if d.date() >= _sdate(start)]
 
-    last_close = {}  # 持仓股票最近可用的 bar 收盘 (用于停牌日 carry)
-    last_low = {}
     for D in all_days:
-        # 1) 卖出/估值: 用今日收盘更新持仓
-        for pos in list(st["positions"]):
+        # 1) 持仓股票: 提供截止 D 的 df 窗口, 交由引擎 step 估值 + 平仓 (止盈/止损/破位)
+        df_by_code = {}
+        for pos in st["positions"]:
             idx = code_to_idx.get(pos["symbol"])
             if idx is None:
                 continue
-            j = day_to_j[idx].get(D) if idx is not None else None
-            if j is not None:
-                last_close[pos["symbol"]] = stocks[idx]["close"][j]
-                last_low[pos["symbol"]] = stocks[idx]["low"][j]
-            last = last_close.get(pos["symbol"])
-            if last is None:
-                continue
-            entry = float(pos["buy_px"])
-            ret = last / entry - 1
-            pos["last"] = round(last, 3)
-            pos["last_ret"] = round(ret, 4)
-            # 结构支撑 = 最近 10 根低点
-            support = None
-            if j is not None:
-                lo = stocks[idx]["low"]
-                support = min(lo[max(0, j - 9): j + 1])
-            stop_px = entry * (1 - cfg["stop_loss"])
-            pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
-            held = int(pos["entry_bars"])
-            reason = None
-            if ret >= cfg["take_profit"]:
-                reason = "止盈"
-            elif last <= stop_px:
-                reason = "止损"
-            elif support is not None and support < stop_px and last <= support:
-                reason = "破位"
-            elif held >= cfg["hold_bars"]:
-                reason = "到期"
-            if reason:
-                sell_price = max(stop_px, last) * (1 - paper.SLIP_SELL)
-                paper.close_position(st, pos, sell_price, reason)
+            df_by_code[pos["symbol"]] = _window_df(stocks[idx], D, day_to_j[idx])
+        paper.step(st, df_by_code)
 
-        # 2) 买入: 双策略候选 (纪律优先, 价值吸筹回退) 按 conf 填位
+        # 2) 建仓: 双策略候选 (纪律优先, 价值吸筹回退), 引擎等权口径成交
         cands = []
         for k, rec in enumerate(stocks):
             code = rec["code"]
@@ -304,9 +302,7 @@ def replay(stocks, params, market_gate=None):
                 if va is None:
                     continue
                 ev, strategy = va, va["strategy"]
-            # D: 强链过滤 — 只交易信号日链条强度达标的板块内个股。
-            #    用历史快照 (strength_at) 无前视; 无历史快照时 fail-open 不筛选
-            #    (避免把无数据区间误清空, 覆盖区间内才真正过滤)。
+            # 强链过滤 (历史快照无前视; 无快照 fail-open)
             if params.get("chain_min_pct"):
                 from wyckoff.chain import chain_factor_for
                 try:
@@ -315,54 +311,57 @@ def replay(stocks, params, market_gate=None):
                         continue
                 except Exception:
                     pass
-            # E: 资金流门禁 (因果历史代理, 跨日截面中位) —
-            #    先收集每只候选的资金流分 (近5根量价净流入占比); None=数据不足 fail-close。
-            flow_score = None
-            if params.get("flow_gate"):
-                flow_score = _flow_score(rec, j)
-                if flow_score is None:
-                    continue
-            # F: 板块强度门禁 (历史快照) — 有快照按分位过滤, 无快照放行
-            if params.get("sect_gate"):
-                s_ok, _sr = _sector_gate_ok(rec, ts=pd.Timestamp(D))
-                if not s_ok:
-                    continue
-            cands.append((ev["conf"], code, ev["type"], rec["open"][j],
-                          rec["chain"], flow_score, strategy))
-        cands.sort(key=lambda x: -x[0])
-        # 大盘20日线门禁: 仅当日上证收盘 > MA20 才开新仓 (因果历史重建, 无前视)
+            cands.append({"code": code, "conf": int(ev["conf"] or 0),
+                          "type": ev["type"], "open": rec["open"][j],
+                          "sector": rec.get("sector", ""),
+                          "chain": rec["chain"], "strategy": strategy,
+                          "flow": _flow_score(rec, j)})
+
+        # 大盘20日线门禁 (因果历史重建, 无前视)
         if params.get("mkt_gate") and market_gate is not None:
             mk = market_gate.get(D)
             if mk is None or not (mk[0] > mk[1]):
                 cands = []
-        # E: 资金流门禁(因果代理) — 跨日截面: 当日候选池净流入分 ≥ 中位才保留。
-        #    镜像 paper._flow_net5 + pick_candidates 的"净流入>50分位" (fail-close)。
+        # 资金流门禁 (因果代理, 当日候选池截面中位, fail-close)
         if params.get("flow_gate") and cands:
-            scores = sorted([c[5] for c in cands if c[5] is not None])
+            scores = sorted([c["flow"] for c in cands if c["flow"] is not None])
             if scores:
                 med = scores[len(scores) // 2]
-                cands = [c for c in cands if c[5] is not None and c[5] >= med]
+                cands = [c for c in cands if c["flow"] is not None and c["flow"] >= med]
             else:
-                cands = []  # 无任何资金流分 → fail-close
-        for conf, code, typ, open_px, chain, flow_score, strategy in cands:
+                cands = []
+        # 板块强度门禁 (历史快照, 无快照放行)
+        if params.get("sect_gate"):
+            cands = [c for c in cands
+                     if _sector_gate_ok({"sector": c["sector"]},
+                                        ts=pd.Timestamp(D))[0]]
+        cands.sort(key=lambda x: -x["conf"])
+        for cand in cands:
             if len(st["positions"]) >= cfg["max_pos"]:
                 break
-            if paper.has_position(st, code):
+            if paper.has_position(st, cand["code"]):
                 continue
-            # C: 同产业链限仓 — 同链已持 ≥ chain_cap 则不重复买
+            # 同产业链限仓
             cc = params.get("chain_cap") or 0
-            if cc and chain:
+            if cc and cand["chain"]:
                 n_chain = sum(1 for p in st["positions"]
-                              if stocks[code_to_idx[p["symbol"]]].get("chain") == chain)
+                              if stocks[code_to_idx[p["symbol"]]].get("chain") == cand["chain"])
                 if n_chain >= cc:
                     continue
-            order = paper._make_order(code, "", typ, conf, open_px, 0, st["cash"],
-                                      strategy=strategy)
+            if paper._risk_blocks_entry(st, cand, cand["open"]):
+                continue
+            order = paper._make_order(cand["code"], "", cand["type"], cand["conf"],
+                                      cand["open"], 0, st["cash"],
+                                      sector=cand["sector"],
+                                      strategy=cand["strategy"], st=st)
             if order is None:
                 continue
             paper.fill_buy(st, order)
 
-        # 3) 记录净值 (今日收盘市值)
+        # 3) 引擎周期再平衡 (等权收敛, 满仓才触发)
+        paper._rebalance_portfolio(st, df_by_code)
+
+        # 4) 记录净值 (今日收盘市值)
         st["equity_hist"].append({
             "ts": str(D),
             "cash": round(st["cash"], 2),
@@ -508,7 +507,7 @@ def main():
     params = {
         "min_conf": args.conf if args.conf is not None else defaults["min_conf"],
         "max_pos": args.maxpos if args.maxpos is not None else defaults["max_pos"],
-        "hold_bars": args.hold if args.hold is not None else defaults["hold_bars"],
+        "hold_bars": args.hold if args.hold is not None else 999,
         "stop_loss": args.stop if args.stop is not None else defaults["stop_loss"],
         "take_profit": args.tp if args.tp is not None else defaults["take_profit"],
         "cost": args.cost if args.cost is not None else defaults["cost"],
@@ -522,15 +521,31 @@ def main():
         "sect_gate": args.sect_gate,
     }
 
-    # universe
+    # universe: 从主数据目录(仓库根)加载全A名单, 而非被重定向的回放隔离目录。
+    # 回放进程把 WYCKOFF_DATA_DIR 指到 data/paper_replay_data, 那里没有
+    # wyckoff_all_stocks.json → local_universe 会返回 0, 导致"扫描 0 只"。
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    uni = []
     try:
-        from wyckoff.fundamental import fetch_market_universe, local_universe
         from wyckoff.utils import normalize_symbol
-        uni = [normalize_symbol(c) for c in fetch_market_universe(args.max_codes)]
-        if not uni:
-            uni = [normalize_symbol(c) for c in local_universe(args.max_codes)]
+        list_path = os.path.join(repo_root, "wyckoff_all_stocks.json")
+        import json
+        with open(list_path, encoding="utf-8") as f:
+            uni = [normalize_symbol(c) for c in json.load(f).keys()]
     except Exception:
         uni = []
+    # 兜底: 在线宇宙 / 主目录 local_universe
+    if not uni:
+        try:
+            from wyckoff.fundamental import fetch_market_universe
+            from wyckoff.utils import normalize_symbol
+            uni = [normalize_symbol(c) for c in fetch_market_universe(args.max_codes)]
+        except Exception:
+            uni = []
+    # 受限板块(创业板/科创板)与价值吸筹排除北交所; 纪律仅过滤受限板块
+    uni = [c for c in uni if not (c.startswith("sh688") or c.startswith("sh689")
+                                  or c.startswith("sz300") or c.startswith("sz301")
+                                  or c.startswith("bj"))]
     uni = uni[:args.max_codes]
 
     print(f"扫描 {len(uni)} 只: conf≥{params['min_conf']} 持仓≤{params['max_pos']} "
