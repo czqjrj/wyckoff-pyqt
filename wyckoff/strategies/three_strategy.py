@@ -77,30 +77,64 @@ class StrategyBacktester:
             nt = nine_tests(wdf, wevents, wpivots)
             vsa_labels = vsa_classify(wdf, scale=240)
 
-            candidates = []
-            for res in [
-                self.manager.evaluate_strategy_4(df, i, wevents, nt, vsa_labels),
-                self.manager.evaluate_strategy_value_accumulation(wdf, i, wevents, wpivots),
-            ]:
-                if res:
-                    candidates.append(res)
-
-            for res in candidates:
-                # 信号去重：同一策略 + 同一事件实例(idx) 只开一笔
-                ev = res.get("event", {})
-                dedup_key = (res["strategy"], ev.get("idx"))
-                if dedup_key in seen:
-                    continue
-                seen.add(dedup_key)
-
-                trade = self._make_trade(
-                    symbol, res, df, i, horizon, cost,
-                    entry_mode=entry_mode, confirm_pct=confirm_pct,
-                    stop_loss=stop_loss, take_profit=take_profit,
-                    trail_atr=trail_atr, atr_vals=atr_vals,
-                )
-                if trade is not None:
-                    trades.append(trade)
+            # 方案A: 策略4优先，未通过用Spring备选 (串行逻辑)
+            # 步骤1: 策略4筛选 (conf≥90 + 硬门禁)
+            r4 = self.manager.evaluate_strategy_4(df, i, wevents, nt, vsa_labels, stock_code=symbol)
+            
+            # 步骤2: Spring备选 (事件确认窗口)
+            spr = self.manager.evaluate_strategy_spring(df, i, wevents, nt, vsa_labels, stock_code=symbol)
+            
+            # 步骤3: 决策 - 策略4优先，未通过则用Spring
+            signal_result = None
+            strategy_name = ''
+            
+            if r4 is not None:
+                signal_result = r4
+                strategy_name = '策略4'
+            elif spr is not None:
+                signal_result = spr
+                strategy_name = 'Spring备选'
+            else:
+                continue  # 都不通过，跳过此样本点
+            
+# 从 signal_result 中提取止损/目标参数用于交易执行
+            # Spring策略: 止损=Spring日低点 2%下方, 目标=1:2.5风险回报
+            spring_trading = signal_result.get("trading", {})
+            stop_loss_param = spring_trading.get("stop_price")  # 已计算的价格
+            take_profit_param = spring_trading.get("target_price")  # 已计算的价格
+            
+            # 对策略4也同理
+            discipline_trading = signal_result.get("trading", {}) if signal_result.get("strategy") == "paper_discipline_bull" else {}
+            discipline_stop = discipline_trading.get("stop_price")
+            discipline_tp = discipline_trading.get("target_price")
+            
+            # 确定报告兼容的 strategy 键
+            report_strategy_key = {
+                "paper_discipline_bull": "paper_discipline_bull",
+                "screener_value_accumulation": "screener_value_accumulation",
+                "spring_pullback": "spring_pullback",
+            }.get(signal_result.get("strategy", ""), "paper_discipline_bull")
+            
+            # 使用Spring的参数 (或策略4的参数)
+            if signal_result.get("strategy") == "spring_pullback":
+                actual_stop = stop_loss_param
+                actual_tp = take_profit_param
+            elif signal_result.get("strategy") == "paper_discipline_bull":
+                actual_stop = discipline_stop
+                actual_tp = discipline_tp
+            else:
+                actual_stop = None
+                actual_tp = None
+            
+            trade = self._make_trade(
+                symbol, signal_result, df, i, horizon, cost,
+                entry_mode=entry_mode, confirm_pct=confirm_pct,
+                stop_loss=actual_stop, take_profit=actual_tp,
+                trail_atr=0.0, atr_vals=atr_vals,
+            )
+            if trade is not None:
+                trade["strategy"] = report_strategy_key  # 使用与 _compute_report 兼容的键
+                trades.append(trade)
 
         return trades
 
@@ -211,6 +245,8 @@ class StrategyBacktester:
         strategies = {
             "paper_discipline_bull": "策略4: 模拟盘纪律策略",
             "screener_value_accumulation": "综合选股·价值吸筹 (推荐)",
+            "sos_breakout": "SOS动态确认突破策略",
+            "spring_pullback": "Spring回踩确认策略",
         }
 
         result = {}

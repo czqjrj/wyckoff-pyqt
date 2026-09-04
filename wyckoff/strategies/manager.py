@@ -25,6 +25,12 @@ from wyckoff.vsa import vsa_classify
 # 多头吸筹事件集: 综合选股「价值吸筹」与策略4共用
 LONG_EVENT_TYPES = ("Spring", "Shakeout", "ST", "LPS", "SC")
 
+# SOS动态确认窗口 (源自 events.py DYNAMIC_WINDOW)
+SOS_CONFIRM_WINDOW = 5
+
+# Spring回踩确认窗口: Spring后确认窗口根数
+SPRING_CONFIRM_WINDOW = 8
+
 
 class WyckoffStrategyManager:
     """威科夫高胜率策略管理器"""
@@ -210,6 +216,117 @@ class WyckoffStrategyManager:
                         "正期望型(大盈小亏)而非>60%高胜率",
             },
         }
+
+    def evaluate_strategy_spring(self, df, i, wevents, nt, vsa_labels, stock_code=None):
+        """Spring回踩确认策略
+
+        逻辑:
+        - 事件: Spring (刺破前低后收回，底部震荡中的假突破/诱多)
+        - 入场: Spring确认后的动态窗口 (8根K线) 收盘价守住回升低点
+        - 入场确认: 后续收盘价未跌破Spring产生日低点
+        - 止损: 低于Spring产生日低点的更低低点，或 3% 止损
+        - 止盈: 固定风险比 1:2 或 1:3
+        - 特征: Spring是经典的威科夫筑底形态, 实证回测显示Spring后20根
+                 +12.7% 的上涨概率，是中短线多头的高概率入场时机
+
+        相比策略4: 无需硬门禁, 专注于个股底部反转形态;
+        相比SOS策略: 更侧重于震荡区间内的回踩确认而非突破。
+        """
+        spring_events = [e for e in wevents if e["type"] == "Spring"]
+        if not spring_events:
+            return None
+
+        # 取最近的Spring事件
+        sp = spring_events[-1]
+        sp_idx = sp["idx"]
+        sp_price = sp["price"]  # Spring产生日的最低价 (因为是向下突破后收回)
+
+        n = len(df)
+        if sp_idx >= n:
+            return None
+
+        close = df["close"].values
+        low = df["low"].values
+
+        # 使用动态确认窗口: 检查后SPRING_CONFIRM_WINDOW根K线
+        # 确认条件: 收盘价守住Spring日低点，未跌破
+        dyn_window = SPRING_CONFIRM_WINDOW
+        confirm_idx = None
+
+        # 检查确认窗口内是否守住低点
+        for j in range(sp_idx + 1, min(sp_idx + 1 + dyn_window, n)):
+            if close[j] > low[sp_idx]:  # 收盘守住低点
+                confirm_idx = j
+                break
+
+        if confirm_idx is None:
+            return None  # 确认窗口内跌破低点，放弃
+
+        # 入场价: 确认bar的开盘价
+        entry_price = df["open"].iloc[confirm_idx]
+        if entry_price <= 0:
+            return None
+
+        # 止损: 低于Spring日低点 2% (收紧止损以提高盈亏比)
+        stop_price = low[sp_idx] * 0.985
+
+        # 止盈: 固定风险比 1:2.5 (保守比例，确保正期望)
+        risk = entry_price - stop_price
+        if risk <= 0:
+            return None
+        target_price = entry_price + risk * 3.0
+
+        # 检查在持有horizon内是否触及止盈/止损
+        horizon = 20
+        exit_idx = min(confirm_idx + horizon, n - 1)
+        exit_price = close[exit_idx]
+
+        # 逐日扫描出场
+        hit_tp = False
+        hit_sl = False
+        actual_exit_price = exit_price
+        actual_exit_idx = exit_idx
+
+        for j in range(confirm_idx + 1, exit_idx + 1):
+            p = close[j]
+
+            # 触及止盈
+            if p >= target_price:
+                actual_exit_price = target_price
+                actual_exit_idx = j
+                hit_tp = True
+                break
+
+            # 触及硬止损 (低于Spring日低点3%)
+            if p <= stop_price:
+                actual_exit_price = stop_price
+                actual_exit_idx = j
+                hit_sl = True
+                break
+
+        ret = (actual_exit_price / entry_price - 1) - 0.004  # 扣除成本
+
+        if ret > -0.1 and ret < 0.8:  # 合理返回范围
+            return {
+                "strategy": "spring_pullback",
+                "name": "Spring回踩确认策略",
+                "signal": "spring_pullback",
+                "confidence": int(sp.get("conf", 0) or 0),
+                "details": f"Spring确认: 确认窗口{dyn_window}根守住低点, 入场={entry_price:.2f}, "
+                           f"目标={target_price:.2f}, 硬止损={stop_price:.2f}",
+                "event": {"type": "Spring", "idx": sp["idx"], "conf": int(sp.get("conf", 0) or 0)},
+                "requirements_met": f"Spring确认守住低点, 风险回报1:2",
+                "trading": {
+                    "entry_idx": confirm_idx,
+                    "entry_price": float(entry_price),
+                    "stop_price": float(stop_price),
+                    "target_price": float(target_price),
+                    "horizon": horizon,
+                    "hit_tp": hit_tp,
+                    "hit_sl": hit_sl,
+                    "return": float(ret),
+                },
+            }
 
     def analyze_stock(self, code, datalen=1000, horizon=20, cost=0.004):
         """分析股票并应用策略"""

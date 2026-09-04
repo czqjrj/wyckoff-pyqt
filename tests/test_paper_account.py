@@ -22,7 +22,7 @@ def _mk(closes, wob=0.05):
                          "volume": np.full(n, 8e5)})
 
 
-def _candidate(code="sh600001", type_="Spring", conf=95, last=10.0, idx=299):
+def _candidate(code="sh600001", type_="Spring", conf=100, last=10.0, idx=299):
     return {"code": code, "name": "测试股", "type": type_, "conf": conf,
             "last": last, "idx": idx}
 

@@ -136,6 +136,28 @@ def newest_buyable(rec, j, window=10):
     return best
 
 
+BEAR_TYPES = {"UTAD", "LPSY"}
+
+
+def bear_signal_on(rec, j, window=10):
+    """返回该股票截至 bar j 的最近空头风险信号 (UTAD/LPSY)。
+
+    事件出现在 (j-window, j] 内且为 UTAD/LPSY → 触发主动平仓 (事件型卖出)。
+    返回 {type, idx, conf} 或 None。用全量事件 all_evs (含低 conf),
+    与实盘卖出风险管理口径一致 (出现空头事件即视为风险, 不等高 conf)。
+    """
+    best = None
+    for e in rec.get("all_evs") or []:
+        if e.get("type") not in BEAR_TYPES:
+            continue
+        idx = int(e.get("idx") or 0)
+        if idx <= j and (j - idx) <= window:
+            if best is None or idx > best["idx"]:
+                best = {"type": e["type"], "idx": idx,
+                        "conf": int(e.get("conf", 0) or 0)}
+    return best
+
+
 _va_cache = {}
 
 
@@ -286,6 +308,25 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
             df_by_code[pos["symbol"]] = _window_df(stocks[idx], D, day_to_j[idx])
         paper.step(st, df_by_code)
 
+        # 1.5) 事件型空头信号卖出: 持仓标的在持有期出现 UTAD/LPSY 空头事件 → 主动平仓。
+        #       (仅做多框架的风控: 出现空头事件即视为风险, 不等止盈/止损/破位/到期)
+        if params.get("bear_exit"):
+            for pos in list(st["positions"]):
+                idx = code_to_idx.get(pos["symbol"])
+                if idx is None:
+                    continue
+                j = day_to_j[idx].get(D)
+                if j is None:
+                    continue
+                bear = bear_signal_on(stocks[idx], j, window=params["window"])
+                if bear is None:
+                    continue
+                dfw = df_by_code.get(pos["symbol"])
+                last = float(dfw["close"].iloc[-1]) if dfw is not None and len(dfw) else pos.get("last", pos["buy_px"])
+                sell_price = last * (1 - paper.SLIP_SELL)
+                paper.close_position(st, pos, sell_price, "空头信号",
+                                     event_type=bear["type"])
+
         # 2) 建仓: 双策略候选 (纪律优先, 价值吸筹回退), 引擎等权口径成交
         cands = []
         for k, rec in enumerate(stocks):
@@ -385,6 +426,13 @@ def build_report(st, params):
              f"单边成本{params['cost']*100:.2f}%")
     L.append("- 双策略选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先, "
              "无纪律信号时回退价值吸筹(底部整固 + 近20根内吸筹事件, 无conf门槛)")
+    total_exit = (f"止盈+{params['take_profit']*100:.0f}% / 止损-{params['stop_loss']*100:.0f}% "
+                  f"/ 破位 / 到期")
+    if params.get("bear_exit"):
+        total_exit += " + 空头信号主动卖出(UTAD/LPSY)"
+    else:
+        total_exit += " (未启用空头信号卖出)"
+    L.append(f"- 卖出闭环: {total_exit}")
     gates_on = [
         ("大盘20日线" if params.get("mkt_gate") else None),
         ("资金流(因果代理)" if params.get("flow_gate") else None),
@@ -496,6 +544,8 @@ def main():
                     help="资金流门禁(因果代理): 信号日近5根量价净流入占比>0 (fail-close)")
     ap.add_argument("--sect-gate", action="store_true",
                     help="板块强度门禁: 历史快照分位≥0.6 (无快照期放行, 有数据才过滤)")
+    ap.add_argument("--no-bear-exit", action="store_false", dest="bear_exit",
+                    help="关闭事件型空头信号卖出 (默认开启: 持仓遇 UTAD/LPSY 主动平仓)")
     ap.add_argument("--start", default="", help="回放起始日期 YYYY-MM-DD")
     ap.add_argument("--datalen", type=int, default=700,
                     help="每只标的拉取的K线根数 (覆盖回放起始前的历史, 建议≥850覆盖3年)")
@@ -519,6 +569,7 @@ def main():
         "mkt_gate": args.mkt_gate,
         "flow_gate": args.flow_gate,
         "sect_gate": args.sect_gate,
+        "bear_exit": args.bear_exit,
     }
 
     # universe: 从主数据目录(仓库根)加载全A名单, 而非被重定向的回放隔离目录。

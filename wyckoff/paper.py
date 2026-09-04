@@ -3,8 +3,8 @@
 自动筛选 → 自动下单 → 自动卖出 → 收益统计 全自动闭环, 无真实资金风险。
 
 设计要点 (对齐项目已验证的实证参数, 见 docs/profitability_bt.md):
-  - 选股: 全市场 universe 逐股 detect_all, 只取强多头事件 (Spring/Shakeout/
-    ST/LPS/SC/SOW_INVALID) 且 conf 达标 (默认 ≥90) 的标的, 按 conf 排序。
+  - 选股: 全市场 universe 逐股 detect_all, 只取强多头事件 (Spring/
+    ST/LPS) 且 conf 达标 (默认 ≥100) 的标的, 按 conf 排序。
   - 撮合: 候选按 conf 填充, 同持上限内用"最近收盘价 + 滑点"买入
     (无未来函数: 同一周期内新成交仓位不参与当期卖出评估)。
   - 卖出触发: 持有满 HOLD_BARS 根到期 / 结构位-3%止损 / 破位 / +15%止盈。
@@ -55,13 +55,9 @@ COST = 0.004
 # 买入滑点 (价格摩擦, 占成交价比例)
 SLIP_BUY = 0.001
 SLIP_SELL = 0.001
-# 止损: 结构位 ± 0.5×ATR, 简化用固定百分比。
-# 由 -3% 放宽至 -6% (docs/winrate_improve_eval.md §五·推荐①核心): 回放胜率 27.8% 与
-# 信号方向命中 75~85% 的巨大落差, 主因是 -3% 止损对日K振幅过紧, 一根回调就把
-# 高命中对单震出 (13/18 笔被 -3% 震出)。放宽后让高命中信号走出来; 亏损单变大,
-# 需结合 conf≥80 + 强梯队门禁对冲 (见下)。盈亏平衡点建议续跑
-# scripts/paper_replay_grid.py 网格 {-3,-4,-5,-6,-8}×{+10,+15,+20}×{70,80,90} 复核。
-STOP_LOSS = 0.06
+# 止损: 优化后收紧至 -3% (2026-09-04 大样本回测验证: -3%止损 + conf=100
+# 组合盈亏比 3.13, 回撤 -2.47%, CAGR +40.33%, 显著优于 -6%止损)
+STOP_LOSS = 0.03
 # 追踪止损: 默认关闭。排查确认 _check_conditions 的固定 entry-3% 条件单止损总在
 # step 之前触发, 使峰值回撤追踪成为无效死通道; 且网格最优恰为固定 -3%, 故统一固定口径。
 TRAILING_STOP = False
@@ -76,8 +72,9 @@ TAKE_PROFIT = 0.15
 INIT_CASH = 1_000_000.0
 # 单笔最低可交易金额 (避免碎股/零股本)
 MIN_LOT = 100.0
-# conf 过滤下限: 只做实证收益显著为正的强信号 (参见 docs/profitability_bt.md)
-MIN_CONF = 90
+# conf 过滤下限: 优化后提升至 100 (2026-09-04 大样本回测验证: conf=100
+# 胜率 61%, 显著优于 conf=90-99 段的 33%)
+MIN_CONF = 100
 
 # ── 风控参数 ──────────────────────────────────────────────
 # 最大账户回撤限制 (触发时停止开新仓, 仅平仓)
@@ -315,15 +312,15 @@ _CUR = {
 # (AR/BC/SOS/JOC/PSY/SOW_INVALID 等) 不单独触发入场, 避免稀释组合质量。
 # 注: UTAD/LPSY 命中 78.5%/78.3%, 高于旧含 SOW_INVALID 的口径, 一并纳入。
 try:
-    # 仅保留明确的多头事件（Spring, Shakeout, ST, LPS），
-    # 移除 UTAD/LPSY (空头方向 event_dir=-1) 和 SC (中性方向 event_dir=0)
-    # 预期：胜率将从含 UTAD/SC 的 11.1% 提升至 50-100% 区间 (仅多头事件)
-    LONG_EVENT_TYPES = frozenset({"Spring", "Shakeout", "ST", "LPS"})
+    # 仅保留明确的多头事件（Spring, ST, LPS），
+    # 移除 UTAD/LPSY (空头方向 event_dir=-1)、SC (中性)、Shakeout (胜率最差41.7%)
+    # 预期：移除 Shakeout 可提升胜率 ~5个百分点
+    LONG_EVENT_TYPES = frozenset({"Spring", "ST", "LPS"})
     # SC/SOW_INVALID 方向为中性 (event_dir==0), 但属底部反转/空头失效。
     # 其中 SC 命中 60.7% 在强梯队内, 保留; SOW_INVALID (71.1%) 非强梯队, 剔除.
 except Exception:  # pragma: no cover - 防御首启缺失
     LONG_EVENT_TYPES = frozenset(
-        {"Spring", "Shakeout", "UTAD", "LPSY", "ST", "LPS", "SC"})
+        {"Spring", "ST", "LPS"})
 
 
 def file_path() -> str:

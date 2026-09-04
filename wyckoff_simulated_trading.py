@@ -14,6 +14,7 @@ from datetime import datetime
 import numpy as np
 
 from wyckoff.datasource import fetch_kline, fetch_name
+from wyckoff.fundamental import is_restricted_board, universe
 from wyckoff.utils import normalize_symbol
 from wyckoff_strategies_manager import WyckoffStrategyManager
 
@@ -181,6 +182,55 @@ class SimulatedTradingSystem:
         return report
 
 
+def main_board_universe(cap: int | None = None):
+    """构建「沪深主板」默认扫描范围。
+
+    复用代码库统一的 universe 入口 (成交额Top活跃股优先, 断网回退本地全A抽样),
+    过滤掉创业板(300/301)、科创板(688/689)、北交所(bj), 仅保留
+    上海主板(sh60x/61x/603/605) 与 深圳主板(sz000/001)。
+
+    参数:
+        cap: 上限只数 (None=不做截断, 取主板全量)。为避免模拟盘逐股拉K线耗时,
+             默认传入 cap 控制；None 用于需要全量主板清单的场合。
+
+    返回: 清洗后的主板代码列表 (带 sh/sz 前缀)。
+    """
+    codes, _ = universe(2000)
+    if not codes:
+        return []
+
+    main_board = []
+    for c in codes:
+        sym = str(c).lower()
+        if sym.startswith("bj"):
+            continue
+        if sym.startswith(("sh", "sz")):
+            c6 = sym[2:]
+        else:
+            c6 = sym[-6:]
+        if not (c6.isdigit() and len(c6) == 6):
+            continue
+        if is_restricted_board(c6):
+            continue
+        # 沪深主板: sh 以 6 开头(60x), sz 以 0 开头(00x)
+        pref = "sh" if c6[0] == "6" else "sz" if c6[0] == "0" else ""
+        if not pref:
+            continue
+        main_board.append(pref + c6)
+
+    # 去重保序
+    seen = set()
+    uniq = []
+    for c in main_board:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+
+    if cap is not None and cap > 0:
+        return uniq[:cap]
+    return uniq
+
+
 def main():
     """主函数 - 模拟盘选股演示"""
     print("=== 威科夫高胜率策略模拟盘选股系统 ===")
@@ -188,15 +238,17 @@ def main():
 
     sim_system = SimulatedTradingSystem()
 
-    # 股票池
-    stock_pool = [
-        "sh600036", "sz000001", "sh601318", "sz000858",
-        "sh600276", "sz002415", "sh600030", "sz300760",
-        "sz300750", "sh600519", "sz000333", "sh601899",
-        "sh600900", "sz000651", "sh600887",
-    ]
+    # 默认扫描范围: 沪深主板 (动态拉取活跃主板股, 断网回退本地抽样)
+    # 为控制逐股拉K线耗时, 默认取主板活跃 Top-N, 可通过 --cap 调整。
+    cap = 100
+    stock_pool = main_board_universe(cap)
 
-    print(f"股票池包含 {len(stock_pool)} 只股票，开始真实收益模拟...")
+    if not stock_pool:
+        print("无法获取沪深主板股票池, 退出。")
+        return
+
+    print(f"默认扫描范围: 沪深主板 (共 {len(stock_pool)} 只活跃主板股, cap={cap})")
+    print("开始真实收益模拟...")
     print()
 
     horizon = 20
