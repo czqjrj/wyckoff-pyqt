@@ -1084,7 +1084,6 @@ class CalibrationCenter(QWidget):
             stats = self._accuracy_stats_cached()
         # 更新筛选器
         codes = sorted({r.get("code") for r in records if r.get("code")})
-        self.acc_filter_code.currentData()
         self.acc_filter_code.blockSignals(True)
         if self.acc_filter_code.count() == 0:
             self.acc_filter_code.addItem("全部股票", None)
@@ -1186,6 +1185,7 @@ class CalibrationCenter(QWidget):
         self.acc_chart.getAxis('left').setLabel("命中率 %")
 
     def _render_accuracy_list(self, records=None):
+        _clear(self.acc_lay)
         if records is None:
             records = self._accuracy_cached()
         cur_code = self.acc_filter_code.currentData()
@@ -2198,17 +2198,6 @@ class CalibrationCenter(QWidget):
         QMessageBox.information(self, "已清空", "已清空全部准确度记录。")
 
     # ── 渲染入口 ──
-    def _tab_renderers(self):
-        """tab index → 渲染方法。渲染开销大, 只在可见/请求时执行。"""
-        return {
-            0: self._render_model_tab,
-            1: self._render_feedback,
-            2: self._render_accuracy,
-            3: self._render_signal_accuracy,
-            4: self._render_pnf_tab,
-            5: self._render_timeline,
-        }
-
     def _on_tab_changed(self, idx):
         if self._lazy_paused:
             return

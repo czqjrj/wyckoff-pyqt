@@ -446,15 +446,9 @@ def _cloud_push():
 
 def _active_repo_url(explicit=""):
     """解析当前生效的私有仓 URL:
-    优先当前登录账户绑定的仓库, 其次显式入参, 最后 settings 里的 profile_repo_url。"""
+    优先显式入参, 其次 settings 里的 profile_repo_url。"""
     if explicit and explicit.strip():
         return explicit.strip()
-    try:
-        acc_url = account.current_repo_url()
-        if acc_url:
-            return acc_url
-    except Exception:
-        pass
     try:
         return str(storage.load_settings().get(SK.Runtime.PROFILE_REPO_URL) or "").strip()
     except Exception:

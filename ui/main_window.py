@@ -1306,6 +1306,11 @@ class MainWindow(QMainWindow):
                         else psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal, 可在菜单里手动触发
+                # 同步后刷新自选股 UI, 确保私有数据(自选/笔记/组合)及时展示
+                try:
+                    self.reload_watchlist()
+                except Exception:
+                    pass
                 dlg.accept()
             else:
                 err.setText(msg)

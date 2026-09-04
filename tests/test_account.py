@@ -65,13 +65,11 @@ def test_login_blank_rejects(_iso):
     assert "密码为空" in msg2
 
 
-def test_login_binds_repo_url_and_current_repo_url(_iso):
-    assert acc.current_repo_url() == ""  # 未登录 → 空
+def test_login_binds_current_user(_iso):
     _seed({"alice": _entry("alice")})
-    ok, _ = acc.login("alice", "anything", "git@host:alice/priv.git")
+    ok, _ = acc.login("alice", "anything")
     assert ok
-    assert acc.current_repo_url() == "git@host:alice/priv.git"
-    assert acc.status()["repo_url"] == "git@host:alice/priv.git"
+    assert acc.current_user() == "alice"
 
 
 def test_switch_and_logout(_iso):

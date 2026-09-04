@@ -45,7 +45,6 @@ CREATE TABLE IF NOT EXISTS users (
     hash       VARCHAR(128) NOT NULL,
     display    VARCHAR(128) NOT NULL DEFAULT '',
     created_ts DOUBLE       NOT NULL DEFAULT 0,
-    repo_url   VARCHAR(512) NOT NULL DEFAULT '',
     PRIMARY KEY (username)
 ) DEFAULT CHARSET=utf8mb4;
 
@@ -127,7 +126,7 @@ def get_user(username):
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT username, salt, hash, display, created_ts, repo_url "
+                "SELECT username, salt, hash, display, created_ts "
                 "FROM users WHERE username=%s", (username,))
             row = cur.fetchone()
     if not row:
@@ -136,7 +135,6 @@ def get_user(username):
         "username": row["username"], "salt": row["salt"], "hash": row["hash"],
         "display": row["display"] or row["username"],
         "created_ts": float(row["created_ts"]),
-        "repo_url": row["repo_url"] or "",
     }
 
 
@@ -153,14 +151,13 @@ def upsert_user(record):
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO users (username, salt, hash, display, created_ts, repo_url) "
-                "VALUES (%s,%s,%s,%s,%s,%s) "
+                "INSERT INTO users (username, salt, hash, display, created_ts) "
+                "VALUES (%s,%s,%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE salt=VALUES(salt), hash=VALUES(hash), "
-                "display=VALUES(display), created_ts=VALUES(created_ts), "
-                "repo_url=VALUES(repo_url)",
+                "display=VALUES(display), created_ts=VALUES(created_ts)",
                 (record["username"], record.get("salt", ""),
                  record.get("hash", ""), record.get("display", record["username"]),
-                 record.get("created_ts", 0.0), record.get("repo_url", "")))
+                 record.get("created_ts", 0.0)))
 
 
 def rename_user(old_user, new_user, display=None):
