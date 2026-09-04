@@ -486,9 +486,7 @@ class KlineWidget(BasePlotWidget):
         btn.set_vp(0.997, 0.985)
         self._latest_btn = btn
 
-    def on_x_range_changed(self, x0, x1, source_vb=None):
-        """X 轴范围变化时更新回到最新按钮可见性。"""
-        self._update_latest_btn()
+
 
     def save_bookmark(self, idx):
         """存视图书签 (Shift+数字键 1-9)。"""

@@ -2,8 +2,8 @@
 """Wyckoff 量化交易策略系统统一入口
 提供简单的命令行界面来运行回测和网格搜索
 """
-import sys
 import os
+import sys
 
 # 添加项目根目录
 proj_root = os.path.abspath('.')
@@ -68,17 +68,17 @@ def show_help():
 
 def main():
     print_banner()
-    
+
     if len(sys.argv) < 2:
         print("请指定命令:")
         print("  backtest - 运行回测")
-        print("  grid   - 运行网格搜索")  
+        print("  grid   - 运行网格搜索")
         print("  analyze - 显示分析概览")
         print("  help   - 显示此帮助信息")
         sys.exit(1)
-    
+
     command = sys.argv[1].lower()
-    
+
     if command == "backtest" or command == "bt":
         run_backtest()
     elif command == "grid" or command == "g":
@@ -89,12 +89,12 @@ def main():
         print_banner()
         print("可用命令:")
         print("  backtest   - 运行回测")
-        print("  grid     - 运行网格搜索")  
+        print("  grid     - 运行网格搜索")
         print("  analyze  - 显示分析概览")
         sys.exit(0)
     else:
         print(f"未知命令: {command}")
-        print_usage()
+        show_help()
         sys.exit(1)
 
 if __name__ == "__main__":

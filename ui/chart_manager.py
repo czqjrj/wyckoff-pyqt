@@ -153,7 +153,6 @@ class ChartManager:
     # ── 缓存更新 ──
     def update_caches(self, r: dict, scale: int, datalen: int):
         """更新所有内部缓存 (分析完成后调用)。"""
-        code = r.get("code", "")
         self._last_kline = r.get("kline_data") or {}
         self._last_pnf = r.get("pnf_data") or {}
         self._last_ind = r.get("ind_data") or {}

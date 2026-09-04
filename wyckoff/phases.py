@@ -362,7 +362,7 @@ def _detect_ranges(df, pivots, band=None, tol=None, min_bars=None, min_touches=N
             lows = [p] if p["type"] == "low" else []
             highs = [p] if p["type"] == "high" else []
             continue
-        lo_ref = min((l["price"] for l in lows if l["idx"] not in skipped),
+        lo_ref = min((low["price"] for low in lows if low["idx"] not in skipped),
                      default=None)
         hi_ref = max((h["price"] for h in highs if h["idx"] not in skipped),
                      default=None)

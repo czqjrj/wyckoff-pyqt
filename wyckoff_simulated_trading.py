@@ -8,6 +8,7 @@
 
 import json
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import numpy as np
@@ -25,6 +26,7 @@ class SimulatedTradingSystem:
         self.watchlist = []
         self.trading_log = []
         self.strategy_performance = defaultdict(list)
+        self._data_cache = {}  # cache: symbol -> df
         # 复用优化后的策略管理器
         self.manager = WyckoffStrategyManager()
 
@@ -34,7 +36,12 @@ class SimulatedTradingSystem:
         返回 dict 或 None：{strategy, confidence, entry_idx, entry, exit, holding_return}
         """
         symbol = normalize_symbol(code)
-        df = fetch_kline(symbol, datalen=datalen, scale=240)
+
+        # 使用缓存的 K 线数据，避免重复下载
+        if symbol not in self._data_cache:
+            self._data_cache[symbol] = fetch_kline(symbol, datalen=datalen, scale=240)
+        df = self._data_cache[symbol]
+
         if len(df) < 150:
             return None
 
@@ -89,40 +96,49 @@ class SimulatedTradingSystem:
                     }
         return best
 
+    def _process_stock(self, k, stock_code, horizon, cost):
+        """处理单只股票的模拟交易"""
+        try:
+            best = self._find_best_signal(stock_code, horizon=horizon, cost=cost)
+            if best is None:
+                return k, stock_code, None
+
+            symbol = normalize_symbol(stock_code)
+            trade = {
+                "stock": stock_code,
+                "name": fetch_name(symbol),
+                "strategy": best["strategy"],
+                "confidence": best["confidence"],
+                "details": best["details"],
+                "execution_time": datetime.now().isoformat(),
+                "entry_date": best["entry_date"],
+                "exit_date": best["exit_date"],
+                "entry": best["entry"],
+                "exit": best["exit"],
+                "holding_return": best["holding_return"],
+                "horizon": horizon,
+                "status": "executed",
+            }
+            return k, stock_code, trade
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"分析 {stock_code} 出错: {type(e).__name__}: {e}", exc_info=True)
+            return k, stock_code, None
+
     def run_simulation(self, stock_pool, days=5, horizon=20, cost=0.004):
         """运行模拟交易，基于真实K线计算持有收益"""
         executed_trades = []
 
-        for k, stock_code in enumerate(stock_pool):
-            print(f"[{k + 1}/{len(stock_pool)}] 分析 {stock_code}...", flush=True)
-            try:
-                symbol = normalize_symbol(stock_code)
-                best = self._find_best_signal(stock_code, horizon=horizon, cost=cost)
-                if best is None:
-                    continue
-
-                trade = {
-                    "stock": stock_code,
-                    "name": fetch_name(symbol),
-                    "strategy": best["strategy"],
-                    "confidence": best["confidence"],
-                    "details": best["details"],
-                    "execution_time": datetime.now().isoformat(),
-                    "entry_date": best["entry_date"],
-                    "exit_date": best["exit_date"],
-                    "entry": best["entry"],
-                    "exit": best["exit"],
-                    "holding_return": best["holding_return"],
-                    "horizon": horizon,
-                    "status": "executed",
-                }
-                executed_trades.append(trade)
-
-                # 记录到分策略表现
-                self.strategy_performance[trade["strategy"]].append(trade["holding_return"])
-                print(f"  -> {trade['strategy']} 持有{best['horizon']}天 真实收益 {best['holding_return'] * 100:.2f}%")
-            except Exception as e:
-                print(f"  分析 {stock_code} 出错: {e}")
+        with ThreadPoolExecutor(max_workers=min(len(stock_pool), 4)) as executor:
+            futures = {executor.submit(self._process_stock, k, code, horizon, cost): k
+                       for k, code in enumerate(stock_pool)}
+            for future in as_completed(futures):
+                k, stock_code, trade = future.result()
+                if trade is not None:
+                    executed_trades.append(trade)
+                    self.strategy_performance[trade["strategy"]].append(trade["holding_return"])
+                    print(f"  -> {trade['strategy']} 持有{horizon}天 真实收益 {trade['holding_return'] * 100:.2f}%")
 
         self.trading_log.extend(executed_trades)
         return {

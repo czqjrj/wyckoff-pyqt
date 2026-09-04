@@ -6,7 +6,6 @@
   - 右侧策略概览按策略管理器两大策略并行统计 (纪律 / 价值吸筹)。
   - 四个数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
 """
-import time
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -21,7 +20,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QPushButton,
     QProgressBar,
     QSpinBox,
     QTableWidgetItem,
@@ -38,7 +36,6 @@ from .extra_windows import (
     retheme_children,
     theme,
 )
-
 
 # ── 表格渲染 ───────────────────────────────────────────────
 _F2 = {"buy_px", "sell_px", "last", "price", "conf"}
@@ -159,8 +156,8 @@ class _CycleThread(QThread):
         self._candidates = candidates
 
     def run(self):
-        from wyckoff.paper import run_cycle
         from wyckoff._log import log_exc
+        from wyckoff.paper import run_cycle
         settings = dict(self._settings or {})
         if self._mode == "value_accumulation":
             # 纯价值吸筹: 降低强制 conf 门槛, 让价值吸筹逻辑优先
@@ -222,9 +219,9 @@ class _QuoteThread(QThread):
         self._codes = sorted(set(codes or []))
 
     def run(self):
+        from wyckoff._log import log_exc
         from wyckoff.datasource import fetch_realtime
         from wyckoff.paper import _LOCK, float_ret, load_state, save_state
-        from wyckoff._log import log_exc
         try:
             rt = fetch_realtime(self._codes) or {}
         except Exception as e:
@@ -873,7 +870,7 @@ class PaperWindow(QDialog):
     def _export_report(self):
         from PyQt6.QtWidgets import QFileDialog
         try:
-            from wyckoff.paper import stats, load_state, equity, INIT_CASH
+            from wyckoff.paper import equity, load_state, stats
         except Exception:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -1099,15 +1096,15 @@ class PaperWindow(QDialog):
             correct = c.get("correct")
             if status == "done":
                 if correct is True:
-                    icon, ic = "✓ 正确", theme.C_UP
+                    icon, _ = "✓ 正确", theme.C_UP
                 elif correct is False:
-                    icon, ic = "✗ 错误", theme.C_DOWN
+                    icon, _ = "✗ 错误", theme.C_DOWN
                 else:
-                    icon, ic = "─ 评估中", None
+                    icon, _ = "─ 评估中", None
             elif status == "cancelled":
-                icon, ic = "✗ 已取消", theme.C_MUTED
+                icon, _ = "✗ 已取消", theme.C_MUTED
             else:
-                icon, ic = "○ 进行中", None
+                icon, _ = "○ 进行中", None
             crows.append({
                 "created_ts": c.get("created_ts", ""),
                 "symbol": c.get("symbol", ""), "name": c.get("name", ""),

@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+import wyckoff.profile_sync as psync
 from wyckoff._log import log_exc, log_msg
 from wyckoff.analysis import _ANALYSIS_CACHE, _ANALYSIS_LOCK
 from wyckoff.config import (
@@ -1338,7 +1339,6 @@ class MainWindow(QMainWindow):
 
     def _run_account_sync(self):
         """后台执行账户私有数据同步 (走 AutoSyncThread)。"""
-        import wyckoff.profile_sync as psync
 
         from .threads.auto_sync_thread import AutoSyncThread
 
@@ -1366,10 +1366,10 @@ class MainWindow(QMainWindow):
         """后台执行: 从远端仓库拉取私有数据到本地。
         仅执行 git pull + apply_profile, 不推送本地变更。
         """
-        import wyckoff.profile_sync as psync
+        from .threads.auto_sync_thread import AutoSyncThread
 
         def work():
-            # psync.pull_or_push('pull') 已经处理了确保仓库、pull 和 apply
+            import wyckoff.profile_sync as psync
             return psync.pull_or_push("pull")
 
         self._account_sync_thread = AutoSyncThread(work, self)

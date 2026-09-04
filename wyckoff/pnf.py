@@ -104,20 +104,21 @@ def _build_pnf(df: pd.DataFrame, box: float, reversal: int = 3):
     cols = []
     bar_col = [0] * n
     for i in range(1, n):
-        h, l = r(highs[i]), r(lows[i])
+        h = r(highs[i])
+        low = r(lows[i])
         if cur["type"] == "X":
             top = cur["rows"][-1]
             if h > top:
                 cur["rows"].extend(range(top + 1, h + 1))
-            elif l <= top - reversal:
+            elif low <= top - reversal:
                 cols.append(cur)
                 # 反转新列从最高 X 的下一格开始 (不与前一列同格重叠)
-                cur = mkcol("O", range(l, top))
+                cur = mkcol("O", range(low, top))
                 bar_col[i] = len(cols)
         else:
             bottom = cur["rows"][0]
-            if l < bottom:
-                cur["rows"] = list(range(l, bottom)) + cur["rows"]
+            if low < bottom:
+                cur["rows"] = list(range(low, bottom)) + cur["rows"]
             elif h >= bottom + reversal:
                 cols.append(cur)
                 # 反转新列从最低 O 的上一格开始

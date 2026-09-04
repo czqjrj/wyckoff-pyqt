@@ -149,7 +149,6 @@ class PnfTargetsRenderer:
                 col = theme.C_DOWN
             else:
                 col = theme.C_DOWN
-            alpha_mod = 1.0 if prob is not None and prob >= 0.7 else (0.7 if prob is not None and prob >= 0.5 else 0.5)
 
             plot.addItem(pg.InfiniteLine(pos=t, angle=0, pen=_pen(col, lw, style, a)))
 
@@ -197,7 +196,6 @@ class PnfTargetsRenderer:
                 col = theme.C_UP
             else:
                 col = theme.C_UP
-            alpha_mod = 1.0 if prob is not None and prob >= 0.7 else (0.7 if prob is not None and prob >= 0.5 else 0.5)
 
             plot.addItem(pg.InfiniteLine(pos=t, angle=0, pen=_pen(col, lw, style, a)))
 

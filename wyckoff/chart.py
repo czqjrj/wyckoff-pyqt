@@ -1355,7 +1355,7 @@ def plot_market(market, fig):
         total_sup = sum(sup)
         ratio = total_dem / total_sup if total_sup > 0 else 1
         if ratio >= SD_BULL:
-            tone, tc = "需求占优 · 买方积极", _UP
+            tone = "需求占优 · 买方积极"
         elif ratio <= SD_BEAR:
             tone = "供给占优 · 卖方主导"
         else:

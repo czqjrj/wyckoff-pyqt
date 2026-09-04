@@ -1,5 +1,9 @@
 """通用工具函数。"""
 
+import numpy as np
+import pandas as pd
+
+
 def locate_bar(days_or_df, date_str, nearest_before=False, max_gap=7):
     """在 K 线中定位 date_str 对应的 bar 索引; 找不到返回 None。
 

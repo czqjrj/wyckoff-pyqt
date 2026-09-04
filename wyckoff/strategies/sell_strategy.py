@@ -20,7 +20,7 @@ LPSY = "LPSY"
 
 def evaluate_sell_reason(event_type: str, reason: str = None) -> str:
     """根据事件类型评估卖出原因 (A股 多头主导)。
-    
+
     返回值含义:
     - "空头信号卖出": 触发平仓多头仓位 (针对 UTAD/LPSY)
     - "多头事件加仓信号": 不平仓，视为加仓或持有机会 (针对 Spring/Shakeout/ST/LPS)
@@ -29,14 +29,14 @@ def evaluate_sell_reason(event_type: str, reason: str = None) -> str:
     """
     if not event_type:
         return reason
-    
+
     # 情况一：空头信号 - A股 做多风险管理，触发平仓
     if event_type in [UTAD, LPSY]:
         return "空头信号卖出"
-    
+
     # 情况二：多头事件 - A股 多头主导，不平仓，甚至可以加仓
     if event_type in [SPRING, SHAKEOUT, ST, LPS]:
         return "多头事件加仓信号"
-    
+
     # 情况三：无事件类型，返回原有理由 (止盈/止损/破位)
     return reason

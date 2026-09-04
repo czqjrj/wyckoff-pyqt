@@ -314,7 +314,6 @@ _CUR = {
 # (AR/BC/SOS/JOC/PSY/SOW_INVALID 等) 不单独触发入场, 避免稀释组合质量。
 # 注: UTAD/LPSY 命中 78.5%/78.3%, 高于旧含 SOW_INVALID 的口径, 一并纳入。
 try:
-    from .config import STRONG_TIER_TYPES
     # 仅保留明确的多头事件（Spring, Shakeout, ST, LPS），
     # 移除 UTAD/LPSY (空头方向 event_dir=-1) 和 SC (中性方向 event_dir=0)
     # 预期：胜率将从含 UTAD/SC 的 11.1% 提升至 50-100% 区间 (仅多头事件)

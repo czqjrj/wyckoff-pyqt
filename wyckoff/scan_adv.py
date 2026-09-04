@@ -299,7 +299,6 @@ def scan_volume_divergence(codes, workers=6, cancel_event=None, datalen=500):
         if not np.isfinite(vr20):
             vr20 = np.nan
         hi20 = float(df["high"].iloc[-20:].max())
-        lo20 = float(df["low"].iloc[-20:].min())
         new_high = last >= hi20 * 0.995
         # 布林收口百分位 (同 screener 口径)
         bw_pct = None

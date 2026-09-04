@@ -550,9 +550,10 @@ def strength_history(sector: str, start_date: str = "2023-09-01", end_date: str 
         end_date: 结束日期 (默认 None → 今日)
     返回: DataFrame 或空 DataFrame
     """
-    import pandas as pd
-    from pathlib import Path
     from datetime import datetime
+    from pathlib import Path
+
+    import pandas as pd
 
     snap_path = Path(BOARD_SNAP_FILE)
     if not snap_path.exists():

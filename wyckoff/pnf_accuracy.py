@@ -18,7 +18,7 @@ import pandas as pd
 from wyckoff.datasource import fetch_kline
 from wyckoff.indicators import add_indicators
 from wyckoff.paths import DATA_DIR
-from wyckoff.pnf import build_pnf, pnf_history_targets, pnf_volume
+from wyckoff.pnf import build_pnf, pnf_history_targets
 
 PNF_ACC_DIR = os.path.join(DATA_DIR, "pnf_accuracy")
 PNF_ACC_LATEST = os.path.join(PNF_ACC_DIR, "pnf_latest.json")
@@ -67,7 +67,6 @@ def _gen_trend_and_range(seed: int, n_bars: int = 1600) -> pd.DataFrame:
 
 def _collect_segments(df: pd.DataFrame) -> list:
     cols, box = build_pnf(df, box_mode="pct", atr_factor=0.5)
-    vol = pnf_volume(df, cols, box)
     hist = pnf_history_targets(cols, box, max_items=20, min_gap=4)
     for h in hist:
         h["_box"] = box
@@ -334,8 +333,8 @@ def install_cron(hour=None, minute=10):
         cur = subprocess.check_output(["crontab", "-l"], stderr=subprocess.STDOUT, text=True)
     except subprocess.CalledProcessError:
         cur = ""
-    lines = [l for l in cur.splitlines()
-             if "eval_pnf_tier_accuracy" not in l and "pnf-acc-eval" not in l]
+    lines = [line for line in cur.splitlines()
+             if "eval_pnf_tier_accuracy" not in line and "pnf-acc-eval" not in line]
     if hour is not None:
         hour = max(0, min(23, int(hour)))
         minute = max(0, min(59, int(minute)))

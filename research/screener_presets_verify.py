@@ -19,16 +19,17 @@ import sys
 import time
 import warnings
 
-warnings.filterwarnings('ignore')
-sys.path.append(r"E:\wyckoff-pyqt")
-
 import numpy as np
+
+warnings.filterwarnings('ignore')
 
 from wyckoff.datasource import fetch_kline
 from wyckoff.events import detect_all
 from wyckoff.indicators import add_indicators, find_pivots
 from wyckoff.phases import judge_phase
 from wyckoff.screener import _score_technical
+
+sys.path.append(r"E:\wyckoff-pyqt")
 
 IN_STOCKS = [
     "sh600036", "sz000001", "sh601318", "sh600000", "sz000858",

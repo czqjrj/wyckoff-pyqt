@@ -6,13 +6,16 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import QMessageBox
 
+from ui import theme
+from wyckoff.paths import DATA_DIR
+
 if TYPE_CHECKING:
     from ui.main_window import MainWindow
 
 
 class ChartExporter:
     """图表导出器: 统一 K线/P&F/指标/资金流 的 PNG 导出。
-    
+
     用法:
         exporter = ChartExporter(main_window)
         exporter.export_current()  # 导出当前 Tab
@@ -52,8 +55,6 @@ class ChartExporter:
 
     def save_png(self, widget, base: str, quiet: bool = False) -> str:
         """保存单个图表 Widget 为 PNG。"""
-        from ui import theme
-        from wyckoff.paths import DATA_DIR
 
         pm = widget.grab_pixmap()
         code = self._mw._current_code or ""
@@ -103,7 +104,6 @@ class ChartExporter:
 
     def export_all(self) -> None:
         """导出所有图表。"""
-        code = self._mw._current_code or "chart"
         n = 0
         self.export_kline(quiet=True)
         n += 1
