@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QProgressBar,
     QSpinBox,
     QTableWidgetItem,
@@ -420,6 +421,8 @@ class PaperWindow(QDialog):
         tabs.addTab(self.t_ord, "订单")
         tabs.addTab(self._build_cond_tab(), "条件单")
         tabs.addTab(self._build_equity_tab(), "资金曲线")
+        self._log_page = self._build_log_tab()
+        tabs.addTab(self._log_page, "日志")
         root.addWidget(tabs, 1)
 
         # 定时器: 自动执行周期 (默认关闭)
@@ -549,6 +552,80 @@ class PaperWindow(QDialog):
         lay.addLayout(form)
         lay.addWidget(self.t_cond, 1)
         return page
+
+    def _build_log_tab(self):
+        """日志页签: 按日期查看模拟盘操作日志。"""
+        from wyckoff import paper_log
+
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(4)
+
+        # 日期选择 + 操作行
+        form = QHBoxLayout()
+        form.setSpacing(6)
+        form.addWidget(_flabel("日期"))
+        self.log_date = QComboBox()
+        dates = paper_log.get_log_dates()
+        if dates:
+            today = dates[-1]
+            for d in reversed(dates):
+                self.log_date.addItem(d)
+            self.log_date.setCurrentText(today)
+        else:
+            self.log_date.addItem("--")
+        self.log_date.setToolTip("选择日期查看当日模拟盘日志")
+        self.log_date.currentTextChanged.connect(self._reload_log)
+        form.addWidget(self.log_date)
+
+        self.btn_log_refresh = _ghost_btn("刷新")
+        self.btn_log_refresh.clicked.connect(self._reload_log)
+        form.addWidget(self.btn_log_refresh)
+        form.addStretch(1)
+
+        self.lbl_log_summary = QLabel("")
+        self.lbl_log_summary.setStyleSheet(
+            f"font-size:13px;color:{theme.C_MUTED};")
+        lay.addLayout(form)
+        lay.addWidget(self.lbl_log_summary)
+
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setStyleSheet(
+            f"font-family:'monospace';font-size:12px;"
+            f"color:{theme.C_TEXT};background:{theme.C_BG};"
+            f"border:1px solid {theme.C_BORDER};border-radius:4px;")
+        lay.addWidget(self.log_view, 1)
+
+        self._reload_log()
+        return page
+
+    def _reload_log(self):
+        """加载当前选择日期的日志到文本查看器。"""
+        from wyckoff import paper_log
+        date_str = self.log_date.currentText()
+        if not date_str or date_str == "--":
+            self.log_view.setPlainText("暂无日志")
+            self.lbl_log_summary.setText("")
+            return
+        dates = paper_log.get_log_dates()
+        if not dates:
+            self.log_view.setPlainText("暂无日志")
+            self.lbl_log_summary.setText("")
+            return
+        try:
+            report = paper_log.format_daily_report(date_str)
+        except Exception:
+            report = ""
+        self.log_view.setPlainText(report if report else "该日期暂无日志")
+        data = paper_log.get_log(date_str)
+        sm = data.get("summary", {})
+        self.lbl_log_summary.setText(
+            f"扫描 {sm.get('scan_count', 0)} · 买入 {sm.get('buy_count', 0)} · "
+            f"卖出 {sm.get('sell_count', 0)} · 条件单 {sm.get('condition_count', 0)} · "
+            f"风控拦截 {sm.get('risk_block_count', 0)} · "
+            f"再平衡 {sm.get('rebalance_count', 0)}")
 
     def _add_manual_condition(self):
         from PyQt6.QtWidgets import QMessageBox
@@ -1123,6 +1200,28 @@ class PaperWindow(QDialog):
         self.t_cond.setSortingEnabled(False)
 
         self._render_equity(st)
+        self._refresh_log_tab()
+
+    def _refresh_log_tab(self):
+        """刷新日志日期下拉框 (新增日期) 与当前查看内容。"""
+        from wyckoff import paper_log
+        try:
+            dates = paper_log.get_log_dates()
+        except Exception:
+            return
+        current = self.log_date.currentText()
+        available = [self.log_date.itemText(i)
+                     for i in range(self.log_date.count())]
+        for d in reversed(dates):
+            if d not in available:
+                self.log_date.addItem(d)
+        if dates and current in dates:
+            try:
+                self.log_date.setCurrentText(current)
+            except Exception:
+                pass
+            if self.tabs.currentWidget() is self._log_page:
+                self._reload_log()
 
     def _render_equity(self, st):
         import pyqtgraph as pg

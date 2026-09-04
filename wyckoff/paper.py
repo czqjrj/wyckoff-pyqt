@@ -36,6 +36,7 @@ except Exception:  # pragma: no cover
 
 from .paths import PAPER_FILE
 from .settings_keys import S
+from . import paper_log
 
 _LOCK = threading.RLock()
 
@@ -476,6 +477,11 @@ def _risk_blocks_entry(st, cand, price) -> bool:
     ok, msg = check_drawdown_limit(st)
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+        try:
+            paper_log.log_risk_block(cand["code"], cand.get("name", ""),
+                                     msg or "回撤超限", risk_type="drawdown")
+        except Exception:
+            pass
         return True
     # 预估 qty (与 _make_order 同口径: 按账户总权益等权, 而非剩余现金)
     mv = sum(float(p.get("last", p["buy_px"])) * p["qty"]
@@ -489,6 +495,11 @@ def _risk_blocks_entry(st, cand, price) -> bool:
     ok, msg = check_risk_budget(st, cand["code"], entry, stop, qty)
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+        try:
+            paper_log.log_risk_block(cand["code"], cand.get("name", ""),
+                                     msg or "风险预算超限", risk_type="risk_budget")
+        except Exception:
+            pass
         return True
     sector = cand.get("sector", "")
     if sector:
@@ -496,14 +507,29 @@ def _risk_blocks_entry(st, cand, price) -> bool:
         ok, msg = check_sector_concentration(st, cand["code"], sector, new_mv, {})
         if not ok:
             st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+            try:
+                paper_log.log_risk_block(cand["code"], cand.get("name", ""),
+                                         msg or "行业集中度超限", risk_type="sector")
+            except Exception:
+                pass
             return True
         ok, msg = check_single_concentration(st, cand["code"], new_mv, {})
         if not ok:
             st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+            try:
+                paper_log.log_risk_block(cand["code"], cand.get("name", ""),
+                                         msg or "单股集中度超限", risk_type="single")
+            except Exception:
+                pass
             return True
     ok, msg = check_capital_usage(st, entry * qty + entry * qty * _CUR["cost"])
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
+        try:
+            paper_log.log_risk_block(cand["code"], cand.get("name", ""),
+                                     msg or "资金利用率超限", risk_type="capital")
+        except Exception:
+            pass
         return True
     return False
 
@@ -1707,6 +1733,12 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
                 # buy_price: 我们在 pick_candidates 中设置 price = last * 1.002 (略高于当前价)
                 # 触发意味着 last >= price，所以 correct=True
                 c["correct"] = True  # buy_price 已触发突破
+                try:
+                    paper_log.log_condition_fired(
+                        c["symbol"], c.get("name", ""), c["kind"],
+                        c.get("price"), last, action="买入", reason="价格触发")
+                except Exception:
+                    pass
     else:
         if pos is None:
             pos = _find_pos(st, c["symbol"])
@@ -1730,6 +1762,12 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
         c["matched_price"] = sell_price
         c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
         c["status"] = "done"
+        try:
+            paper_log.log_condition_fired(
+                c["symbol"], c.get("name", ""), c["kind"],
+                c.get("price"), last, action="卖出", reason=f"条件单:{c['kind']}")
+        except Exception:
+            pass
 
         # 判断卖出条件单是否正确
         c["correct"] = _judge_condition_correct(
@@ -1762,6 +1800,15 @@ def fill_buy(st, order, event_type: str = None):
     _create_position_conditions(st, order["symbol"], name=order.get("name", ""),
                                 buy_px=price)
     save_state(st)
+    try:
+        paper_log.log_buy(
+            symbol=order["symbol"], name=order.get("name", ""),
+            qty=qty, price=price, conf=order.get("conf", 0),
+            strategy=order.get("strategy", ""), event_type=event_type or "",
+            sector=order.get("sector", ""), reason=order.get("reason", "买入")
+        )
+    except Exception:
+        pass
     return order, "成交"
 
 
@@ -1876,6 +1923,11 @@ def _rebalance_portfolio(st, df_by_code):
             "qty": qty, "price": round(cost, 3), "type": "再平衡加仓",
             "conf": pos.get("conf", 0), "side": "buy", "date": "",
         })
+        try:
+            paper_log.log_rebalance(sym, pos.get("name", ""), qty,
+                                    round(cost, 3), old_qty, pos["qty"])
+        except Exception:
+            pass
         rebalanced += 1
     return rebalanced
 
@@ -1910,6 +1962,16 @@ def close_position(st, pos, sell_price, reason, event_type=None):
         "equity": round(equity(st, {}), 2),
     })
     save_state(st)
+    try:
+        paper_log.log_sell(
+            symbol=pos["symbol"], name=pos.get("name", ""),
+            qty=pos["qty"], buy_price=pos["buy_px"], sell_price=price,
+            reason=reason, ret=ret_total,
+            bars_held=int(pos.get("entry_bars", 0)),
+            strategy=pos.get("strategy", ""), event_type=pos.get("event_type", "")
+        )
+    except Exception:
+        pass
 
 
 def force_close_position(st, symbol: str, reason: str = "手动平仓"):
@@ -2287,6 +2349,13 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
     #    消除资金利用率不足(~66%)与单仓过度集中。
     _rebalance_portfolio(st, df_by_code)
     save_state(st)
+    try:
+        paper_log.log_account_snapshot(
+            equity_value=equity(st, {}), cash=st["cash"],
+            positions_count=len(st["positions"]),
+            closed_count=len(st["closed"]))
+    except Exception:
+        pass
     return stats(st)
 
 
@@ -2319,6 +2388,12 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
         cand = []
     cand.sort(key=lambda e: (-int(e.get("conf", 0) or 0), e.get("code", "")))
     st["candidates"] = cand
+    try:
+        paper_log.log_scan(
+            scan_count=st['scan_count'], codes_scanned=n_codes,
+            candidates_found=len(cand), candidates=cand)
+    except Exception:
+        pass
 
     label = "策略管理器扫描(纪律+价值吸筹)"
     result_str = (f"{label}扫描: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
