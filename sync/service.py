@@ -8,6 +8,7 @@ import os
 import time
 
 from . import transport
+from . import cloud
 from .bundle import export_bundle, import_bundle, machine_id
 
 MAX_PUSH_RETRY = 2
@@ -73,7 +74,23 @@ def setup(url, username="", password=""):
 
 
 def pull(retrain=False):
-    """拉取远端 canonical 数据合并进本地库。返回结果 dict。"""
+    """拉取远端 canonical 数据合并进本地库。返回结果 dict。
+
+    云后端优先 (单行原子 upsert), 否则回退 Git。
+    """
+    if cloud.enabled():
+        if transport.no_net():
+            return {"skipped": "WYCKOFF_NO_NET=1"}
+        remote = cloud.read_canonical()
+        counts = {}
+        if remote.get("signals.json") or remote.get("feedback.json"):
+            counts = import_bundle({
+                "signals": remote.get("signals.json") or [],
+                "feedback": remote.get("feedback.json") or [],
+                "model": remote.get("model.json"),
+            })
+        _mark_sync(counts)
+        return counts
     url = configured_url()
     repo, branch = transport.ensure_repo(url)
     if transport.no_net():
@@ -92,7 +109,26 @@ def pull(retrain=False):
 
 
 def push():
-    """本地数据导出覆盖 canonical 文件并推送。"""
+    """本地数据导出覆盖 canonical 文件并推送。
+
+    云后端优先 (单行原子 upsert), 否则回退 Git。
+    """
+    if cloud.enabled():
+        if transport.no_net():
+            return {"skipped": "WYCKOFF_NO_NET=1"}
+        bundle = export_bundle(include_model=True)
+        meta = cloud.make_meta(
+            {machine_id(): time.time()},
+            len(bundle["signals"]),
+            len(bundle["feedback"]),
+        )
+        cloud.write_canonical({
+            "signals.json": bundle["signals"],
+            "feedback.json": bundle["feedback"],
+            "model.json": bundle["model"],
+            "meta.json": meta,
+        })
+        return {"pushed": True}
     url = configured_url()
     repo, branch = transport.ensure_repo(url)
     if transport.no_net():
@@ -117,7 +153,57 @@ def push():
 
 
 def sync(retrain=True):
-    """完整同步。返回汇总 dict (含各步计数/警告)。"""
+    """完整同步。返回汇总 dict (含各步计数/警告)。
+
+    云后端优先: 读远端→合并进本地→(变更则重训)→写回合并后的全量。
+    单行原子写回, 无需 Git 的冲突重试。
+    """
+    if cloud.enabled():
+        if transport.no_net():
+            return {"skipped": "WYCKOFF_NO_NET=1"}
+        result = {"cloud": True, "retrained": False}
+        remote = cloud.read_canonical()
+        counts = import_bundle({
+            "signals": remote.get("signals.json") or [],
+            "feedback": remote.get("feedback.json") or [],
+            "model": remote.get("model.json"),
+        })
+        result.update(counts)
+        n_changed = (counts.get("signals_new", 0) + counts.get("signals_upd", 0)
+                     + counts.get("feedback_new", 0) + counts.get("feedback_upd", 0))
+        final_model = None
+        if n_changed and retrain:
+            from wyckoff.online_model import train_model
+            state = train_model()
+            result["retrained"] = bool(state)
+            result["model_metrics"] = {
+                k: state.get(k)
+                for k in ("n_labels", "n_train", "auc_oos")
+                if k in state
+            }
+            final_model = state or None
+        else:
+            from wyckoff.online_model import _load_state
+            from wyckoff.paths import ONLINE_MODEL_FILE
+            if os.path.exists(ONLINE_MODEL_FILE):
+                final_model = _load_state()
+            else:
+                final_model = None
+        bundle = export_bundle(include_model=False)
+        meta = cloud.make_meta(
+            {machine_id(): time.time()},
+            len(bundle["signals"]),
+            len(bundle["feedback"]),
+        )
+        cloud.write_canonical({
+            "signals.json": bundle["signals"],
+            "feedback.json": bundle["feedback"],
+            "model.json": final_model,
+            "meta.json": meta,
+        })
+        result["ok"] = True
+        _mark_sync(result)
+        return result
     url = configured_url()
     if not url:
         raise transport.SyncError("未配置校准仓库 URL (先执行 setup)")
@@ -199,7 +285,10 @@ def _mark_sync(extra):
 
 
 def status():
-    """汇总当前同步状态 (不触发网络写操作; fetch 失败降级为本地信息)。"""
+    """汇总当前同步状态 (不触发网络写操作; fetch 失败降级为本地信息)。
+
+    云后端优先 (读共享 meta), 否则回退 Git。
+    """
     s = _settings()
     st = {
         "url": str(s.get("calib_repo_url") or ""),
@@ -209,6 +298,24 @@ def status():
         "remote_meta": None,
         "feat_version_warn": None,
     }
+    if cloud.enabled() and not transport.no_net():
+        st["cloud"] = True
+        try:
+            meta = cloud.remote_meta()
+            st["remote_meta"] = meta
+            if isinstance(meta, dict) and isinstance(meta.get("counts"), dict):
+                st["remote_counts"] = meta["counts"]
+                contributors = meta.get("contributors") or {}
+                st["n_contributors"] = len(contributors)
+            if st["remote_meta"]:
+                from .merge import SCHEMA_VERSION
+                if int(st["remote_meta"].get("schema") or 0) > SCHEMA_VERSION:
+                    st["feat_version_warn"] = (
+                        f"远端 schema v{st['remote_meta']['schema']} "
+                        f"高于本地 v{SCHEMA_VERSION}, 请先升级程序再同步")
+        except Exception as e:
+            st["fetch_error"] = str(e)[:200]
+        return st
     rdir = transport.repo_dir()
     st["repo_cloned"] = os.path.isdir(os.path.join(rdir, ".git"))
     st["remote_counts"] = {"signals": 0, "feedback": 0}

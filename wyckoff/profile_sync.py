@@ -26,6 +26,7 @@ import uuid
 from . import account, storage
 from . import paths as P
 from . import settings_keys as SK
+from . import cloud_db
 from ._shared import atomic_write_json
 
 DATA_DIR = P.DATA_DIR
@@ -370,6 +371,79 @@ def _no_net():
     return os.environ.get(NO_NET_ENV, "").strip() in ("1", "true", "TRUE")
 
 
+def _cloud_enabled():
+    """MySQL 云后端可用: 在线 + 已登录账户 (按用户隔离) + 可连通。"""
+    try:
+        if not account.current_user():
+            return False
+        return cloud_db.enabled()
+    except Exception:
+        return False
+
+
+def _cloud_sync_once():
+    """用 MySQL 作为远端存储执行一次 LWW 合并同步 (读取远端→合并→写本机→回写)。
+
+    与 git 版 `sync_once` 同一合并语义, 仅传输层不同: 远端为
+    profile_items 表中该用户名下的各类型条目。
+    """
+    user = account.current_user()
+    local = collect_profile()
+    try:
+        cloud_db.ensure_schema()
+    except Exception:
+        return {"ok": False, "error": "云库不可达"}
+    types = {}
+    for tname in TYPES:
+        lt = (local.get("types", {}).get(tname, {}) or {}).get("items", {})
+        try:
+            rt = cloud_db.read_profile_items(user, tname)
+        except Exception:
+            rt = {}
+        types[tname] = {"items": _merge_items(lt, rt)}
+    merged = {"schema": SCHEMA, "machine": _machine_id(),
+              "exported_ts": time.time(), "types": types}
+    apply_profile(merged)
+    # 回写该用户各类型条目 (整体覆盖, 与合并结果一致)
+    for tname in TYPES:
+        try:
+            items = merged.get("types", {}).get(tname, {}).get("items", {})
+            cloud_db.write_profile_items(user, tname, items)
+        except Exception:
+            return {"ok": False, "error": f"云写入失败: {tname}"}
+    return {"ok": True}
+
+
+def _cloud_pull():
+    """拉取云端合并结果应用到本机 (不强制回写)。"""
+    user = account.current_user()
+    local = collect_profile()
+    types = {}
+    for tname in TYPES:
+        lt = (local.get("types", {}).get(tname, {}) or {}).get("items", {})
+        try:
+            rt = cloud_db.read_profile_items(user, tname)
+        except Exception:
+            rt = {}
+        types[tname] = {"items": _merge_items(lt, rt)}
+    apply_profile({"schema": SCHEMA, "machine": _machine_id(),
+                   "exported_ts": time.time(), "types": types})
+    return {"ok": True}
+
+
+def _cloud_push():
+    """把本机当前数据整体写入云端 (含删除 tombstone)。"""
+    user = account.current_user()
+    merged = collect_profile()
+    for tname in TYPES:
+        try:
+            items = merged.get("types", {}).get(tname, {}).get("items", {})
+            cloud_db.write_profile_items(user, tname, items)
+        except Exception:
+            return {"ok": False, "error": f"云写入失败: {tname}"}
+    return {"ok": True}
+
+
 def _active_repo_url(explicit=""):
     """解析当前生效的私有仓 URL:
     优先当前登录账户绑定的仓库, 其次显式入参, 最后 settings 里的 profile_repo_url。"""
@@ -419,6 +493,9 @@ def setup(url):
     """
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
+    if _cloud_enabled():
+        # 云后端无需 clone 私有仓: 直接按当前用户做一次 LWW 合并同步。
+        return _cloud_sync_once()
     url = _active_repo_url(url)
     if not url:
         return {"ok": False, "error": "缺少仓库 URL (请先登录账户或在设置中填写)"}
@@ -490,9 +567,14 @@ def _ensure_remote_url():
 
 
 def sync_once():
-    """拉取远端 → 与本机合并 → 写本机 → 提交推送。"""
+    """拉取远端 → 与本机合并 → 写本机 → 提交推送。
+
+    云后端可用时走 MySQL (按当前登录用户隔离), 否则走 Git。
+    """
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
+    if _cloud_enabled():
+        return _cloud_sync_once()
     try:
         _ensure_repo()
         _ensure_remote_url()
@@ -517,6 +599,10 @@ def sync_once():
 def pull_or_push(mode):
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
+    if _cloud_enabled():
+        if mode == "pull":
+            return _cloud_pull()
+        return _cloud_push()
     try:
         _ensure_repo()
         _ensure_remote_url()

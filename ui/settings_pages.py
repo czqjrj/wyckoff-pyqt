@@ -308,7 +308,7 @@ class GeneralPage(SettingsPage):
         row += 1
 
         self.ed_profile_user = QLineEdit()
-        self.ed_profile_user.setPlaceholderText("账户名 (如 GitHub 用户名)")
+        self.ed_profile_user.setPlaceholderText("账户名")
         grid.addWidget(QLabel("账户:"), row, 0)
         grid.addWidget(self.ed_profile_user, row, 1)
         row += 1
@@ -318,17 +318,6 @@ class GeneralPage(SettingsPage):
         self.ed_profile_pass.setPlaceholderText("密码 (至少 6 位)")
         grid.addWidget(QLabel("密码:"), row, 0)
         grid.addWidget(self.ed_profile_pass, row, 1)
-        row += 1
-
-        self.ed_profile_url = QLineEdit(str(self._s.get("profile_repo_url", "") or ""))
-        self.ed_profile_url.setPlaceholderText(
-            "账户私有 Git 仓地址, 如 git@github.com:user/wyckoff-profile.git (可留空)")
-        self.ed_profile_url.setToolTip(
-            "同一账户多台设备通过该私有仓同步 UI 布局/主题/自选/候选/笔记/组合/模拟盘;\n"
-            "AI Key 等敏感凭据不会上传。")
-        self.ed_profile_url.setReadOnly(True)
-        grid.addWidget(QLabel("仓库地址:"), row, 0)
-        grid.addWidget(self.ed_profile_url, row, 1)
         row += 1
 
         self.cb_profile_sync = QCheckBox("启用账户私有数据同步")
@@ -342,15 +331,14 @@ class GeneralPage(SettingsPage):
         self._profile_login_btn.clicked.connect(self._on_profile_login)
         btns.addWidget(self._profile_login_btn)
         self._profile_register_btn = QPushButton("注册")
-        self._profile_register_btn.setToolTip("注册新账户 (写登录仓登记用户名密码)")
+        self._profile_register_btn.setToolTip("注册新账户 (云端登记用户名密码)")
         self._profile_register_btn.clicked.connect(self._on_profile_register)
         btns.addWidget(self._profile_register_btn)
         self._profile_logout_btn = QPushButton("退出")
-        self._profile_logout_btn.setToolTip("清除本机登录态 (保留账户档案)")
-        self._profile_logout_btn.clicked.connect(self._on_profile_logout)
+        self._profile_logout_btn.setToolTip("清除本机登录态 (保留账户云端档案)")
         btns.addWidget(self._profile_logout_btn)
         self._profile_sync_btn = QPushButton("立即同步")
-        self._profile_sync_btn.setToolTip("拉取远端 → 与本机合并 (逐条目+删除) → 写回本机 → 推送")
+        self._profile_sync_btn.setToolTip("云端多设备同步: 拉取远端 → 与本机合并 (逐条目+删除) → 写回本机 → 推送")
         self._profile_sync_btn.clicked.connect(self._on_profile_sync_now)
         btns.addWidget(self._profile_sync_btn)
         self._profile_sync_status = QLabel("")
@@ -370,20 +358,17 @@ class GeneralPage(SettingsPage):
             st = acc.status()
             if st.get("logged_in"):
                 self._profile_login_label.setText(
-                    f"已登录: {st['current']}  ({st.get('repo_url') or '未绑定仓库'})")
+                    f"已登录: {st['current']}  (云端同步)")
                 self.ed_profile_user.setText(st["current"])
-                self.ed_profile_url.setText(st.get("repo_url") or self.ed_profile_url.text())
                 self.ed_profile_user.setEnabled(False)
                 self.ed_profile_pass.setEnabled(False)
-                self.ed_profile_url.setEnabled(False)
                 self._profile_login_btn.setEnabled(False)
                 self._profile_register_btn.setEnabled(False)
                 self._profile_logout_btn.setEnabled(True)
             else:
-                self._profile_login_label.setText("未登录。登录后可在多台设备间同步账户私有数据。")
+                self._profile_login_label.setText("未登录。登录后可在多台设备间通过云端同步账户私有数据。")
                 self.ed_profile_user.setEnabled(True)
                 self.ed_profile_pass.setEnabled(True)
-                self.ed_profile_url.setEnabled(True)
                 self._profile_login_btn.setEnabled(True)
                 self._profile_register_btn.setEnabled(True)
                 self._profile_logout_btn.setEnabled(False)
@@ -391,14 +376,12 @@ class GeneralPage(SettingsPage):
             self._profile_login_label.setText("未登录")
 
     def _on_profile_login(self):
-        """登录: 校验密码 (离线跳过) 并登记账户档案, 绑定私有仓地址。"""
+        """登录: 校验密码并登记账户登录态 (走云端后端)。"""
         try:
             import wyckoff.account as acc
             user = self.ed_profile_user.text().strip()
-            url = self.ed_profile_url.text().strip()
-            ok, msg = acc.login(user, self.ed_profile_pass.text(), url)
+            ok, msg = acc.login(user, self.ed_profile_pass.text())
             if ok:
-                self._s["profile_repo_url"] = url
                 self._profile_sync_status.setText(msg)
             else:
                 self._profile_sync_status.setText(f"登录失败: {msg}")
@@ -407,14 +390,12 @@ class GeneralPage(SettingsPage):
             self._profile_sync_status.setText(f"登录异常: {e}")
 
     def _on_profile_register(self):
-        """注册新账户 (用户名+密码) 并绑定私有仓地址, 自动登录。"""
+        """注册新账户 (用户名+密码) 并自动登录。"""
         try:
             import wyckoff.account as acc
             user = self.ed_profile_user.text().strip()
-            url = self.ed_profile_url.text().strip()
-            ok, msg = acc.register(user, self.ed_profile_pass.text(), url)
+            ok, msg = acc.register(user, self.ed_profile_pass.text())
             if ok:
-                self._s["profile_repo_url"] = url
                 self._profile_sync_status.setText(msg)
             else:
                 self._profile_sync_status.setText(f"注册失败: {msg}")
@@ -434,17 +415,20 @@ class GeneralPage(SettingsPage):
     def _on_profile_sync_now(self):
         """立即执行账户私有数据同步 (低频操作, 同步执行并刷新状态行)。"""
         try:
+            import wyckoff.account as acc
+            import wyckoff.cloud_db as cdb
             import wyckoff.profile_sync as psync
-            if not psync.status().get("configured"):
+            if cdb.enabled():
+                # 云端后端: sync_once 同时覆盖首次同步与增量合并
+                result = psync.sync_once()
+            elif not psync.status().get("configured"):
                 result = psync.setup("")
             else:
                 result = psync.sync_once()
             if result.get("ok"):
-                # 同步成功后把 URL 落盘 (clone 成功后 remote 已存)
-                from wyckoff.storage import save_settings
-                self._s["profile_repo_url"] = psync._active_repo_url()
                 self._s["profile_sync"] = True
                 self.cb_profile_sync.setChecked(True)
+                from wyckoff.storage import save_settings
                 save_settings(dict(self._s))
                 self._profile_sync_status.setText("同步成功")
             else:
@@ -469,7 +453,6 @@ class GeneralPage(SettingsPage):
             "scan_interval": self.sp_scan.value(),
             "auto_sync": self.cb_autosync.isChecked(),
             "sync_debounce": self.sp_sync_debounce.value(),
-            "profile_repo_url": self.ed_profile_url.text().strip() or self._s.get("profile_repo_url", ""),
             "profile_sync": self.cb_profile_sync.isChecked(),
             "confirm_enabled": self.cb_confirm.isChecked(),
             "watch_width": self.sp_watch_w.value(),

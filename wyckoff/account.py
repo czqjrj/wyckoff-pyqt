@@ -28,6 +28,7 @@ import time
 
 from ._shared import atomic_write_json
 from .paths import DATA_DIR
+from . import cloud_db
 
 NO_NET_ENV = "WYCKOFF_NO_NET"
 
@@ -48,6 +49,14 @@ _PBKDF2_ITER = 120_000
 
 def _no_net():
     return os.environ.get(NO_NET_ENV, "").strip() in ("1", "true", "TRUE")
+
+
+def _cloud_enabled():
+    """MySQL 云后端可用 (在线且可连通)。失败静默回退 Git/本地缓存。"""
+    try:
+        return cloud_db.enabled()
+    except Exception:
+        return False
 
 
 def _hash_password(password, salt):
@@ -200,7 +209,22 @@ def register(user, password, repo_url=""):
     if not password or len(password) < _MIN_PASSWORD:
         return False, f"密码至少 {_MIN_PASSWORD} 位"
     if _no_net():
-        return False, "离线模式, 无法注册到共享登录仓"
+        return False, "离线模式, 无法注册到共享账户"
+    now = time.time()
+    salt = _new_salt()
+    h = _hash_password(password, salt)
+    if _cloud_enabled():
+        try:
+            if cloud_db.get_user(user):
+                return False, "用户名已存在"
+            cloud_db.upsert_user({
+                "username": user, "salt": salt, "hash": h,
+                "display": user, "created_ts": now, "repo_url": repo_url,
+            })
+        except RuntimeError as e:
+            return False, f"云账户不可达: {e}"
+        _cache_login(user, now, repo_url)
+        return True, "注册成功并已登录"
     try:
         _ensure_repo()
     except RuntimeError as e:
@@ -209,9 +233,6 @@ def register(user, password, repo_url=""):
     existing = _accounts_from_node(node)
     if user in existing:
         return False, "用户名已存在"
-    now = time.time()
-    salt = _new_salt()
-    h = _hash_password(password, salt)
     node.setdefault("users", {})[user] = {
         "salt": salt, "hash": h,
         "display": user, "created_ts": now,
@@ -260,11 +281,22 @@ def login(user, password, repo_url=None):
     now = time.time()
     node = {}
     if not _no_net():
-        try:
-            _ensure_repo()
-            node = _read_node_default()
-        except RuntimeError as e:
-            return False, f"仓库不可达: {e}"
+        if _cloud_enabled():
+            try:
+                rec = cloud_db.get_user(user)
+                if rec is not None:
+                    if not _verify_password(password, rec):
+                        return False, "密码错误"
+                    _cache_login(user, now, repo_url or rec.get("repo_url", ""))
+                    return True, "登录成功"
+            except RuntimeError as e:
+                return False, f"云账户不可达: {e}"
+        else:
+            try:
+                _ensure_repo()
+                node = _read_node_default()
+            except RuntimeError as e:
+                return False, f"仓库不可达: {e}"
     users = _accounts_from_node(node)
     if user in users:
         if not _verify_password(password, users[user]):
@@ -347,7 +379,23 @@ def change_password(user, old_password, new_password):
     if not new_password or len(new_password) < _MIN_PASSWORD:
         return False, f"新密码至少 {_MIN_PASSWORD} 位"
     if _no_net():
-        return False, "离线模式, 无法修改密码(需写仓)"
+        return False, "离线模式, 无法修改密码"
+    if _cloud_enabled():
+        try:
+            rec = cloud_db.get_user(user)
+        except RuntimeError as e:
+            return False, f"云账户不可达: {e}"
+        if not rec:
+            return False, "用户不存在"
+        if not _verify_password(old_password, rec):
+            return False, "旧密码错误"
+        salt = _new_salt()
+        rec["salt"], rec["hash"] = salt, _hash_password(new_password, salt)
+        try:
+            cloud_db.upsert_user(rec)
+        except RuntimeError as e:
+            return False, str(e)
+        return True, "密码已修改"
     try:
         _ensure_repo()
     except RuntimeError as e:
@@ -377,45 +425,61 @@ def change_username(old_user, new_user, password):
     if old_user == new_user:
         return False, "新旧用户名相同"
     if _no_net():
-        return False, "离线模式, 无法修改用户名(需写仓)"
-    try:
-        _ensure_repo()
-    except RuntimeError as e:
-        return False, f"仓库不可达: {e}"
-    node = _read_node_default()
-    users = _accounts_from_node(node)
-    rec = users.get(old_user)
-    if not rec:
-        return False, "用户不存在"
-    if not _verify_password(password, rec):
-        return False, "密码错误"
-    if new_user in users:
-        return False, "新用户名已存在"
-    # 迁移 profiles 文件
-    old_p = _profile_path(old_user)
-    new_p = _profile_path(new_user)
-    os.makedirs(os.path.dirname(new_p), exist_ok=True)
-    bundle = {}
-    try:
-        with open(old_p, encoding="utf-8") as f:
-            bundle = json.load(f)
-    except Exception:
-        pass
-    atomic_write_json(new_p, bundle)
-    if os.path.exists(old_p):
-        os.remove(old_p)
-    # accounts.json 键改名
-    users[new_user] = users.pop(old_user)
-    users[new_user]["display"] = new_user
-    _git(["pull", "--no-rebase"], cwd=ACCOUNT_REPO_DIR, check=False)
-    atomic_write_json(os.path.join(ACCOUNT_REPO_DIR, _ACCOUNTS_NODE), node)
-    atomic_write_json(new_p, bundle)
-    _git(["add", "-A"], cwd=ACCOUNT_REPO_DIR)
-    _git(["commit", "-m", f"rename: {old_user}->{new_user}"],
-         cwd=ACCOUNT_REPO_DIR, check=False)
-    out, rc = _git(["push", "origin", "main"], cwd=ACCOUNT_REPO_DIR, check=False)
-    if rc != 0:
-        return False, (out or "").strip() or "推送失败"
+        return False, "离线模式, 无法修改用户名"
+    if _cloud_enabled():
+        try:
+            rec = cloud_db.get_user(old_user)
+        except RuntimeError as e:
+            return False, f"云账户不可达: {e}"
+        if not rec:
+            return False, "用户不存在"
+        if not _verify_password(password, rec):
+            return False, "密码错误"
+        if cloud_db.get_user(new_user):
+            return False, "新用户名已存在"
+        try:
+            cloud_db.rename_user(old_user, new_user, display=new_user)
+        except RuntimeError as e:
+            return False, str(e)
+    else:
+        try:
+            _ensure_repo()
+        except RuntimeError as e:
+            return False, f"仓库不可达: {e}"
+        node = _read_node_default()
+        users = _accounts_from_node(node)
+        rec = users.get(old_user)
+        if not rec:
+            return False, "用户不存在"
+        if not _verify_password(password, rec):
+            return False, "密码错误"
+        if new_user in users:
+            return False, "新用户名已存在"
+        # 迁移 profiles 文件
+        old_p = _profile_path(old_user)
+        new_p = _profile_path(new_user)
+        os.makedirs(os.path.dirname(new_p), exist_ok=True)
+        bundle = {}
+        try:
+            with open(old_p, encoding="utf-8") as f:
+                bundle = json.load(f)
+        except Exception:
+            pass
+        atomic_write_json(new_p, bundle)
+        if os.path.exists(old_p):
+            os.remove(old_p)
+        # accounts.json 键改名
+        users[new_user] = users.pop(old_user)
+        users[new_user]["display"] = new_user
+        _git(["pull", "--no-rebase"], cwd=ACCOUNT_REPO_DIR, check=False)
+        atomic_write_json(os.path.join(ACCOUNT_REPO_DIR, _ACCOUNTS_NODE), node)
+        atomic_write_json(new_p, bundle)
+        _git(["add", "-A"], cwd=ACCOUNT_REPO_DIR)
+        _git(["commit", "-m", f"rename: {old_user}->{new_user}"],
+             cwd=ACCOUNT_REPO_DIR, check=False)
+        out, rc = _git(["push", "origin", "main"], cwd=ACCOUNT_REPO_DIR, check=False)
+        if rc != 0:
+            return False, (out or "").strip() or "推送失败"
     # 更新本机登录态键
     state = load_accounts()
     acts = state.get("accounts", {})

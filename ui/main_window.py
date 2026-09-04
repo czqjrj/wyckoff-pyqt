@@ -1217,9 +1217,9 @@ class MainWindow(QMainWindow):
             if st.get("logged_in"):
                 self._account_btn.setText(str(st.get("current", "登录")))
                 self._sync_btn.setEnabled(True)
-                self._sync_btn.setToolTip("同步账户私有数据 (推送到远端 + 拉取从远端)")
+                self._sync_btn.setToolTip("同步账户私有数据 (云端上行 + 下行)")
                 self._pull_btn.setEnabled(True)
-                self._pull_btn.setToolTip("从远端仓库拉取私有数据到本地")
+                self._pull_btn.setToolTip("从云端下载私有数据到本地")
             else:
                 self._account_btn.setText("登录")
                 self._sync_btn.setEnabled(False)
@@ -1250,7 +1250,7 @@ class MainWindow(QMainWindow):
             self._status(f"账户操作异常: {e}")
 
     def _open_login_dialog(self):
-        """弹出登录对话框: 账户名 + 密码 (+ 可选私有档案仓地址) + 登录/注册。"""
+        """弹出登录对话框: 账户名 + 密码 + 登录/注册 (走 MySQL 云后端)。"""
         from PyQt6.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
         from . import theme
@@ -1261,7 +1261,7 @@ class MainWindow(QMainWindow):
         lay.setSpacing(10)
         tip = QLabel("登录后可在多台设备间同步账户私有数据 "
                      "(UI 布局 / 自选 / 候选 / 笔记 / 组合 / 模拟盘)。\n"
-                     "AI Key 等敏感凭据不会上传。")
+                     "通过云端数据库 (MySQL) 多设备同步, AI Key 等敏感凭据不会上传。")
         tip.setWordWrap(True)
         tip.setStyleSheet(f"color:{theme.C_MUTED};")
         lay.addWidget(tip)
@@ -1269,7 +1269,7 @@ class MainWindow(QMainWindow):
         lab = QLabel("账户名:")
         lay.addWidget(lab)
         ed_user = QLineEdit()
-        ed_user.setPlaceholderText("如 GitHub 用户名")
+        ed_user.setPlaceholderText("用户名")
         lay.addWidget(ed_user)
 
         lab = QLabel("密码:")
@@ -1278,13 +1278,6 @@ class MainWindow(QMainWindow):
         ed_pass.setEchoMode(QLineEdit.EchoMode.Password)
         ed_pass.setPlaceholderText("至少 6 位")
         lay.addWidget(ed_pass)
-
-        lab = QLabel("账户私有 Git 仓库地址 (可留空):")
-        lay.addWidget(lab)
-        ed_url = QLineEdit("git@github.com:czqjrj/wyckoff-account.git")
-        ed_url.setPlaceholderText("git@github.com:user/wyckoff-profile.git")
-        ed_url.setReadOnly(True)
-        lay.addWidget(ed_url)
 
         err = QLabel("")
         err.setWordWrap(True)
@@ -1302,15 +1295,15 @@ class MainWindow(QMainWindow):
         btns.addWidget(btn_cancel)
         lay.addLayout(btns)
 
-        # 账户私有仓地址不预填/不写死: 由用户自行输入自己的仓库地址
+        # 走云端后端登录/注册, 成功后执行一次同步 (云端或 Git 回退都由 sync_once 处理)
         def _login():
             from wyckoff import account
-            ok, msg = account.login(
-                ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
+            ok, msg = account.login(ed_user.text().strip(), ed_pass.text())
             if ok:
-                # 自动初始化/应用 profile sync
+                # 自动初始化/执行账户数据同步 (git 首次需 setup, sync_once 内部回退)
                 try:
-                    psync.setup(account.current_repo_url())
+                    res = psync.setup("") if not psync.status().get("configured") \
+                        else psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal, 可在菜单里手动触发
                 dlg.accept()
@@ -1319,12 +1312,12 @@ class MainWindow(QMainWindow):
 
         def _register():
             from wyckoff import account
-            ok, msg = account.register(
-                ed_user.text().strip(), ed_pass.text(), ed_url.text().strip())
+            ok, msg = account.register(ed_user.text().strip(), ed_pass.text())
             if ok:
-                # 注册成功后自动绑定仓并初始化 sync
+                # 注册成功后自动执行一次数据同步
                 try:
-                    psync.setup(account.current_repo_url())
+                    res = psync.setup("") if not psync.status().get("configured") \
+                        else psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal
                 dlg.accept()
@@ -1343,6 +1336,11 @@ class MainWindow(QMainWindow):
         from .threads.auto_sync_thread import AutoSyncThread
 
         def work():
+            from wyckoff import cloud_db
+            if cloud_db.enabled():
+                # 云端后端: sync_once 已同时覆盖首次同步与增量合并
+                return psync.sync_once()
+            # Git 回退: 未配置时先 setup, 已配置则双向同步
             if not psync.status().get("configured"):
                 return psync.setup("")
             return psync.sync_once()
