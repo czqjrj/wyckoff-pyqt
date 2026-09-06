@@ -565,6 +565,24 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
         d = dirs[j]
         # 使用动态窗口: 根据事件类型确定最佳确认期
         dyn_window = DYNAMIC_WINDOW.get(t, DYNAMIC_WINDOW["default"])
+        
+        # 动态调整窗口: 根据波动率微调确认期
+        # 高波动: 缩短窗口 (市场确认快)
+        # 低波动: 延长窗口 (给市场更多时间确认)
+        try:
+            # 尝试从 DataFrame 获取成交量和均量均线
+            vr = df["volume"].iloc[i] / max(df["vol_ma20"].iloc[i], 1e-9)
+        except (KeyError, IndexError, TypeError):
+            # 如果列不存在或索引错误, 保持默认窗口
+            vr = 1.0  # 中性值, 不调整窗口
+        
+        # 根据波动率调整窗口 (保持在 3-10 根 K 线之间)
+        if vr > 1.5:  # 高波动: 确认快, 缩短窗口
+            dyn_window = max(3, dyn_window - 1)
+        elif vr < 1.0:  # 低波动: 确认慢, 延长窗口
+            dyn_window = min(10, dyn_window + 1)
+        # 否则保持默认窗口不变
+        
         # 中立事件类型 (SC/BC/AR) 默认确认窗口返回 None
         if _is_neutral_event(e["type"]) or d == 0 or not (0 <= i < n) or i + dyn_window >= n:
             ne["confirmed"] = None
@@ -793,5 +811,21 @@ def event_confidence(ctx: _EventContext, events):
             elif d < 0:
                 # 空头: 高vr_trend (体量大+趋势向下) → 确认空头
                 score += min(5, max(0, vrt * 10)) if not up_i else min(5, max(0, -vrt * 10))
+        # 弱信号过滤: 如果事件类型与趋势方向强烈不匹配, 直接降低置信度分数
+        # 策略: 底部反转类型 (SC, ST, Spring, LPS, PSY, Shakeout) 应在非上升趋势中出现
+        #       顶部反转类型 (BC, UTAD, SOS, JOC, BU, AR, LPSY) 应在上升趋势中出现
+        # 现有代码已根据 up_i 进行加分/减分, 此处补充"强匹配惩罚"以明确过滤弱信号
+        if up_i:  # 当前在上升趋势
+            # 底部反转类型在上升趋势中变弱
+            if e["type"] in ("SC", "ST", "Spring", "LPS", "PSY", "Shakeout"):
+                score -= 15  # 明确惩罚: 这些类型应在下跌/非上升趋势中出现
+        else:  # 当前在非上升/下降趋势
+            # 顶部反转类型在下降趋势中变弱
+            if e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
+                score -= 15  # 明确惩罚: 这些类型应在上升趋势中出现
+        
+        # 确保分数不会低于 0
+        score = max(0, score)
+        
         e["conf"] = int(round(min(100, max(0, score))))
     return ev_list
