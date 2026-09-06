@@ -238,26 +238,25 @@ def find_pivots(df: pd.DataFrame, order: int = None, sensitivity: str = "normal"
     day_v = df["day"].values
 
     half = 2 * order + 1
-    # 滑动窗口视图: windows[j] = high_v[j:j+half], 无数据复制
+    # 滑动窗口视图: windows[j] = high_v[j:j+half], 形状 (n-half+1, half)
+    # 无数据复制, 仅创建视图
     windows_high = sliding_window_view(high_v, half)
     windows_low = sliding_window_view(low_v, half)
 
-    # 有效中心索引: i ∈ [order, n-order-1]
-    # 对应视图索引: center_idx = i，窗口起始 = i - order
-    centers_high = high_v[order:n-order]
+    # 有效中心索引 i ∈ [order, n-order-1], 长度 n-2*order
+    # sliding_window_view 第0维长度恰好为 n-2*order
+    # 窗口 j 对应原始索引 i = j + order, 所以 j = i - order
+    # 直接对整个 windows 高/低取 max/min, 与 centers 对齐
+    centers_high = high_v[order:n-order]          # 长度 n-2*order
     centers_low = low_v[order:n-order]
 
-    # 向量化比较: 当前值 == 窗口最大/最小
-    # windows_high[order:n-order] 对应中心索引 order 到 n-order-1 的窗口
-    # 但 sliding_window_view 的第一个维度长度为 n - half + 1 = n - 2*order
-    # center_indices - order 的范围: 0 到 n-2*order-1，与 windows 第0维匹配
-    window_maxes = windows_high[order:n-order].max(axis=1)
-    window_mins = windows_low[order:n-order].min(axis=1)
+    window_maxes = windows_high.max(axis=1)       # 长度 n-2*order
+    window_mins = windows_low.min(axis=1)         # 长度 n-2*order
 
     is_max = (centers_high == window_maxes)
     is_min = (centers_low == window_mins)
 
-    max_idx_raw = np.where(is_max)[0] + order  # 转换回原始 i 索引
+    max_idx_raw = np.where(is_max)[0] + order     # 转换回原始 i 索引
     min_idx_raw = np.where(is_min)[0] + order
 
     max_set = set(max_idx_raw.tolist())
@@ -283,7 +282,7 @@ def find_pivots(df: pd.DataFrame, order: int = None, sensitivity: str = "normal"
             pf.append(p)
 
     # 追加最新虚拟枢轴, 让最新行情参与阶段判断与支撑阻力
-    if pivots:  # 仅当有实际枢轴时才追加
+    if pivots:
         last_close, prev_close = df["close"].values[-1], df["close"].values[-2]
         t = "high" if last_close >= prev_close else "low"
         pf.append({
