@@ -30,6 +30,8 @@ class SimulatedTradingSystem:
         self._data_cache = {}  # cache: symbol -> df
         # 复用优化后的策略管理器
         self.manager = WyckoffStrategyManager()
+        # 账户同步相关
+        self._account_path = "account.json"
 
     def _find_best_signal(self, code, datalen=1000, horizon=20, cost=0.004):
         """扫描个股，返回最近的策略最优信号及真实持有收益
@@ -67,6 +69,8 @@ class SimulatedTradingSystem:
                 self.manager.evaluate_strategy_4(df, j, wevents, nt, vsa_labels),
                 self.manager.evaluate_strategy_value_accumulation(
                     wdf, j, wevents, wpivots),
+                self.manager.evaluate_strategy_spring(
+                    wdf, j, wevents, nt, vsa_labels),
             ]
 
             for res_ in candidates:
@@ -180,6 +184,78 @@ class SimulatedTradingSystem:
                 "avg_return_percent": float(np.mean(sr) * 100) if n else 0,
             }
         return report
+
+    def sync_to_account(self):
+        """将模拟盘数据同步到当前用户账户"""
+        try:
+            with open(self._account_path, "r", encoding="utf-8") as f:
+                account = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            account = {"accounts": {}, "current": None}
+
+        current_user = account.get("current", "")
+        if not current_user or current_user not in account.get("accounts", {}):
+            return {"error": f"用户 {current_user} 不存在于账户文件中"}
+
+        user_account = account["accounts"][current_user]
+
+        # 将当前交易日志和绩效数据合并到账户
+        if "simulated_trading" not in user_account:
+            user_account["simulated_trading"] = {}
+
+        # 合并交易日志
+        existing_trades = user_account["simulated_trading"].get("trading_log", [])
+        existing_trade_ids = {t.get("stock", "") + "|" + t.get("entry_date", "") for t in existing_trades}
+        for t in self.trading_log:
+            trade_key = t.get("stock", "") + "|" + t.get("entry_date", "")
+            if trade_key not in existing_trade_ids:
+                existing_trades.append(t)
+        user_account["simulated_trading"]["trading_log"] = existing_trades
+
+        # 合并策略绩效数据
+        existing_perf = user_account["simulated_trading"].get("strategy_performance", {})
+        for strategy, returns in self.strategy_performance.items():
+            if strategy in existing_perf:
+                existing_returns = existing_perf[strategy]
+                existing_returns.extend(returns)
+                existing_perf[strategy] = existing_returns
+            else:
+                existing_perf[strategy] = list(returns)
+        user_account["simulated_trading"]["strategy_performance"] = existing_perf
+
+        # 保存账户文件
+        account["current"] = current_user
+        with open(self._account_path, "w", encoding="utf-8") as f:
+            json.dump(account, f, ensure_ascii=False, indent=2)
+
+        return {"status": "success", "user": current_user, "trades_synced": len(self.trading_log)}
+
+    def sync_from_account(self):
+        """从当前用户账户加载模拟盘数据"""
+        try:
+            with open(self._account_path, "r", encoding="utf-8") as f:
+                account = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"error": "账户文件不存在或格式错误"}
+
+        current_user = account.get("current", "")
+        if not current_user or current_user not in account.get("accounts", {}):
+            return {"error": f"用户 {current_user} 不存在于账户文件中"}
+
+        user_account = account["accounts"][current_user]
+        synced = user_account.get("simulated_trading", {})
+
+        # 加载交易日志
+        loaded_trades = synced.get("trading_log", [])
+        self.trading_log = loaded_trades
+
+        # 加载策略绩效数据
+        loaded_perf = synced.get("strategy_performance", {})
+        self.strategy_performance = defaultdict(list)
+        for strategy, returns in loaded_perf.items():
+            self.strategy_performance[strategy] = list(returns)
+
+        return {"status": "success", "user": current_user, "trades_loaded": len(loaded_trades)}
 
 
 def main_board_universe(cap: int | None = None):
