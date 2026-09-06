@@ -15,6 +15,7 @@ from datetime import datetime
 
 import backtrader as bt
 import numpy as np
+import pandas as pd
 
 from wyckoff.datasource import fetch_kline, fetch_name
 from wyckoff.events import detect_all
@@ -105,11 +106,15 @@ def _build_cerebro(code: str, datalen: int = 1000, horizon: int = 20, cost: floa
 
     返回 (cerebro, strat_instance) 元组.
     调用者需自行 cerebro.run() 并通过 strat.signals_log 收集结果。
+    流程:
+    1. Cerebro.addstrategy(WyckoffStrategy, code=..., datalen=..., horizon=..., cost=...)
+    2. Cerebro.run() - 此时 backtrader 会实例化 WyckoffStrategy, 并按 next() 循环
+    3. 通过 results[0].signals_log 收集每根 bar 的信号
     """
     cerebro = bt.Cerebro(stdstats=False)
     cerebro.broker.setcash(cash)
 
-    # ── 加入威科夫策略 (带参数) ──────────────────────────────────────────
+    # ── 加入威科夫策略 (backtrader 会在 run 时实例化, 并传入 params) ────────
     cerebro.addstrategy(
         WyckoffStrategy,
         code=code,
@@ -121,32 +126,26 @@ def _build_cerebro(code: str, datalen: int = 1000, horizon: int = 20, cost: floa
     # ── K 线数据馈送 ──
     try:
         df = fetch_kline(normalize_symbol(code), datalen=datalen, scale=240)
+        # backtrader 的 PandasData 期望 datetime index, 但 add_indicators 需要 'day' 列
+        # 先进行指标计算 (保留 day 列), 然后转为 backtrader 所需的 index 格式
+        if "day" in df.columns:
+            # 先 add_indicators (此函数需要 'day' 列为 column)
+            df = add_indicators(df, symbol=normalize_symbol(code))
+            # 计算完指标后, 将 day 设为 datetime index 用 backtrader
+            df["day"] = pd.to_datetime(df["day"])
+            df = df.set_index("day")
+        else:
+            df = add_indicators(df, symbol=normalize_symbol(code))
+            df["day"] = pd.to_datetime(df["day"])
+            df = df.set_index("day")
     except Exception:
         return None, None
 
-    df = add_indicators(df, symbol=normalize_symbol(code))
     data = bt.feeds.PandasData(dataname=df)
     cerebro.adddata(data)
 
-    # 策略实例会在 cerebro.run() 时由 backtrader 自动实例化,
-    # 但我们需要提前拿到引用以便在 run 前后配置.
-    # 这里的技巧: run 后通过 results[0] 获取.
-    # 为让调用方稍易用, 这里先手动实例化一个并把它塞进 cerebro,
-    # 这样 cerebro.run() 时会使用这个实例 (或忽略, 取决于 backtrader 版本).
-    # 为保险起见, 我们在 run 前手动清空并准备好 signals_log.
-
-    strat_instance = WyckoffStrategy(
-        code=code, datalen=datalen, horizon=horizon, cost=cost
-    )
-    # 把实例注入到 cerebro 的策略列表中 (backtrader 会在 run 时决定是否使用)
-    # 兼容不同版本: 如果 cerebro.strategies 非空, backtrader 会使用其中的实例
-    if cerebro.strategies:
-        # 保持第一个策略为我们的实例
-        cerebro.strategies.insert(0, strat_instance)
-    else:
-        cerebro.addstrategy(WyckoffStrategy, code=code, datalen=datalen, horizon=horizon, cost=cost)
-
-    return cerebro, strat_instance
+    # 返回 cerebro (供 run()) 和 None (strat_instance 由 run() 产生)
+    return cerebro, None
 
 
 def cerebro_run(
@@ -160,24 +159,21 @@ def cerebro_run(
     """运行单只股票的 backtrader 回测, 返回结果字典。
 
     返回结构与 backtest_events 兼容, 便于与现有报告统一。
-    流程: _build_cerebro -> cerebro.run() -> 收集 strategy.signals_log -> 统计。
+    流程: _build_cerebro -> cerebro.run() -> 收集 results[0].signals_log -> 统计。
 
     关键点:
     - 因果式: 策略的 next() 中仅用历史数据重新检测事件
-    - 信号收集: 每根 bar 通过 strategy.signals_log 记录 ret
+    - 信号收集: Cerebro.run() 后, results[0] 是策略实例, 通过 .signals_log 取得
     - 基准: 买入持有全程 (buy&hold) 收益
     - 风险: 夏普, 最大回撤, 胜率等
     """
     cerebro, strat_instance = _build_cerebro(code, datalen=datalen, horizon=horizon, cost=cost, cash=cash)
-    if cerebro is None or strat_instance is None:
+    if cerebro is None:
         return {"by_type": {}, "benchmark": 0.0, "cost": cost, "note": "数据获取失败"}
-
-    # 准备: 清空信号日志, 确保 run 后的 signals_log 只包含本次 run 的记录
-    strat_instance.signals_log = []
 
     # 运行 Cerebro (会自动调用 strategy.next() 直到数据耗尽)
     results = cerebro.run()
-    strat = results[0]  # 只有一个策略实例
+    strat = results[0]  # 只有一个策略实例 (由 addstrategy 注入的类实例化而来)
 
     # 收集所有 next() 中记录的 ret
     all_returns = [s["ret"] for s in strat.signals_log if "ret" in s and s["ret"] != 0]

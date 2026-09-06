@@ -230,6 +230,59 @@ def _fetch_kline_tencent(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     return _normalize_kline_df(rows)
 
 
+# ── 阿克share (备源3) ──
+_AK_PERIOD = {240: 101, 120: 101, 60: 60, 30: 30, 15: 15}
+
+
+def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
+    """使用 akshare 获取 K 线数据, 作为第三级容灾源。
+    akshare 多数据口径已前复权, 与新浪/东财/腾讯口径一致 (经 _apply_sina_qfq 兜底)。
+    """
+    period = _AK_PERIOD.get(scale)
+    if period is None:
+        raise RuntimeError(f"阿克share不支持 {scale} 分钟周期")
+    try:
+        import akshare as ak
+    except ImportError:
+        raise RuntimeError("未安装 akshare, 请 pip install akshare")
+    # akshare 不同周期对应不同参数
+    if scale == 240:  # 日线
+        df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date="", end_date="", adjust="")
+    elif scale == 60:  # 小时线
+        df = ak.stock_zh_a_hist(symbol=symbol, period="60min", start_date="", end_date="", adjust="")
+    elif scale == 30:  # 30分钟
+        df = ak.stock_zh_a_hist(symbol=symbol, period="30min", start_date="", end_date="", adjust="")
+    elif scale == 120:  # 2小时
+        df = ak.stock_zh_a_hist(symbol=symbol, period="2daily", start_date="", end_date="", adjust="")
+    else:
+        df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date="", end_date="", adjust="")
+    # akshare 返回可能含未复权数据, 需要确保口径一致
+    # 这里尝试复权: 如果有 'close' 且幅度合理, 视为已前复权
+    if df is not None and len(df) > 0:
+        # 确保列名统一
+        col_map = {"日期": "day", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume"}
+        for k, v in col_map.items():
+            if k in df.columns and v not in df.columns:
+                df[v] = df[k]
+        # 只保留需要的列
+        keep = [c for c in ["day", "open", "high", "low", "close", "volume"] if c in df.columns]
+        df = df[keep]
+        # 转换日期格式
+        if "day" in df.columns:
+            df["day"] = pd.to_datetime(df["day"])
+        # 确保数值类型
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        # 降序→正序
+        df = df.sort_values("day").reset_index(drop=True)
+        # 截取 datalen 根
+        if len(df) > datalen:
+            df = df.tail(datalen).copy()
+        return df
+    raise RuntimeError(f"阿克share未返回 {symbol} 数据")
+
+
 def _kline_cache_get(symbol, scale, datalen):
     """内存 LRU 命中: 返回截断到 datalen 的副本, 未命中/过期/根数不足返回 None。"""
     ck = (symbol, scale)
@@ -263,11 +316,12 @@ def _ordered_kline_sources():
     """按健康度动态排序 K线源: 失败率高的源排后面。
 
     样本 <3 次的源不参与重排 (视为中性), 避免偶发失败导致抖动;
-    无任何统计时保持默认顺序 (新浪 → 东财 → 腾讯)。
+    无任何统计时保持默认顺序 (新浪 → 东财 → 腾讯 → 阿克share)。
     """
     sources = [("新浪", _fetch_kline_sina),
                ("东方财富", _fetch_kline_eastmoney),
-               ("腾讯", _fetch_kline_tencent)]
+               ("腾讯", _fetch_kline_tencent),
+               ("阿克share", _fetch_kline_akshare)]
     with _HEALTH_LOCK:
         snapshot = {n: dict(h) for n, h in _SOURCE_HEALTH.items()}
 
