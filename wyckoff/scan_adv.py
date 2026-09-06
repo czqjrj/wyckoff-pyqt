@@ -31,6 +31,11 @@ from .phases import judge_phase
 from .utils import normalize_symbol
 
 try:
+    from .buypoints import scan_buypoints
+except Exception:  # pragma: no cover - 保底, 不影响其他扫描
+    scan_buypoints = None
+
+try:
     from .flow_extra import (
         fetch_dzjy,
         fetch_gpzy,
@@ -975,6 +980,8 @@ SCAN_REGISTRY = [
      "desc": "低波动平台 + 放量上破前高, 突破启动", "need_universe": True},
     {"key": "absorption", "title": "吸筹完成度", "fn": scan_absorption,
      "desc": "SC→PSY→Spring/AR/SOS 完整吸筹链, 待主升", "need_universe": True},
+    {"key": "long_buy", "title": "威科夫买点", "fn": scan_buypoints,
+     "desc": "可执行买点: 左侧(ST/弹簧/二次测试/末期回踩) + 突破回睬加仓, 带止损目标", "need_universe": True},
     {"key": "dzjy", "title": "大宗交易", "fn": lambda *_a, **_k: scan_dzjy(),
      "desc": "大宗折价接盘 / 溢价买入 (需 akshare)", "need_universe": False},
     {"key": "jgdy", "title": "机构调研", "fn": lambda *_a, **_k: scan_jgdy(),
@@ -1007,6 +1014,7 @@ SCAN_COLUMNS = {
     "distribution": ["kind", "signals", "score", "msg"],
     "platform": ["vr", "band", "pct", "high20", "phase", "score", "msg"],
     "absorption": ["chain", "phase", "score", "msg"],
+    "long_buy": ["cls", "kind", "entry", "stop", "target", "rr", "phase", "score", "msg"],
     "dzjy": ["date", "premium", "amount_yi", "score", "msg"],
     "jgdy": ["inst_num", "date", "way", "score", "msg"],
     "ztpool": ["limit_times", "open_cnt", "pct", "amount_yi", "sector", "date", "score", "msg"],

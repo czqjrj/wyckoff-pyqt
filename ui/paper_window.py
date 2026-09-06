@@ -1,9 +1,9 @@
 """模拟盘面板 (自动筛选→自动下单→自动卖出→收益统计)。
 
-复用 wyckoff.paper 引擎 + wyckoff_strategies_manager 双策略 (策略4·纪律 +
+复用 wyckoff.paper 引擎 + 策略管理器三策略 (策略4·纪律 / 威科夫左侧买点 /
 价值吸筹) + extra_windows 的表格/线程模式:
   - 手动执行周期 (run_cycle) 与 定时自动执行周期 (30/15 分钟), 后台线程避免卡 UI。
-  - 右侧策略概览按策略管理器两大策略并行统计 (纪律 / 价值吸筹)。
+  - 右侧策略概览按策略管理器注册的多策略并行统计 (纪律 / 左侧买点 / 价值吸筹)。
   - 四个数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
 """
 
@@ -39,8 +39,9 @@ from .extra_windows import (
 )
 
 # ── 表格渲染 ───────────────────────────────────────────────
-_F2 = {"buy_px", "sell_px", "last", "price", "conf"}
-_PCT_COLS = {"ret", "last_ret"}
+_F2 = {"buy_px", "sell_px", "last", "price", "conf", "ref_px"}
+_PCT_COLS = {"ret", "last_ret", "hit5", "hit10", "hit20", "avg20", "exec_acc",
+             "win_rate", "avg_ret", "cum_ret", "r5", "r10", "r20"}
 
 
 def _cell_color(num):
@@ -125,12 +126,21 @@ _CN_COND = ("created_ts", "symbol", "name", "kind", "trigger", "cond_price",
 _CN_COND_HEAD = ("创建时间", "代码", "名称", "类型", "触发", "触发价", "百分比",
                  "数量", "状态", "成交价", "说明", "正确")
 
-# 策略管理器信号来源 → 界面中文标签 (双策略并行)
-_STRAT_CN = {
-    "paper_discipline_bull": "策略4·纪律",
-    "screener_value_accumulation": "价值吸筹",
-}
-_STRAT_ORDER = ("paper_discipline_bull", "screener_value_accumulation")
+# 策略跟踪页签: 顶部策略绩效汇总 + 下方信号明细
+_CN_STRAT = ("name", "signals", "evaluated", "hit5", "hit10", "hit20", "avg20",
+             "exec_done", "exec_acc", "trades", "win_rate", "avg_ret",
+             "cum_ret", "pl_ratio", "expectancy", "avg_hold")
+_CN_STRAT_HEAD = ("策略", "信号", "已评估", "5根命中", "10根命中", "20根命中",
+                  "20根均值", "触点", "触点正确率", "平仓", "胜率", "平均收益",
+                  "累计收益", "盈亏比", "期望值", "均持(根)")
+_CN_SIG = ("date", "strategy", "code", "name", "event_type", "conf", "ref_px",
+           "fired", "r5", "r10", "r20", "status")
+_CN_SIG_HEAD = ("日期", "策略", "代码", "名称", "事件", "置信", "信号价", "已成交",
+                "5根", "10根", "20根", "状态")
+
+# 策略管理器信号来源 → 界面中文标签 (策略注册信息唯一来源: 策略管理器)
+from wyckoff.strategies.manager import STRATEGY_CN as _STRAT_CN
+from wyckoff.strategies.manager import STRATEGY_ORDER as _STRAT_ORDER
 
 
 def _strat_cn(s):
@@ -139,7 +149,7 @@ def _strat_cn(s):
 
 # ── 扫描模式 (多策略并行) ─────────────────────────────────
 _SCAN_MODES = (
-    ("混合扫描(纪律+价值吸筹)", ""),   # 综合: 走 run_scan 默认, 双策略并行
+    ("混合扫描(纪律+左侧买点+价值吸筹)", ""),  # 综合: 走 run_scan 默认, 全策略并行
     ("纪律扫描(强多头+硬门禁)", "discipline"),
     ("价值吸筹扫描(底部整固)", "value_accumulation"),
 )
@@ -259,6 +269,25 @@ class _QuoteThread(QThread):
 
 
 # ── 主窗口 ────────────────────────────────────────────────
+class _TrackEvalThread(QThread):
+    """后台补评估策略信号 (拉行情评估 5/10/20 根收益), 不阻塞 UI。"""
+    done = pyqtSignal(int)
+
+    def __init__(self, parent=None, force=False):
+        super().__init__(parent)
+        self._force = force
+
+    def run(self):
+        from wyckoff._log import log_exc
+        from wyckoff.paper_strategy_accuracy import run_auto_eval
+        try:
+            n = run_auto_eval(force=self._force)
+        except Exception as e:
+            log_exc("策略信号补评估失败", e)
+            n = 0
+        self.done.emit(n)
+
+
 class PaperWindow(QDialog):
     """模拟盘: 账户概览 + 策略概览(双策略) + 多页签 + 周期调度。"""
 
@@ -305,21 +334,22 @@ class PaperWindow(QDialog):
         rv.addWidget(_flabel("策略"), 0, 0)
         rv.addWidget(_flabel("信号"), 0, 1)
         rv.addWidget(_flabel("持仓"), 0, 2)
-        rv.addWidget(_flabel("胜率"), 0, 3)
-        rv.addWidget(_flabel("累计"), 0, 4)
+        rv.addWidget(_flabel("20根命中"), 0, 3)
+        rv.addWidget(_flabel("胜率"), 0, 4)
+        rv.addWidget(_flabel("累计"), 0, 5)
         for row, key in enumerate(_STRAT_ORDER, start=1):
             name = _STRAT_CN[key]
             lab_name = QLabel(name)
             lab_name.setStyleSheet("font-weight:bold;")
             rv.addWidget(lab_name, row, 0)
             blocks = []
-            for col in (1, 2, 3, 4):
+            for col in (1, 2, 3, 4, 5):
                 b = QLabel("--")
                 b.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 rv.addWidget(b, row, col)
                 blocks.append(b)
             self._strat_blocks[key] = blocks
-        rv.setColumnStretch(4, 1)
+        rv.setColumnStretch(5, 1)
         top_lay.addWidget(right_box, 3)
 
         root.addWidget(top)
@@ -421,6 +451,8 @@ class PaperWindow(QDialog):
         tabs.addTab(self.t_ord, "订单")
         tabs.addTab(self._build_cond_tab(), "条件单")
         tabs.addTab(self._build_equity_tab(), "资金曲线")
+        self._track_page = self._build_track_tab()
+        tabs.addTab(self._track_page, "策略跟踪")
         self._log_page = self._build_log_tab()
         tabs.addTab(self._log_page, "日志")
         root.addWidget(tabs, 1)
@@ -434,6 +466,10 @@ class PaperWindow(QDialog):
         self.qt_timer = QTimer(self)
         self.qt_timer.timeout.connect(self._on_quote_timer)
         self.qt_timer.start(10 * 1000)
+
+        # 策略信号后台补评估 (拉行情, 节流; 空转无信号时不启动)
+        self._track_eval_thread = None
+        self._last_eval_ts = 0
 
         self.refresh()
 
@@ -502,6 +538,29 @@ class PaperWindow(QDialog):
         self.equity_chart.getAxis("left").setLabel("总资产")
         self.equity_chart.setMouseEnabled(x=True, y=False)
         lay.addWidget(self.equity_chart)
+        return page
+
+    # ── 策略跟踪 (准确度 + 盈利能力) ───────────────────────
+    def _build_track_tab(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
+        info = QLabel(
+            "双策略绩效: 命中=信号后5/10/20根方向命中率(预测准确度) · "
+            "触点=止盈/止损/入场条件单触发正确率(执行准确性) · "
+            "平仓=已平仓净收益(盈利能力)")
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info.setStyleSheet(f"font-size:13px;color:{theme.C_MUTED};"
+                           "min-height:24px;")
+        lay.addWidget(info)
+        self.t_strat = _table()
+        lay.addWidget(self.t_strat, 0)
+        lab_sig = QLabel("信号明细 (5/10/20根为信号后真实收益, ✓=已执行买入)")
+        lab_sig.setStyleSheet(f"color:{theme.C_MUTED};font-size:12px;")
+        lay.addWidget(lab_sig)
+        self.t_sig = _table()
+        lay.addWidget(self.t_sig, 1)
         return page
 
     def _build_cond_tab(self):
@@ -957,6 +1016,8 @@ class PaperWindow(QDialog):
             return
         import json
         from datetime import datetime
+
+        from wyckoff import paper_strategy_accuracy
         st = load_state()
         s = stats(st)
         report = {
@@ -965,6 +1026,7 @@ class PaperWindow(QDialog):
                         "n_closed": len(st["closed"]),
                         "equity": equity(st, {})},
             "strategy_performance": self._strategy_summary(st),
+            "strategy_tracking": paper_strategy_accuracy.strategy_report(st),
             "stats": s,
             "positions": st["positions"],
             "closed": st["closed"][-200:],
@@ -973,6 +1035,11 @@ class PaperWindow(QDialog):
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2, default=str)
+        md_path = path.rsplit(".", 1)[0] + ".md"
+        try:
+            paper_strategy_accuracy.export_report(st, md_path)
+        except Exception:
+            pass
         self.summary.setText(self.summary.text() + "\n报告已导出")
 
     def _close_selected(self):
@@ -1061,8 +1128,13 @@ class PaperWindow(QDialog):
         return out
 
     def _refresh_strategy_blocks(self, st):
-        """刷新右侧双策略概览。"""
+        """刷新右侧双策略概览 (信号/持仓/命中/胜率/累计)。"""
         summ = self._strategy_summary(st)
+        try:
+            from wyckoff.paper_strategy_accuracy import signal_stats
+            sig = signal_stats()
+        except Exception:
+            sig = {}
         for key in _STRAT_ORDER:
             blocks = self._strat_blocks.get(key)
             if not blocks:
@@ -1070,10 +1142,111 @@ class PaperWindow(QDialog):
             d = summ[key]
             blocks[0].setText(str(d["signals"]))
             blocks[1].setText(str(d["positions"]))
-            blocks[2].setText(
-                f"{d['win_rate']:.0f}%" if d["win_rate"] is not None else "--")
+            h20 = sig.get(key, {}).get("hit20")
+            blocks[2].setText(f"{h20*100:.0f}%" if h20 is not None else "--")
             blocks[3].setText(
+                f"{d['win_rate']:.0f}%" if d["win_rate"] is not None else "--")
+            blocks[4].setText(
                 f"{d['cum']:+.1f}%" if d["cum"] is not None else "--")
+
+    # ── 策略跟踪表格 ───────────────────────────────────────
+    def _refresh_track_tables(self, st):
+        from wyckoff.paper_strategy_accuracy import (
+            cond_accuracy,
+            load_signals,
+            profit_summary,
+            signal_stats,
+        )
+        sig = signal_stats()
+        cond = cond_accuracy(st)
+        prof = profit_summary(st)
+        rows = []
+        for key in _STRAT_ORDER:
+            a = sig.get(key, {})
+            h = a.get("horizons", {})
+            e = cond.get(key, {})
+            p = prof.get(key, {})
+            rows.append({
+                "name": _STRAT_CN[key],
+                "signals": int(a.get("n", 0)),
+                "evaluated": int(a.get("evaluated", 0)),
+                "hit5": h.get("5", {}).get("hit"),
+                "hit10": h.get("10", {}).get("hit"),
+                "hit20": h.get("20", {}).get("hit"),
+                "avg20": h.get("20", {}).get("avg"),
+                "exec_done": int(e.get("done", 0)),
+                "exec_acc": e.get("accuracy"),
+                "trades": int(p.get("n", 0)),
+                "win_rate": p.get("win_rate"),
+                "avg_ret": p.get("avg_ret"),
+                "cum_ret": p.get("cum_ret"),
+                "pl_ratio": p.get("pl_ratio"),
+                "expectancy": p.get("expectancy"),
+                "avg_hold": p.get("avg_hold_bars"),
+            })
+        _fill_paper(self.t_strat, _CN_STRAT,
+                    dict(zip(_CN_STRAT, _CN_STRAT_HEAD)), rows,
+                    color_cols=("hit5", "hit10", "hit20", "avg20", "exec_acc",
+                                "win_rate", "avg_ret", "cum_ret"))
+        self.t_strat.setSortingEnabled(False)
+
+        status_cn = {"done": "已评估", "pending": "待评估",
+                     "stale": "数据缺失"}
+        _ret = lambda r, hh: (  # noqa: E731
+            (r.get("results") or {}).get(str(hh), {}).get("ret"))
+        srows = []
+        try:
+            recs = list(reversed(load_signals()))[-300:]
+        except Exception:
+            recs = []
+        for r in recs:
+            srows.append({
+                "date": str(r.get("date", ""))[:10],
+                "strategy": _STRAT_CN.get(r.get("strategy", ""),
+                                          r.get("strategy", "")),
+                "code": r.get("code", ""),
+                "name": r.get("name", ""),
+                "event_type": r.get("event_type", ""),
+                "conf": r.get("conf", 0) or 0,
+                "ref_px": r.get("ref_px", 0) or 0,
+                "fired": "✓" if r.get("fired") else "",
+                "r5": _ret(r, 5),
+                "r10": _ret(r, 10),
+                "r20": _ret(r, 20),
+                "status": status_cn.get(r.get("status", "pending"),
+                                        r.get("status", "")),
+            })
+        _fill_paper(self.t_sig, _CN_SIG,
+                    dict(zip(_CN_SIG, _CN_SIG_HEAD)), srows,
+                    color_cols=("r5", "r10", "r20"))
+        self.t_sig.setSortingEnabled(False)
+
+    def _maybe_eval_signals(self, force=False):
+        """有未评估信号且距上次超过阈值 → 后台补评估 (不阻塞 UI)。"""
+        if self._track_eval_thread and self._track_eval_thread.isRunning():
+            return
+        try:
+            from time import time
+
+            from wyckoff.paper_strategy_accuracy import MIN_EVAL_INTERVAL, signal_stats
+            sig = signal_stats()
+            if not force:
+                summ = sig.get("_summary", {})
+                if summ.get("total", 0) <= summ.get("evaluated", 0):
+                    return
+                if time() - self._last_eval_ts < MIN_EVAL_INTERVAL:
+                    return
+        except Exception:
+            return
+        self._track_eval_thread = _TrackEvalThread(self, force=force)
+        self._track_eval_thread.done.connect(self._on_eval_done)
+        self._track_eval_thread.start()
+
+    def _on_eval_done(self, n):
+        from time import time
+        self._last_eval_ts = time()
+        if n and n > 0:
+            self.refresh()
 
     def refresh(self):
         from wyckoff.paper import apply_paper_params, load_state, stats
@@ -1098,6 +1271,8 @@ class PaperWindow(QDialog):
             f"止盈+{cfg['take_profit']*100:.0f}% · 成本{cfg['cost']*100:.1f}%"
             + (" · 追踪止损" if cfg.get("trailing_stop") else ""))
         self._refresh_strategy_blocks(st)
+        self._refresh_track_tables(st)
+        self._maybe_eval_signals()
 
         # 持仓
         rows = []

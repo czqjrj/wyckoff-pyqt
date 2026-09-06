@@ -201,6 +201,33 @@ def va_candidate(rec, j, va_m):
     return dict(res)
 
 
+_confirm_cache = {}
+
+
+def va_confirm_idx(rec, event_idx):
+    """确认式入场: 事件 idx 之后首个收盘站上 MA10 的 bar, 无则 None。
+
+    因果无前视 (MA10 仅用当日及之前)。把「底部整固 + 吸筹事件出现即买」
+    改为「等价格转强(收上10日线) 再买」, 避免底部回踩被打止损。
+    """
+    key = (id(rec), int(event_idx))
+    hit = _confirm_cache.get(key, "MISS")
+    if hit != "MISS":
+        return hit
+    k = None
+    try:
+        close = rec["df"]["close"]
+        ma = rec["df"]["price_ma10"]
+        for p in range(int(event_idx) + 1, len(close)):
+            if pd.notna(ma.iloc[p]) and close.iloc[p] > ma.iloc[p]:
+                k = p
+                break
+    except Exception:
+        k = None
+    _confirm_cache[key] = k
+    return k
+
+
 def _flow_score(rec, j, back=5):
     """资金流分 (因果历史代理): 截至 bar j 的近 back 根量价资金净流入占比 (无量纲)。
 
@@ -282,6 +309,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
     })
     cfg = paper._CUR
     st = paper._new_state()
+    st["_gathered_signals"] = []
+    track_on = params.get("strategy_track")
     va_m = paper._strategy_manager()
 
     day_to_j = []
@@ -321,6 +350,13 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                 bear = bear_signal_on(stocks[idx], j, window=params["window"])
                 if bear is None:
                     continue
+                # 价值吸筹·空头卖出宽限期: 吸筹建仓后前 N 根不因 UTAD/LPSY 平仓,
+                # 避免底部整固期的普通波动信号误伤过早离场 (-3~-4% 的秒卖)。
+                grace = int(params.get("va_bear_grace") or 0)
+                if (grace > 0
+                        and pos.get("strategy") == "screener_value_accumulation"
+                        and int(pos.get("entry_bars", 0) or 0) < grace):
+                    continue
                 dfw = df_by_code.get(pos["symbol"])
                 last = float(dfw["close"].iloc[-1]) if dfw is not None and len(dfw) else pos.get("last", pos["buy_px"])
                 sell_price = last * (1 - paper.SLIP_SELL)
@@ -343,6 +379,11 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                 if va is None:
                     continue
                 ev, strategy = va, va["strategy"]
+            # 价值吸筹·确认式入场: 事件后首根收上 MA10 当日才算信号/可买
+            if strategy == "screener_value_accumulation" and params.get("va_confirm"):
+                ci = va_confirm_idx(rec, int(ev.get("idx") or 0))
+                if ci is None or j != ci:
+                    continue
             # 强链过滤 (历史快照无前视; 无快照 fail-open)
             if params.get("chain_min_pct"):
                 from wyckoff.chain import chain_factor_for
@@ -357,6 +398,16 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                           "sector": rec.get("sector", ""),
                           "chain": rec["chain"], "strategy": strategy,
                           "flow": _flow_score(rec, j)})
+            if track_on:
+                # 策略信号追踪: 与实盘 run_cycle 同口径记录 (record_signal 冷却合并),
+                # 但回放内先内存收集, 结束时一次性批量落盘 + 立即评估。
+                st["_gathered_signals"].append({
+                    "strategy": strategy, "symbol": code, "code": code,
+                    "name": "", "event_type": ev["type"],
+                    "conf": int(ev["conf"] or 0), "date": str(D),
+                    "ref_px": float(rec["open"][j] or 0),
+                    "fired": False, "df": rec["df"],
+                })
 
         # 大盘20日线门禁 (因果历史重建, 无前视)
         if params.get("mkt_gate") and market_gate is not None:
@@ -377,27 +428,50 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                      if _sector_gate_ok({"sector": c["sector"]},
                                         ts=pd.Timestamp(D))[0]]
         cands.sort(key=lambda x: -x["conf"])
-        for cand in cands:
+
+        def _try_fill(cand):
             if len(st["positions"]) >= cfg["max_pos"]:
-                break
+                return
             if paper.has_position(st, cand["code"]):
-                continue
-            # 同产业链限仓
+                return
             cc = params.get("chain_cap") or 0
             if cc and cand["chain"]:
-                n_chain = sum(1 for p in st["positions"]
-                              if stocks[code_to_idx[p["symbol"]]].get("chain") == cand["chain"])
+                n_chain = sum(
+                    1 for p in st["positions"]
+                    if stocks[code_to_idx[p["symbol"]]].get("chain")
+                    == cand["chain"])
                 if n_chain >= cc:
-                    continue
+                    return
             if paper._risk_blocks_entry(st, cand, cand["open"]):
-                continue
-            order = paper._make_order(cand["code"], "", cand["type"], cand["conf"],
-                                      cand["open"], 0, st["cash"],
-                                      sector=cand["sector"],
+                return
+            order = paper._make_order(cand["code"], "", cand["type"],
+                                      cand["conf"], cand["open"], 0,
+                                      st["cash"], sector=cand["sector"],
                                       strategy=cand["strategy"], st=st)
             if order is None:
-                continue
+                return
             paper.fill_buy(st, order)
+            if track_on:
+                for s in reversed(st["_gathered_signals"]):
+                    if (s["symbol"] == order["symbol"]
+                            and s["strategy"] == (order.get("strategy")
+                                                  or "paper_discipline_bull")
+                            and not s["fired"]):
+                        s["fired"] = True
+                        break
+
+        # 独立槽位: 先给纪律填 (最多 max_pos - va_slots), 再给价值吸筹填专属槽
+        va_slots = int(params.get("va_slots") or 0)
+        for cand in cands:
+            if cand["strategy"] == "screener_value_accumulation":
+                continue
+            if len(st["positions"]) >= cfg["max_pos"] - va_slots:
+                break
+            _try_fill(cand)
+        for cand in cands:
+            if cand["strategy"] != "screener_value_accumulation":
+                continue
+            _try_fill(cand)
 
         # 3) 引擎周期再平衡 (等权收敛, 满仓才触发)
         paper._rebalance_portfolio(st, df_by_code)
@@ -409,6 +483,11 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
             "equity": round(paper.equity(st, {}), 2),
         })
 
+    if track_on:
+        from wyckoff import paper_strategy_accuracy as psa
+        st["_track_summary"] = psa.run_signal_pipeline(
+            st.get("_gathered_signals") or [])
+    st.pop("_gathered_signals", None)
     paper.save_state(st)
     return st
 
@@ -426,6 +505,9 @@ def build_report(st, params):
              f"单边成本{params['cost']*100:.2f}%")
     L.append("- 双策略选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先, "
              "无纪律信号时回退价值吸筹(底部整固 + 近20根内吸筹事件, 无conf门槛)")
+    if params.get("va_confirm"):
+        L.append("- 价值吸筹入场: **确认式** (事件后首根收盘站上MA10才建仓, "
+                 "非事件即买; 减少底部回踩被止损的过早单)")
     total_exit = (f"止盈+{params['take_profit']*100:.0f}% / 止损-{params['stop_loss']*100:.0f}% "
                   f"/ 破位 / 到期")
     if params.get("bear_exit"):
@@ -505,6 +587,63 @@ def build_report(st, params):
             mean = sum(rets) / n if n else 0
             L.append(f"| {key} | {n} | {wr:.0f}% | {mean*100:+.2f}% | "
                      f"{sum(rets)*100:+.1f}% |")
+    # 大样本策略追踪: 预测准确度 + 执行触点 + 盈利能力 (模拟盘策略追踪同口径)
+    if params.get("strategy_track"):
+        try:
+            from wyckoff import paper_strategy_accuracy as psa
+            rep = psa.strategy_report(st)
+            L.append("")
+            L.append("### 策略准确度与盈利能力 (信号追踪)")
+            L.append("")
+            ssum = rep.get("_summary", {})
+            L.append(f"- 信号样本: 累计 **{ssum.get('total', 0)}** 条 · "
+                     f"已评估 **{ssum.get('evaluated', 0)}** 条")
+            tb = st.get("_track_summary") or {}
+            if tb:
+                L.append(f"- 本次回放: 新增 {tb.get('added', 0)} · "
+                         f"合并 {tb.get('merged', 0)} · "
+                         f"跳过 {tb.get('skipped', 0)} · "
+                         f"已评估 {tb.get('evaluated', 0)}")
+            L.append("")
+            L.append("| 策略 | 信号 | 已评估 | 5根命中 | 10根命中 | 20根命中 "
+                     "| 20根均值 | 触点正确 | 平仓 | 胜率 | 平均收益 | "
+                     "累计收益 | 盈亏比 | 期望值 | 均持(根) |")
+            L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+
+            def _pf(v):
+                return f"{v*100:.0f}%" if v is not None else "-"
+
+            def _pm(v):
+                return f"{v*100:+.2f}%" if v is not None else "-"
+
+            for s in psa.STRATEGY_ORDER:
+                d = rep.get(s, {})
+                acc = d.get("accuracy", {})
+                exe = d.get("execution", {})
+                pf = d.get("profit", {})
+                h = acc.get("horizons", {})
+                ca = exe.get("accuracy")
+                pos_txt = (f"{exe.get('correct', 0)}/{exe.get('done', 0)}"
+                           + (f"({ca*100:.0f}%)" if ca is not None else ""))
+                plr = (f"{pf['pl_ratio']:.2f}"
+                       if pf.get("pl_ratio") is not None else "-")
+                exp = (f"{pf['expectancy']:+.4f}"
+                       if pf.get("expectancy") is not None else "-")
+                ah = (f"{pf['avg_hold_bars']:.1f}"
+                      if pf.get("avg_hold_bars") is not None else "-")
+                L.append(
+                    f"| {d.get('name', s)} | {acc.get('n', 0)} "
+                    f"| {acc.get('evaluated', 0)} "
+                    f"| {_pf(h.get('5', {}).get('hit'))} "
+                    f"| {_pf(h.get('10', {}).get('hit'))} "
+                    f"| {_pf(h.get('20', {}).get('hit'))} "
+                    f"| {_pm(h.get('20', {}).get('avg'))} | {pos_txt} "
+                    f"| {pf.get('n', 0)} "
+                    f"| {_pf(pf.get('win_rate'))} "
+                    f"| {_pm(pf.get('avg_ret'))} "
+                    f"| {_pm(pf.get('cum_ret'))} | {plr} | {exp} | {ah} |")
+        except Exception:
+            pass
     if params.get("sect_gate"):
         L.append("")
         L.append("### 局限")
@@ -549,8 +688,22 @@ def main():
     ap.add_argument("--start", default="", help="回放起始日期 YYYY-MM-DD")
     ap.add_argument("--datalen", type=int, default=700,
                     help="每只标的拉取的K线根数 (覆盖回放起始前的历史, 建议≥850覆盖3年)")
+    ap.add_argument("--no-track", action="store_false", dest="strategy_track",
+                    help="关闭策略信号追踪 (默认开启: 回放同时统计双策略准确度与盈利能力)")
+    ap.add_argument("--va-confirm", action="store_true",
+                    help="价值吸筹·确认式入场: 事件后首根收盘站上MA10再建仓 "
+                         "(默认事件出现即买)")
+    ap.add_argument("--va-slots", type=int, default=0,
+                    help="价值吸筹独立槽位数 (默认0=无, 与纪律共享 max_pos; "
+                         ">0 时纪律最多 max_pos-va_slots 槽)")
+    ap.add_argument("--va-bear-grace", type=int, default=0,
+                    help="价值吸筹·空头卖出宽限期 (根): 吸筹建仓后前 N 根不因 "
+                         "UTAD/LPSY 空头事件平仓 (默认0=无宽限)")
     ap.add_argument("--report", default="", help="写出报告 md 路径")
     ap.add_argument("--export", default="", help="导出逐笔 CSV 路径")
+    ap.add_argument("--stocks-cache", default="",
+                    help="加载阶段产物缓存 pickle 路径 (跳过重复 fetch/指标计算, "
+                         "大幅加速参数实验迭代; 首次运行自动生成)")
     args = ap.parse_args()
 
     defaults = paper.apply_paper_params(None)
@@ -570,6 +723,10 @@ def main():
         "flow_gate": args.flow_gate,
         "sect_gate": args.sect_gate,
         "bear_exit": args.bear_exit,
+        "strategy_track": args.strategy_track,
+        "va_confirm": args.va_confirm,
+        "va_slots": args.va_slots,
+        "va_bear_grace": args.va_bear_grace,
     }
 
     # universe: 从主数据目录(仓库根)加载全A名单, 而非被重定向的回放隔离目录。
@@ -603,20 +760,45 @@ def main():
           f"持{params['hold_bars']}K 止损-{params['stop_loss']*100:.0f}% "
           f"止盈+{params['take_profit']*100:.0f}% 成本{params['cost']*100:.2f}% "
           f"门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
-          f"/板块{'开' if args.sect_gate else '闭'}")
-    stocks = []
-    for i, code in enumerate(uni):
+          f"/板块{'开' if args.sect_gate else '闭'}"
+          f"/策略追踪{'开' if args.strategy_track else '闭'}")
+    stocks = None
+    if args.stocks_cache and os.path.exists(args.stocks_cache):
+        import pickle
         try:
-            rec = load_stock_events(code, params["min_conf"], datalen=args.datalen)
+            with open(args.stocks_cache, "rb") as f:
+                stocks = pickle.load(f)
+            print(f"加载股票缓存: {len(stocks)} 只 ({args.stocks_cache})")
         except Exception as e:
-            print(f"  [{i+1}/{len(uni)}] {code} 失败: {e}")
-            rec = None
-        if rec is None:
-            continue
-        stocks.append(rec)
-        print(f"  [{i+1}/{len(uni)}] {code} 事件{len(rec['events'])}个", flush=True)
-
-    print(f"\n有效股票 {len(stocks)} 只, 开始回放 ...")
+            print(f"股票缓存读取失败, 重新加载: {e}")
+            stocks = None
+    if stocks is None:
+        stocks = []
+        for i, code in enumerate(uni):
+            try:
+                rec = load_stock_events(code, params["min_conf"],
+                                        datalen=args.datalen)
+            except Exception as e:
+                print(f"  [{i+1}/{len(uni)}] {code} 失败: {e}")
+                rec = None
+            if rec is None:
+                continue
+            stocks.append(rec)
+            print(f"  [{i+1}/{len(uni)}] {code} 事件{len(rec['events'])}个",
+                  flush=True)
+        if args.stocks_cache:
+            import pickle
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(args.stocks_cache)),
+                            exist_ok=True)
+                with open(args.stocks_cache, "wb") as f:
+                    pickle.dump(stocks, f, protocol=4)
+                print(f"已写股票缓存: {len(stocks)} 只 → {args.stocks_cache}")
+            except Exception as e:
+                print(f"股票缓存写入失败: {e}")
+        print(f"\n有效股票 {len(stocks)} 只, 开始回放 ...")
+    else:
+        print(f"\n有效股票 {len(stocks)} 只 (来自缓存), 开始回放 ...")
     market_gate = load_market_gate() if args.mkt_gate else None
     if args.mkt_gate:
         print("大盘20日线门禁: 已启用" if market_gate else "大盘20日线门禁: 已启用(指数数据缺失, 视为不满足)")

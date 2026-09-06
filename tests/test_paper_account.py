@@ -184,6 +184,59 @@ def test_pick_candidates_flow_gate_partial_data(monkeypatch):
     assert codes == ["sh600001"]
 
 
+def test_pick_candidates_left_buy_ignores_market_gate(monkeypatch):
+    """威科夫左侧买点: 大盘未站上MA20 时仍可入池 (独立赛道, gated=False,
+    挂买点入场价 below 条件单, 不受板块/资金流门禁管束)。"""
+    df = _mk(np.linspace(10.0, 11.0, 400))
+
+    class LeftMgr:
+        """只产左侧买点候选的假管理器 (绕过真实 buypoints 拉行情)。"""
+        def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
+                            name="", event_types=None):
+            return {"strategy": "long_buy_left", "type": "Spring", "idx": 388,
+                    "conf": 82, "kind": "spring", "entry_price": 10.1,
+                    "stop_price": 9.4, "target_price": 13.1, "rr": 3.0,
+                    "gated": False}
+
+    monkeypatch.setattr(paper, "_strategy_manager", lambda: LeftMgr())
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline",
+                        lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators",
+                        lambda df, **k: df)
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    monkeypatch.setattr(paper, "_market_trend_ok",
+                        lambda: (False, "大盘未站上MA20"))
+    out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    assert len(out) == 1
+    e = out[0]
+    assert e["strategy"] == "long_buy_left"
+    assert e["gated"] is False
+    assert e["trigger"] == "below"
+    assert e["auto_cond_price"] == 10.1
+    assert e["entry_price"] == 10.1
+
+
+def test_left_buy_position_protection_uses_owned_pcts():
+    """左侧买点入场把买点御设止损/止盈折算入狐保护条件单 (而非账户默认)。"""
+    st = paper._new_state()
+    st["cash"] = 1_000_000.0
+    entry, stop, target = 10.1, 9.4, 13.1
+    order = paper._make_order(
+        "sh600001", "测试股", "Spring", 82, entry, 0, cash=100_000.0,
+        strategy="long_buy_left", st=st,
+        stop_pct=round((entry - stop) / entry, 4),
+        take_pct=round((target - entry) / entry, 4))
+    assert order["stop_pct"] is not None and order["take_pct"] is not None
+    paper.fill_buy(st, order)
+    pos = [p for p in st["positions"] if p["symbol"] == "sh600001"][0]
+    assert pos["stop_pct"] == order["stop_pct"]
+    assert pos["take_pct"] == order["take_pct"]
+    tp = [c for c in st["conditions"] if c.get("kind") == "take_profit"][0]
+    sl = [c for c in st["conditions"] if c.get("kind") == "stop_loss"][0]
+    assert tp["pct"] == pos["take_pct"]
+    assert sl["pct"] == pos["stop_pct"]
+
+
 # ───────────────────────── 订单/撮合 ─────────────────────────
 def test_make_order_lot_sizing():
     order = paper._make_order("sh600001", "", "Spring", 90, 10.0, 0,
@@ -515,6 +568,20 @@ def test_apply_auto_conditions_global_dedup():
     assert len(active) == 1
 
 
+def test_apply_auto_conditions_left_buy_below_trigger():
+    """左侧买点候选: 条件单为 below@入场价 (回踩触发), 而非默认 above。"""
+    st = paper._new_state()
+    cand = [{"code": "sh600001", "name": "测试股", "strategy": "long_buy_left",
+             "type": "Spring", "conf": 82, "last": 10.5,
+             "auto_cond_price": 10.1, "trigger": "below"}]
+    n = paper._apply_auto_conditions(st, cand)
+    assert n == 1
+    active = [c for c in st["conditions"] if c.get("status") == "active"]
+    assert active[0]["trigger"] == "below"
+    assert active[0]["price"] == 10.1
+    assert active[0]["reason"] == "自动:long_buy_left:Spring(82)"
+
+
 # ───────────────────────── 优化: 低质池过滤 ─────────────────────────
 def test_is_low_quality_filter():
     assert paper._is_low_quality("bj920056")          # 北交所
@@ -685,6 +752,51 @@ def test_condition_buy_no_duplicate_when_fire_held():
     paper._fire_condition(st, c, 17.0, _mk([16.8, 17.0]), side="buy")
     assert st["conditions"][0]["status"] == "cancelled"
     assert len(st["positions"]) == n_before  # 未重复建仓
+
+
+def test_fill_buy_value_strategy_uses_own_stop_take():
+    """价值吸筹策略特异止损关闭时沿用全局 (stop_pct=None), 不注入。
+
+    扩池复验推翻 6% 止损假设后 VALUE_STOP_PCT=None (docs/paper_priority_bt.md)。
+    测试保证: 价值/纪律/左侧订单均不被打上策略特异 stop; 左侧显式止损仍保留。
+    """
+    import wyckoff.paper as paper
+
+    def _mk(st, strategy, price=10.0, qty=1000):
+        st["positions"] = []
+        st["cash"] = 1_000_000.0
+        st["orders"] = []
+        st["conditions"] = []
+        order = {
+            "symbol": "sh600001", "name": "", "type": "Spring", "conf": 90,
+            "qty": qty, "price": price, "ts": "2024-01-02 10:00:00", "bars": 0,
+            "strategy": strategy,
+        }
+        paper.fill_buy(st, order)
+        return st["positions"][0]
+
+    st = paper._new_state()
+    # 价值吸筹: 开关关闭 → 沿用全局 (无 stop_pct), 不注入
+    pos = _mk(st, "screener_value_accumulation")
+    assert pos["stop_pct"] is None
+    # 纪律: 沿用全局 (无 stop_pct)
+    pos = _mk(st, "paper_discipline_bull")
+    assert pos["stop_pct"] is None
+    assert pos["take_pct"] is None
+    # 左侧买点: 订单自带止损优先, 不被覆盖
+    pos = _mk(st, "long_buy_left")
+    assert pos["stop_pct"] is None
+    # 显式止损 (左侧) 保留
+    st2 = paper._new_state()
+    st2["cash"] = 1_000_000.0
+    order = {
+        "symbol": "sh600002", "name": "", "type": "Spring", "conf": 90,
+        "qty": 1000, "price": 10.0, "ts": "2024-01-02 10:00:00", "bars": 0,
+        "strategy": "long_buy_left", "stop_pct": 0.05, "take_pct": 0.2,
+    }
+    paper.fill_buy(st2, order)
+    assert st2["positions"][0]["stop_pct"] == 0.05
+    assert st2["positions"][0]["take_pct"] == 0.2
 
 
 def test_fill_buy_rejects_when_insufficient_cash(monkeypatch):

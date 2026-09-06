@@ -34,9 +34,9 @@ try:
 except Exception:  # pragma: no cover
     np = None
 
+from . import paper_log, paper_strategy_accuracy
 from .paths import PAPER_FILE
 from .settings_keys import S
-from . import paper_log
 
 _LOCK = threading.RLock()
 
@@ -488,7 +488,8 @@ def _risk_blocks_entry(st, cand, price) -> bool:
     qty = int(budget // (entry * (1 + SLIP_BUY)) // 100 * 100)
     if qty <= 0:
         return False
-    stop = entry * (1 - _CUR["stop_loss"])
+    # 止损位: 左侧买点自带御设止损 (直接以真止损算单笔风险); 其余按默认 -stop_loss
+    stop = float(cand.get("stop_price") or entry * (1 - _CUR["stop_loss"]))
     ok, msg = check_risk_budget(st, cand["code"], entry, stop, qty)
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
@@ -1066,12 +1067,12 @@ def _strategy_manager():
 
 
 def _value_accum_candidate(code, df, piv, evs):
-    """基于策略管理器的「价值吸筹」信号构造候选。
+    """(兼容垫片) 基于策略管理器「价值吸筹」信号构造候选。
 
+    正式扫描统一走 manager.scan_individual; 此处保留旧逻辑供单测/外部引用。
     命中条件 (与回测口径一致): 阶段=底部整固 且 近20根内出现
-    {Spring,Shakeout,SC,ST,LPS}。作为纪律候选的信封兜底, 需满足 conf 下限
-    (VA_MIN_CONF) 与低质过滤, 防止低质候选稀释组合质量。
-    管理器不可用 / 评估异常时返回 None (纪律候选照常工作)。
+    {Spring,Shakeout,SC,ST,LPS} 事件, conf≥VA_MIN_CONF 并通过低质过滤。
+    管理器不可用 / 评估异常时返回 None。
     """
     m = _strategy_manager()
     if m is None:
@@ -1083,11 +1084,8 @@ def _value_accum_candidate(code, df, piv, evs):
     if not sig:
         return None
     ev = sig["event"]
-    # 价值吸筹 conf 下限: 与纪律(MIN_CONF=90)分档, 兜底信号也须有足够置信度
     if int(ev.get("conf", 0) or 0) < VA_MIN_CONF:
         return None
-    # 价值吸筹过滤: 排除北交所 / ST·退市 / 低价仙股, 降低低质垃圾混入候选池
-    # (此前无任何门槛, 曾把 bj 板块与 ST 低价股大量塞入候选, 造成条件单堆积)。
     if _is_low_quality(sig["event"].get("code") or code):
         return None
     return {"strategy": "screener_value_accumulation",
@@ -1095,27 +1093,64 @@ def _value_accum_candidate(code, df, piv, evs):
             "conf": int(ev.get("conf", 0) or 0)}
 
 
-# 价值吸筹/候选池低质股票过滤 (见 _value_accum_candidate)。
-#   - 北交所 (bj) 与 三板: 流动性差, 排除
-#   - ST/*ST/退市: 基本面风险高, 排除
-#   - 低价 (< VA_MIN_PRICE): 仙股化, 排除
+# 兼容别名 (策略常量已随选股逻辑迁移入策略管理器; 保留引用供单测/外部导入)
 VA_EXCLUDE_BJ = True
 VA_EXCLUDE_ST = True
 VA_MIN_PRICE = 3.0
-# 价值吸筹 conf 下限: 兜底信号也须有足够置信度, 避免低质候选稀释组合
 VA_MIN_CONF = 80
+LONG_STRATEGY = "long_buy_left"
+LONG_MIN_CONF = 60
+LB_ENTRY_MARGIN = 0.0
+LB_MAX = 8
+try:
+    from .strategies.manager import (  # noqa: E402 仅取值
+        LONG_MIN_CONF as _M_LONG_MIN_CONF,
+    )
+    from .strategies.manager import (
+        VA_MIN_CONF as _M_VA_MIN_CONF,
+    )
+    from .strategies.manager import (
+        VA_MIN_PRICE as _M_VA_MIN_PRICE,
+    )
+    LONG_MIN_CONF, VA_MIN_PRICE, VA_MIN_CONF = (
+        _M_LONG_MIN_CONF, _M_VA_MIN_PRICE, _M_VA_MIN_CONF)
+except Exception:
+    pass
+
+
+def _long_buy_candidate(code, df, piv, evs):
+    """(兼容垫片) 委托策略管理器·左侧买点候选生成。
+
+    等价于 manager._left_buy_candidate, 保留仅供既有脚本/回测引用。
+    """
+    m = _strategy_manager()
+    if m is None:
+        return None
+    try:
+        res = m._left_buy_candidate(code, df, evs, piv, name=_stock_name(code))
+    except Exception:
+        return None
+    return dict(res) if res else None
 
 
 def _is_low_quality(code, price=None, name=None) -> bool:
-    """判断标的是否属低质池: 北交所 / ST·退市 / 低价 (可选)。"""
+    """(兼容垫片) 低质池过滤 (北交所/ST·退市/低价), 优先委托策略管理器。"""
+    if name is None:
+        try:
+            name = _stock_name(code)
+        except Exception:
+            name = ""
+    m = _strategy_manager()
+    if m is not None and hasattr(m, "_is_low_quality"):
+        try:
+            return m._is_low_quality(code, price=price, name=name)
+        except Exception:
+            pass
     c = str(code).lower()
     if VA_EXCLUDE_BJ and c.startswith("bj"):
         return True
     if VA_EXCLUDE_ST:
-        try:
-            nm = name or _stock_name(code)
-        except Exception:
-            nm = name or ""
+        nm = name or ""
         if any(x in nm for x in ("ST", "退", "N ", "C ")):
             return True
     if price is not None and VA_MIN_PRICE > 0 and float(price) < VA_MIN_PRICE:
@@ -1127,28 +1162,28 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
                     cancel_event=None, progress=None, skip_gates=False):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
 
-    每只股票只留"最近 N 根内最新"的强多头事件; conf 由 event 的 conf 字段
-    (启发式 + online model 校准 + 类型封顶后) 提供。universe 为空用全市场。
-    min_conf 缺省取当前生效参数 (apply_paper_params 设置或模块默认 90)。
-    progress(done, total, code) 可选进度回调, 透传给 parallel_map 供 UI 进度条。
+    选股统一由策略管理器 (WyckoffStrategyManager.scan_individual) 产出,
+    本函数只负责编排: 拉K线 → 管理器选股 → 门禁 → 低质过滤 → 排序。
+    单只股票优先级: 纪律 (受门禁) → 威科夫左侧买点 (独立赛道, 不受门禁)
+                    → 价值吸筹 (受门禁, 纪律兜底)。
 
     纪律硬门禁 (缺一不可, 数据不可用即拦截; skip_gates=True 跳过全部门禁,
     供离线/测试/仅排序场景使用):
       - 大盘20日线向上 (fetch_market_env)
       - 板块强度 > 60 分位 (sector_strength_pct)
       - 资金流近5日主力净流入 > 候选池截面中位 (跨市场截面分位, fetch_main_flow)
+    左侧买点不经过上述门禁 (左侧买点诞生于大盘弱市, 属独立赛道)。
 
-    新增: 遇到强多头事件时自动添加价格买入条件单 (buy_price),
-    触发价设为最近收盘价，触发条件为 "≥ 达上破" (above)。
-    条件单将被写入状态, 供后续 _check_conditions 轮询触发。
+    遇到候选时自动添加价格买入条件单 (buy_price):
+      - 纪律/价值吸筹: 触发价=最近收盘价×1.002, 条件 "≥ 达上破" (above)。
+      - 左侧买点: 触发价=买点入场价, 条件 "回踩买入" (below)。
     """
     if min_conf is None:
         min_conf = _CUR["min_conf"]
     from .datasource import fetch_kline
-    from .events import detect_all
     from .fundamental import fetch_sector
     from .fundamental import universe as market_universe
-    from .indicators import add_indicators, find_pivots
+    from .indicators import add_indicators
     from .utils import normalize_symbol
 
     if universe is None:
@@ -1165,90 +1200,77 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             except Exception:
                 universe = []
     universe = [normalize_symbol(c) for c in universe]
-    # 纪律门禁 ①: 大盘20日线向上 (全市场统一, 一次判定; fail-close)
+    # 纪律门禁 ①: 大盘20日线向上 (全市场统一, 一次判定; fail-close)。
+    # 不再整池短路: 左侧买点属独立赛道, 大盘弱市也可出候选; 纪律/价值吸筹
+    # 在 scan_individual 按 market_ok 拦截。
+    market_ok = True
+    _market_reason = ""
     if not skip_gates:
         market_ok, _market_reason = _market_trend_ok()
-        if not market_ok:
-            return []
 
     def _probe(code):
-        """单只股票的重活: K线+指标+事件+板块+资金流 → 候选 (含 flow 值) 或 None。
+        """单只股票的重活: K线 → 策略管理器选股 → 门禁/低质/触发价。
         Gate ③ (资金流截面分位) 是跨市场判定, 故 flow 先随候选带回, 由调用方统一过滤。
         返回 (code, candidate_or_None, flow_or_None)。"""
         if cancel_event is not None and cancel_event.is_set():
             return code, None, None
+        flow = None
         try:
             df = add_indicators(fetch_kline(code, datalen=400, scale=240),
                                 symbol=code)
             if df is None or len(df) < 200:
                 return code, None, None
-            piv = find_pivots(df, order=6)
-            evs = detect_all(df, piv)
-            if not evs:
+            name = _stock_name(code)
+            m = _strategy_manager()
+            if m is None:
                 return code, None, None
-            # 纪律信号: 强多头事件 conf≥阈值 (策略管理器·策略4口径, 近10根)
-            latest = None
-            for e in evs:
-                if e["type"] not in LONG_EVENT_TYPES:
-                    continue
-                if (e.get("idx") or 0) < len(df) - 10:
-                    continue
-                conf = int(e.get("conf", 0) or 0)
-                if conf < min_conf:
-                    continue
-                if latest is None or (e.get("idx") or 0) > latest["idx"]:
-                    latest = e
-            strategy = "paper_discipline_bull"
-            if latest is None:
-                # 回退: 策略管理器·价值吸筹 (底部整固 + 20根内吸筹事件, 无 conf 门槛)
-                va = _value_accum_candidate(code, df, piv, evs)
-                if va is None:
-                    return code, None, None
-                latest = {"type": va["type"], "idx": va["idx"],
-                          "conf": va["conf"]}
-                strategy = va["strategy"]
-            base_conf = int(latest.get("conf", 0) or 0)
-            latest["code"] = code
-            latest["name"] = _stock_name(code)
-            latest["last"] = round(float(df["close"].iloc[-1]), 2)
-            # 低质池过滤 (北交所/ST/低价) — 纪律与价值吸筹统一适用, 防垃圾入池
-            if _is_low_quality(code, price=latest["last"], name=latest["name"]):
+            cand = m.scan_individual(
+                code, df, min_conf=min_conf,
+                gates_ok=(market_ok, _market_reason), name=name,
+                event_types=LONG_EVENT_TYPES)
+            if cand is None:
                 return code, None, None
-            latest["strategy"] = strategy
-            latest["sector"] = ""
+            cand["code"] = code
+            cand["name"] = name
+            cand["last"] = round(float(df["close"].iloc[-1]), 2)
+            # 低质池过滤 (北交所/ST/低价) — 各策略统一适用, 防垃圾入池
+            if _is_low_quality(code, price=cand["last"], name=name):
+                return code, None, None
+            cand["sector"] = ""
             try:
-                latest["sector"] = fetch_sector(code) or ""
+                cand["sector"] = fetch_sector(code) or ""
             except Exception:
                 pass
-            flow = None
-            # 纪律门禁 ②: 板块强度 > 60 分位 (fail-close)
-            if not skip_gates:
-                s_ok, _s_reason = _sector_strength_ok(latest["sector"])
-                if not s_ok:
-                    return code, None, None
-                # 纪律门禁 ③: 收集主力净流入供截面分位判定 (稍后统一过滤)
-                flow = _flow_net5(code)
-            # A: 产业链加分/门禁 — 不改变 base_conf 的入池过滤, 只影响排序优先级;
-            #    数据不可用/无板块 (离线) 时 adj=0 完全退化为原行为。
-            try:
-                if latest["sector"]:
-                    from .chain import chain_conf_adjust
-                    adj = chain_conf_adjust(latest["sector"], base_conf)
-                    latest["base_conf"] = base_conf
-                    latest["conf"] = max(min_conf, min(100, base_conf + adj))
-                    latest["chain_adj"] = adj
-            except Exception:
-                pass
-
-            # 纪律门禁已在此前判定; 带回应自动生成的条件单数据 (触发价=现价+0.2% 上破)。
-            # 不在此写盘: 全程 6 线程并发的 load/save 会互相覆盖, 且调用方
-            # (run_scan/run_cycle) 的最终 save_state 会用旧快照把这里写掉的
-            # 条件单整个冲掉, 造成"已自动买入却无条件单"。由调用方统一落盘。
-            try:
-                latest["auto_cond_price"] = round(float(latest["last"]) * 1.002, 3)
-            except Exception:
-                pass
-            return code, latest, flow
+            if cand.get("gated"):
+                # 纪律/价值吸筹 (受门禁): 板块强度 + 资金流 + 产业链 conf 调整
+                if not skip_gates:
+                    s_ok, _s_reason = _sector_strength_ok(cand["sector"])
+                    if not s_ok:
+                        return code, None, None
+                    # 纪律门禁 ③: 收集主力净流入供截面分位判定 (稍后统一过滤)
+                    flow = _flow_net5(code)
+                else:
+                    flow = None
+                # A: 产业链加分 — 不改变入池过滤, 只影响排序优先级;
+                #    数据不可用/无板块 (离线) 时 adj=0 完全退化为原行为。
+                base_conf = int(cand.get("conf", 0) or 0)
+                try:
+                    if cand["sector"]:
+                        from .chain import chain_conf_adjust
+                        adj = chain_conf_adjust(cand["sector"], base_conf)
+                        cand["base_conf"] = base_conf
+                        cand["conf"] = max(min_conf, min(100, base_conf + adj))
+                        cand["chain_adj"] = adj
+                except Exception:
+                    pass
+                # 自动买入条件单: 触发价=现价+0.2% 上破 (above)。
+                cand["auto_cond_price"] = round(float(cand["last"]) * 1.002, 3)
+                cand["trigger"] = "above"
+            else:
+                # 独立赛道左侧买点: 直接挂买点入场价, 回踩触发 (below)。
+                cand["auto_cond_price"] = round(float(cand["entry_price"]), 3)
+                cand["trigger"] = "below"
+            return code, cand, flow
         except Exception:
             return code, None, None
 
@@ -1298,13 +1320,15 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     # 若全部候选都拿不到资金流数据 (接口被拒/离线/新股无数据) → 数据缺失不代表
     # "资金弱", 降级跳过该门禁 (保留 ①大盘 ②板块 fail-close);
     # 部分有部分无数据时, 无数据者仍按不达标拦截。
+    # 独立赛道左侧买点 (gated=False) 豁免: 不受资金流门禁管束。
     if not skip_gates:
         flows = [f for f in _flow_map.values() if f is not None]
         if flows:
             med = sorted(flows)[len(flows) // 2]
             out = [e for e in out
-                   if _flow_map.get(e["code"]) is not None
-                   and _flow_map[e["code"]] >= med]
+                   if not e.get("gated")
+                   or (_flow_map.get(e["code"]) is not None
+                       and _flow_map[e["code"]] >= med)]
         else:
             # 完全无资金流数据 → 门禁降级跳过 (见注释)
             pass
@@ -1343,11 +1367,13 @@ def has_position(st, code):
 
 
 def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
-                strategy="", st=None):
+                strategy="", st=None, stop_pct=None, take_pct=None):
     """构造买单订单公共字段 (qty 按全账户总权益等权预算分配, 整手)。
 
     sector 为持仓行业 (用于行业集中度风控 check_sector_concentration);
-    strategy 记录信号来源策略 (策略管理器: paper_discipline_bull/价值吸筹)。
+    strategy 记录信号来源策略 (策略管理器: paper_discipline_bull/价值吸筹/威科夫左侧买点)。
+    stop_pct/take_pct: 左侧买点自带御设 (由买点离场价折算), 落入持仓保护条件单,
+    否则按账户默认止盈止损。
     等权口径: 传入 st 时按 账户总权益/max_pos 分配 (现金+已有持仓市值),
     避免"首批买入吞掉大部分现金、后续仓权重失衡" (曾出现三仓 33万/17万/14万)。
     未传 st 时回退 现金/max_pos (兼容旧调用方与测试)。
@@ -1369,6 +1395,7 @@ def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "date": "", "bars": int(n_total) if n_total else 0,
         "sector": sector or "", "strategy": strategy,
+        "stop_pct": stop_pct, "take_pct": take_pct,
     }
 
 
@@ -1487,17 +1514,29 @@ def _apply_auto_conditions(st, cand):
             continue
         handled.add(code)
         reason = f"自动:{e.get('strategy','')}:{e.get('type')}({e.get('conf',0)})"
+        # 策略级信号追踪: 廉价记录 (只落盘, 不拉行情), 供准确度/盈利聚合。
+        # 同策略+同标的+同事件在冷却窗(20根)内重复扫描自动合并。
+        try:
+            paper_strategy_accuracy.record_signal(
+                e.get("strategy", ""), code, code, e.get("name", ""),
+                e.get("type", ""), e.get("conf", 0),
+                time.strftime("%Y-%m-%d"), e.get("last", 0) or 0,
+                fired=has_position(st, code))
+        except Exception:
+            pass
         # 覆盖式: 同代码同类型 active 条件单 → 更新触发价等, 而非跳过
         existing = seen.get(code)
         if existing is not None:
             existing["price"] = round(float(price), 3)
             existing["name"] = e.get("name", "")
             existing["reason"] = reason
+            existing["trigger"] = e.get("trigger", "above")
             existing["updated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
             touched += 1
             continue
         newc = _cond(
-            "buy_price", code, price=float(price), trigger="above",
+            "buy_price", code, price=float(price),
+            trigger=e.get("trigger", "above"),
             name=e.get("name", ""), reason=reason)
         conds.append(newc)
         seen[code] = newc
@@ -1531,8 +1570,12 @@ def _create_position_conditions(st, symbol, name="", buy_px=None):
             c["status"] = "done"
             c["note"] = "已买入, 入场条件单消费"
     if buy_px is not None:
-        for kind, pct in (("take_profit", _CUR["take_profit"]),
-                          ("stop_loss", _CUR["stop_loss"])):
+        # 止盈/止损百分比: 左侧买点带御设 (取该持仓自带比值), 否则账户默认。
+        pos = next((p for p in st.get("positions", []) if p.get("symbol") == symbol), None)
+        take_pct = (pos or {}).get("take_pct") if pos else None
+        stop_pct = (pos or {}).get("stop_pct") if pos else None
+        for kind, pct in (("take_profit", take_pct or _CUR["take_profit"]),
+                          ("stop_loss", stop_pct or _CUR["stop_loss"])):
             if pct is None:
                 continue
             if any(c.get("kind") == kind and c.get("symbol") == symbol
@@ -1774,6 +1817,14 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
         )
 
 
+# 价值吸筹独立止损/止盈 (暂无可采纳证据, 保持关闭):
+#   80 只扩展池复验 (docs/paper_priority_bt.md) 显示 3% vs 6% 对价值吸筹
+#   结果无系统性差异; 24 白马池里 6% 的改善仅构建在 2 笔样本上, 不稳健。
+#   置 None → 沿用全局止损, 与事件即买口径一致。
+VALUE_STOP_PCT = None
+VALUE_TAKE_PCT = 0.15
+
+
 def fill_buy(st, order, event_type: str = None):
     """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。"""
     price = order["price"]
@@ -1783,6 +1834,15 @@ def fill_buy(st, order, event_type: str = None):
     if st.get("cash", 0) < spend:
         return None, "现金不足"
     st["cash"] -= spend
+    # 价值吸筹订单缺省止损/止盈 → 注入策略特异参数 (条件单与 step 平仓同生效)
+    stop_pct = order.get("stop_pct")
+    take_pct = order.get("take_pct")
+    va_strategy = order.get("strategy")
+    if va_strategy == "screener_value_accumulation":
+        if stop_pct is None and VALUE_STOP_PCT:
+            stop_pct = VALUE_STOP_PCT
+        if take_pct is None and VALUE_TAKE_PCT:
+            take_pct = VALUE_TAKE_PCT
     st["positions"].append({
         "symbol": order["symbol"], "name": order.get("name", ""),
         "type": order["type"], "conf": order.get("conf", 50),
@@ -1790,6 +1850,8 @@ def fill_buy(st, order, event_type: str = None):
         "entry_ts": order["ts"], "entry_bars": order.get("bars", 0),
         "sector": order.get("sector", ""),
         "strategy": order.get("strategy", ""),
+        "stop_pct": stop_pct,
+        "take_pct": take_pct,
         "staged": False,
         "event_type": event_type,
     })
@@ -1797,6 +1859,11 @@ def fill_buy(st, order, event_type: str = None):
     _create_position_conditions(st, order["symbol"], name=order.get("name", ""),
                                 buy_px=price)
     save_state(st)
+    try:
+        paper_strategy_accuracy.mark_fired(order.get("strategy", ""),
+                                           order["symbol"])
+    except Exception:
+        pass
     try:
         paper_log.log_buy(
             symbol=order["symbol"], name=order.get("name", ""),
@@ -1827,26 +1894,29 @@ def step(st, df_by_code):
         pos["last"] = round(last, 3)
         pos["last_ret"] = round(float_ret(entry, last), 4)
         # 止损价: 固定-3% 或 追踪止损 (从持仓期内最高价回撤, 防噪音洗出)。
+        # 左侧买点持仓优先按其自带御设止损/止盈百分比。
+        pos_take = float(pos.get("take_pct") or _CUR["take_profit"])
+        pos_stop = float(pos.get("stop_pct") or _CUR["stop_loss"])
         if _CUR.get("trailing_stop", TRAILING_STOP):
             hi = float(df["high"].iloc[-1])
             peak = float(pos.get("peak") or entry)
             if hi > peak:
                 peak = hi
                 pos["peak"] = round(peak, 3)
-            stop_px = peak * (1 - _CUR["stop_loss"])
+            stop_px = peak * (1 - pos_stop)
             atr_mult = float(_CUR.get("trail_atr_mult", TRAIL_ATR_MULT) or 0.0)
             if atr_mult > 0 and "atr" in df.columns and len(df):
                 atr = float(df["atr"].iloc[-1] or 0.0)
                 stop_px -= atr * atr_mult
         else:
-            stop_px = entry * (1 - _CUR["stop_loss"])
+            stop_px = entry * (1 - pos_stop)
         # 结构位: 用最近 10 根低点做动态支撑 (近似结构关键位)
         support = float(df["low"].iloc[-10:].min())
         # 卖出判定 (任一触发); 每周期推进持仓 K 数 (run_cycle 末尾落盘)
         pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
         reason = None
         held = int(pos["entry_bars"])
-        if ret >= _CUR["take_profit"]:
+        if ret >= pos_take:
             reason = "止盈"
         elif last <= stop_px:
             reason = "止损"
@@ -1929,7 +1999,6 @@ def _rebalance_portfolio(st, df_by_code):
     return rebalanced
 
 
-    event_type: str = None,
 def close_position(st, pos, sell_price, reason, event_type=None):
     """平仓: 回收现金、记录已平仓与净值。"""
     from wyckoff.strategies.sell_strategy import evaluate_sell_reason
@@ -2055,6 +2124,7 @@ def stats(st):
         "by_type": {},
         "by_reason": {},
         "by_sector": {},
+        "by_strategy": {},
         "monthly_returns": {},
         "trade_distribution": {},
     }
@@ -2116,6 +2186,35 @@ def stats(st):
             b["win"] = round(sum(1 for r in rs if r > 0) / len(rs), 4)
             b.pop("rets", None)
         out["by_sector"] = by_sector
+        # 策略分层 (模拟盘双策略: 纪律 / 价值吸筹) — 盈利能力口径。
+        # cum 用 (1+r) 连乘再减一, 反映真实累计, 避免简单累加被单笔大单主导。
+        by_strategy = {}
+        for c in closed:
+            s = c.get("strategy", "") or "未知"
+            b = by_strategy.setdefault(s, {"n": 0, "rets": [], "bars": []})
+            b["n"] += 1
+            b["rets"].append(c["ret"])
+            b["bars"].append(int(c.get("bars", 0) or 0))
+        for s, b in by_strategy.items():
+            rs = b["rets"]
+            wins = [r for r in rs if r > 0]
+            losses = [r for r in rs if r <= 0]
+            avg_win = statistics.mean(wins) if wins else 0.0
+            avg_loss = abs(statistics.mean(losses)) if losses else 0.0
+            cum = 1.0
+            for r in rs:
+                cum *= 1.0 + r
+            b["win"] = round(len(wins) / len(rs), 4)
+            b["avg"] = round(statistics.mean(rs), 4)
+            b["cum"] = round(cum - 1.0, 4)
+            b["pl_ratio"] = round(avg_win / avg_loss, 3) if avg_loss > 0 else None
+            b["expectancy"] = round(
+                (len(wins) / len(rs)) * avg_win
+                - (1 - len(wins) / len(rs)) * avg_loss, 4)
+            b["avg_hold"] = round(statistics.mean(b["bars"]), 1) if b["bars"] else 0.0
+            b.pop("rets", None)
+            b.pop("bars", None)
+        out["by_strategy"] = by_strategy
         # 交易分布统计
         out["trade_distribution"] = {
             "n_wins": len(wins),
@@ -2273,6 +2372,18 @@ def signal_stats_text(st):
         for t, b in sorted(s["by_type"].items(), key=lambda kv: -kv[1]["n"]):
             L.append(f"| {t} | {b['n']} | {b['win']*100:.0f}% | "
                      f"{b['avg']*100:+.2f}% |")
+    if s.get("by_strategy"):
+        L.append("")
+        L.append("| 策略 | 笔数 | 胜率 | 平均收益 | 累计 | 盈亏比 | 期望 | 平均持有 |")
+        L.append("|------|------|------|----------|------|--------|------|----------|")
+        for strat, b in sorted(s["by_strategy"].items(),
+                               key=lambda kv: -kv[1]["n"]):
+            plr = (f"{b['pl_ratio']:.2f}" if b.get("pl_ratio") is not None
+                   else "-")
+            L.append(f"| {paper_strategy_accuracy.STRATEGY_CN.get(strat, strat)} "
+                     f"| {b['n']} | {b['win']*100:.0f}% | "
+                     f"{b['avg']*100:+.2f}% | {b['cum']*100:+.2f}% | {plr} "
+                     f"| {b['expectancy']:+.4f} | {b.get('avg_hold', 0):.1f}根 |")
     L.append("")
     return "\n".join(L)
 
@@ -2309,13 +2420,20 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
     # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合。
     #    三大硬门槛已由 pick_candidates 在候选入池时 fail-close 判定
     #    (大盘↑+板块>60分位+资金>50分位), 这里直接消费精筛后的候选。
+    #    左侧买点特殊: 挂买点入场价, 价格未回踩到位 (last > entry_price) 时
+    #    不直接成交, 交给下方 buy_price 条件单 (below) 等回踩。
     for e in cand:
         if len(st["positions"]) >= _CUR["max_pos"]:
             break
         code = e["code"]
         if has_position(st, code) or any(o["symbol"] == code for o in st["pending"]):
             continue
-        px = float(e.get("last", 0) or 0)
+        px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
+        last = float(e.get("last", 0) or 0)
+        if e.get("trigger") == "below":
+            # 左侧买点: 现价高于买点入场价 → 等回踩 (条件单 below 触发)
+            if last <= 0 or last > px:
+                continue
         if px <= 0:
             continue
         # 风控门禁 (此前为死代码, 现接入入场路径):
@@ -2324,10 +2442,19 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
             continue
         # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
         # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
+        stop_pct = take_pct = None
+        if e.get("strategy") == "long_buy_left" and px > 0:
+            stop_px = float(e.get("stop_price") or 0)
+            target_px = float(e.get("target_price") or 0)
+            if stop_px:
+                stop_pct = round((px - stop_px) / px, 4)
+            if target_px > stop_px:
+                take_pct = round((target_px - px) / px, 4)
         order = _make_order(code, e.get("name", ""), e["type"],
                             e.get("conf", 50), px, 0, st["cash"],
                             sector=e.get("sector", ""),
-                            strategy=e.get("strategy", ""), st=st)
+                            strategy=e.get("strategy", ""), st=st,
+                            stop_pct=stop_pct, take_pct=take_pct)
         if order is None:
             continue
         fill_buy(st, order)
@@ -2392,10 +2519,11 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
     except Exception:
         pass
 
-    label = "策略管理器扫描(纪律+价值吸筹)"
-    result_str = (f"{label}扫描: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
+    label = "策略管理器扫描(纪律+左侧买点+价值吸筹)"
+    result_str = (f"{label}: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
                   if cand else
-                  "策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁, 且价值吸筹未现于底部整固)")
+                  "策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁拦截, "
+                  "左侧买点未现于可执行窗口, 价值吸筹未现于底部整固)")
     st['last_scan_result'] = result_str
     st['next_scan_time'] = (datetime.now() + timedelta(minutes=30)).isoformat()
 

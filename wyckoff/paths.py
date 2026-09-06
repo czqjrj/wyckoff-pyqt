@@ -46,6 +46,9 @@ PORTFOLIO_FILE = os.path.join(DATA_DIR, "wx_portfolio.json")
 NOTES_FILE = os.path.join(DATA_DIR, "wx_notes.json")
 # 模拟盘账户 (自动筛选/下单/卖出/统计), 见 paper.py
 PAPER_FILE = os.path.join(DATA_DIR, "wx_paper.json")
+# 模拟盘策略级信号追踪 (策略4·纪律 / 价值吸筹 逐信号方向命中 + 执行触点),
+# 见 paper_strategy_accuracy.py
+PAPER_STRATEGY_ACCURACY_FILE = os.path.join(DATA_DIR, "wx_paper_strategy_accuracy.json")
 
 # SQLite 行情持久缓存 (K线 / 复权因子), 跨会话复用
 CACHE_DB = os.path.join(DATA_DIR, "wyckoff_cache.db")
