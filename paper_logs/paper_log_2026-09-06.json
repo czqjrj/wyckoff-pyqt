@@ -1,0 +1,170 @@
+{
+  "date": "2026-09-06",
+  "events": [
+    {
+      "ts": "2026-09-06 13:38:36",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "",
+        "qty": 1000,
+        "price": 10.0,
+        "amount": 10000.0,
+        "conf": 90,
+        "strategy": "screener_value_accumulation",
+        "event_type": "",
+        "sector": "",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-06 13:38:36",
+      "type": "sell",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "",
+        "qty": 1000,
+        "buy_price": 10.0,
+        "sell_price": 9.291,
+        "pnl": -709.0,
+        "ret": -0.0783,
+        "ret_pct": "-7.83%",
+        "reason": "条件单:stop_loss",
+        "bars_held": 1,
+        "strategy": "screener_value_accumulation",
+        "event_type": null
+      }
+    },
+    {
+      "ts": "2026-09-06 13:38:36",
+      "type": "condition",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "",
+        "kind": "stop_loss",
+        "trigger_price": null,
+        "current_price": 9.3,
+        "action": "卖出",
+        "reason": "条件单:stop_loss"
+      }
+    },
+    {
+      "ts": "2026-09-06 13:38:36",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh600002",
+        "name": "",
+        "qty": 1000,
+        "price": 10.0,
+        "amount": 10000.0,
+        "conf": 90,
+        "strategy": "screener_value_accumulation",
+        "event_type": "",
+        "sector": "",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sh601218",
+        "name": "吉鑫科技",
+        "reason": "单笔风险 2.5% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sz000685",
+        "name": "中山公用",
+        "reason": "单笔风险 4.5% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sz000686",
+        "name": "东北证券",
+        "reason": "单笔风险 2.4% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "buy",
+      "detail": {
+        "symbol": "sz002939",
+        "name": "长城证券",
+        "qty": 40900,
+        "price": 8.138,
+        "amount": 332844.2,
+        "conf": 93,
+        "strategy": "long_buy_left",
+        "event_type": "",
+        "sector": "证券Ⅱ",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "buy",
+      "detail": {
+        "symbol": "sz002937",
+        "name": "兴瑞科技",
+        "qty": 11800,
+        "price": 28.068,
+        "amount": 331202.4,
+        "conf": 92,
+        "strategy": "long_buy_left",
+        "event_type": "",
+        "sector": "汽车零部件",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "rebalance",
+      "detail": {
+        "symbol": "sh600002",
+        "name": "",
+        "qty": 23600,
+        "price": 10.1,
+        "old_qty": 1000,
+        "new_qty": 24600
+      }
+    },
+    {
+      "ts": "2026-09-06 16:53:50",
+      "type": "account",
+      "detail": {
+        "equity": 995544.64,
+        "cash": 83941.64,
+        "positions_count": 3,
+        "closed_count": 0
+      }
+    },
+    {
+      "ts": "2026-09-06 17:25:09",
+      "type": "account",
+      "detail": {
+        "equity": 995544.64,
+        "cash": 83941.64,
+        "positions_count": 3,
+        "closed_count": 0
+      }
+    }
+  ],
+  "summary": {
+    "scan_count": 0,
+    "buy_count": 4,
+    "sell_count": 1,
+    "condition_count": 1,
+    "risk_block_count": 3,
+    "rebalance_count": 1
+  }
+}

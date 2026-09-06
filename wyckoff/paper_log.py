@@ -10,10 +10,11 @@
 
 日志文件存储在 DATA_DIR/paper_logs/ 目录下, 按日期命名。
 """
+
+import contextlib
 import json
 import os
 import threading
-import time
 from datetime import datetime
 
 from .paths import DATA_DIR
@@ -21,6 +22,33 @@ from .paths import DATA_DIR
 _LOG_DIR = os.path.join(DATA_DIR, "paper_logs")
 _LOCK = threading.Lock()
 _MAX_LOG_DAYS = 90  # 保留最近90天日志
+# 全局开关: 回放/批量任务临时禁用磁盘日志 (逐事件整文件读写是回放主开销)。
+# set_enabled(False) 后 _add_event 立即 no-op; disabled() 上下文自动恢复。
+_ENABLED = True
+
+
+def set_enabled(flag):
+    """启停磁盘日志 (返回旧值)。回放等重负载路径调用 set_enabled(False)。"""
+    global _ENABLED
+    old = _ENABLED
+    _ENABLED = bool(flag)
+    return old
+
+
+def logging_enabled():
+    return _ENABLED
+
+
+@contextlib.contextmanager
+def disabled():
+    """上下文: 临时禁用日志写入, 退出时恢复原状态。"""
+    global _ENABLED
+    old = _ENABLED
+    _ENABLED = False
+    try:
+        yield
+    finally:
+        _ENABLED = old
 
 
 def _ensure_dir():
@@ -46,7 +74,7 @@ def _load_day(date_str=None):
     fp = _log_file(date_str)
     if os.path.exists(fp):
         try:
-            with open(fp, "r", encoding="utf-8") as f:
+            with open(fp, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
@@ -63,6 +91,8 @@ def _save_day(data, date_str=None):
 
 def _add_event(event_type, detail):
     """添加一条事件到当天日志。"""
+    if not _ENABLED:
+        return
     try:
         with _LOCK:
             today = _today_str()
@@ -95,8 +125,8 @@ def _update_summary(data):
 
 # ── 公开日志接口 ─────────────────────────────────────────
 
-def log_scan(scan_count, codes_scanned, candidates_found, candidates=None,
-             gate_results=None):
+
+def log_scan(scan_count, codes_scanned, candidates_found, candidates=None, gate_results=None):
     """记录扫描事件。
 
     Args:
@@ -130,8 +160,7 @@ def log_scan(scan_count, codes_scanned, candidates_found, candidates=None,
     _add_event("scan", detail)
 
 
-def log_buy(symbol, name, qty, price, conf, strategy="", event_type="",
-            sector="", reason=""):
+def log_buy(symbol, name, qty, price, conf, strategy="", event_type="", sector="", reason=""):
     """记录买入事件。
 
     Args:
@@ -160,8 +189,9 @@ def log_buy(symbol, name, qty, price, conf, strategy="", event_type="",
     _add_event("buy", detail)
 
 
-def log_sell(symbol, name, qty, buy_price, sell_price, reason, ret,
-             bars_held=0, strategy="", event_type=""):
+def log_sell(
+    symbol, name, qty, buy_price, sell_price, reason, ret, bars_held=0, strategy="", event_type=""
+):
     """记录卖出事件。
 
     Args:
@@ -193,8 +223,7 @@ def log_sell(symbol, name, qty, buy_price, sell_price, reason, ret,
     _add_event("sell", detail)
 
 
-def log_condition_fired(symbol, name, kind, trigger_price, current_price,
-                        action="", reason=""):
+def log_condition_fired(symbol, name, kind, trigger_price, current_price, action="", reason=""):
     """记录条件单触发事件。
 
     Args:
@@ -278,6 +307,7 @@ def log_account_snapshot(equity_value, cash, positions_count, closed_count):
 
 # ── 日志查询接口 ─────────────────────────────────────────
 
+
 def get_log(date_str=None):
     """获取某天的日志。"""
     with _LOCK:
@@ -287,6 +317,7 @@ def get_log(date_str=None):
 def get_log_range(start_date, end_date):
     """获取日期范围内的日志。"""
     from datetime import timedelta
+
     results = []
     current = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
@@ -302,6 +333,7 @@ def get_log_range(start_date, end_date):
 def get_recent_logs(days=7):
     """获取最近N天的日志。"""
     from datetime import timedelta
+
     today = datetime.now()
     start = (today - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     end = today.strftime("%Y-%m-%d")
@@ -344,42 +376,56 @@ def format_daily_report(date_str=None):
         detail = event.get("detail", {})
 
         if etype == "scan":
-            lines.append(f"[{ts}] 扫描 #{detail.get('scan_count', '?')}: "
-                         f"扫描 {detail.get('codes_scanned', 0)} 码, "
-                         f"命中 {detail.get('candidates_found', 0)} 个候选")
+            lines.append(
+                f"[{ts}] 扫描 #{detail.get('scan_count', '?')}: "
+                f"扫描 {detail.get('codes_scanned', 0)} 码, "
+                f"命中 {detail.get('candidates_found', 0)} 个候选"
+            )
         elif etype == "buy":
-            lines.append(f"[{ts}] 买入 {detail.get('symbol', '')} "
-                         f"{detail.get('name', '')} "
-                         f"{detail.get('qty', 0)}股 @ {detail.get('price', 0)} "
-                         f"conf={detail.get('conf', 0)} "
-                         f"策略={detail.get('strategy', '')} "
-                         f"原因={detail.get('reason', '')}")
+            lines.append(
+                f"[{ts}] 买入 {detail.get('symbol', '')} "
+                f"{detail.get('name', '')} "
+                f"{detail.get('qty', 0)}股 @ {detail.get('price', 0)} "
+                f"conf={detail.get('conf', 0)} "
+                f"策略={detail.get('strategy', '')} "
+                f"原因={detail.get('reason', '')}"
+            )
         elif etype == "sell":
-            lines.append(f"[{ts}] 卖出 {detail.get('symbol', '')} "
-                         f"{detail.get('name', '')} "
-                         f"{detail.get('qty', 0)}股 @ {detail.get('sell_price', 0)} "
-                         f"收益={detail.get('ret_pct', '')} "
-                         f"原因={detail.get('reason', '')}")
+            lines.append(
+                f"[{ts}] 卖出 {detail.get('symbol', '')} "
+                f"{detail.get('name', '')} "
+                f"{detail.get('qty', 0)}股 @ {detail.get('sell_price', 0)} "
+                f"收益={detail.get('ret_pct', '')} "
+                f"原因={detail.get('reason', '')}"
+            )
         elif etype == "condition":
-            lines.append(f"[{ts}] 条件单 {detail.get('kind', '')} "
-                         f"{detail.get('symbol', '')} "
-                         f"触发价={detail.get('trigger_price', '')} "
-                         f"现价={detail.get('current_price', '')} "
-                         f"动作={detail.get('action', '')}")
+            lines.append(
+                f"[{ts}] 条件单 {detail.get('kind', '')} "
+                f"{detail.get('symbol', '')} "
+                f"触发价={detail.get('trigger_price', '')} "
+                f"现价={detail.get('current_price', '')} "
+                f"动作={detail.get('action', '')}"
+            )
         elif etype == "risk_block":
-            lines.append(f"[{ts}] 风控拦截 {detail.get('symbol', '')} "
-                         f"{detail.get('name', '')} "
-                         f"类型={detail.get('risk_type', '')} "
-                         f"原因={detail.get('reason', '')}")
+            lines.append(
+                f"[{ts}] 风控拦截 {detail.get('symbol', '')} "
+                f"{detail.get('name', '')} "
+                f"类型={detail.get('risk_type', '')} "
+                f"原因={detail.get('reason', '')}"
+            )
         elif etype == "rebalance":
-            lines.append(f"[{ts}] 再平衡 {detail.get('symbol', '')} "
-                         f"{detail.get('name', '')} "
-                         f"加仓 {detail.get('qty', 0)}股 @ {detail.get('price', 0)}")
+            lines.append(
+                f"[{ts}] 再平衡 {detail.get('symbol', '')} "
+                f"{detail.get('name', '')} "
+                f"加仓 {detail.get('qty', 0)}股 @ {detail.get('price', 0)}"
+            )
         elif etype == "account":
-            lines.append(f"[{ts}] 账户快照: "
-                         f"净值={detail.get('equity', 0):,.0f} "
-                         f"现金={detail.get('cash', 0):,.0f} "
-                         f"持仓={detail.get('positions_count', 0)}只")
+            lines.append(
+                f"[{ts}] 账户快照: "
+                f"净值={detail.get('equity', 0):,.0f} "
+                f"现金={detail.get('cash', 0):,.0f} "
+                f"持仓={detail.get('positions_count', 0)}只"
+            )
 
     return "\n".join(lines)
 
@@ -387,6 +433,7 @@ def format_daily_report(date_str=None):
 def cleanup_old_logs(keep_days=_MAX_LOG_DAYS):
     """清理旧日志, 保留最近N天。"""
     from datetime import timedelta
+
     _ensure_dir()
     cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
     removed = 0

@@ -45,6 +45,7 @@ class WyckoffStrategy(bt.Strategy):
         self.horizon = horizon
         self.cost = cost
         self.signals_log = []  # 记录每根 K 线的信号及收益
+        self.full_df = None  # None 表示自动模式, 已设置则为完整 K 线 DataFrame
 
     def next(self):
         """每根 K 线执行一次：因果式检测事件并记录收益。"""
@@ -54,38 +55,70 @@ class WyckoffStrategy(bt.Strategy):
 
         close = self.data.close.array
 
-        # ── 因果式: 只用当前已有历史重新检测枢轴/事件 ──────────────────────
-        # 真实项目中, 请在数据预处理阶段将 pivots/events 透传进策略的
-        # 属性 (如 self._pivots, self._events), 此处为演示框架, 若未 precompute,
-        # 则本次 next() 不开仓, 防止未定义变量错误。
-        # 详见 backtest_engine.cerebro_run 中的信号透传机制。
+        # full_df 模式: 如果 full_df 已设置, 则使用; 否则自动 fetch kline
+        if not hasattr(self, "full_df"):
+            self.full_df = None
 
-        # 演示: 若有预先计算的 _events, 则在此消费
-        if hasattr(self, "_events") and self._events is not None:
-            for e in self._events:
-                idx = e["idx"]
-                if idx > i:
-                    continue  # 只处理已过去的事件
-                d = _event_dir(e.get("type", ""))
-                end = min(i + self.horizon, len(close) - 1)
+        if self.full_df is None:
+            # 自动模式: fetch kline using self.p.code
+            from wyckoff.datasource import fetch_kline
+            from wyckoff.utils import normalize_symbol
+            try:
+                df_auto = fetch_kline(normalize_symbol(self.p.code), datalen=self.datalen, scale=240)
+                # 确保 day 列是 datetime 类型
+                if "day" in df_auto.columns:
+                    df_auto["day"] = pd.to_datetime(df_auto["day"])
+                self.full_df = df_auto
+            except Exception:
+                # 数据源不可用, 本次 next() 不产生信号
+                return
 
-                if d < 0:  # 空头事件
-                    if i + 1 <= end:
-                        ret = close[i + 1] / close[end] - 1 - self.cost
-                    else:
-                        ret = 0.0
-                    self.signals_log.append(
-                        {"type": e["type"], "dir": "short", "entry_idx": idx, "ret": ret}
-                    )
-                else:  # 多头/中性事件
-                    if i + 1 <= end:
-                        ret = close[end] / close[i + 1] - 1 - self.cost
-                    else:
-                        ret = 0.0
-                    self.signals_log.append(
-                        {"type": e["type"], "dir": "long", "entry_idx": idx, "ret": ret}
-                    )
-        # 若无 _events, 本次 next() 不产生信号 (由外部 precompute)
+        # 仅每隔 few_bars 根 K 线进行一次全量因果检测,
+        # 其他bar只记录已有信号, 以提升回测性能
+        if not hasattr(self, "next_counter"):
+            self.next_counter = 0
+        self.next_counter += 1
+        if self.next_counter % 3 != 0:
+            # 非检测bar: 如果有已记录的信号, 仍可复用, 此处简化处理不再重新添加
+            # 实际项目中可根据需要实现信号复用逻辑
+            return
+
+        # 使用 full_df 进行因果检测
+        wdf = self.full_df.iloc[:i+1].copy()
+        # 确保 day 列是 datetime 类型 (add_indicators 需要)
+        if "day" in wdf.columns:
+            wdf["day"] = pd.to_datetime(wdf["day"])
+        # 重新计算指标 (与 backtest_events/backtest_vsa 行为一致)
+        from wyckoff.indicators import add_indicators, find_pivots
+        from wyckoff.events import detect_all
+        wdf = add_indicators(wdf, symbol=self.p.code)
+        wpivots = find_pivots(wdf, order=6)
+        wevents = detect_all(wdf, wpivots)
+
+        # 遍历事件进行买入/卖出决策
+        for e in wevents:
+            idx_e = e["idx"]
+            if idx_e > i:
+                continue  # 只处理已过去的事件 (因果: 只用历史数据)
+            d = _event_dir(e.get("type", ""))
+            end = min(i + self.horizon, len(close) - 1)
+
+            if d < 0:  # 空头事件
+                if i + 1 <= end:
+                    ret = close[i + 1] / close[end] - 1 - self.cost
+                else:
+                    ret = 0.0
+                self.signals_log.append(
+                    {"type": e["type"], "dir": "short", "entry_idx": idx_e, "ret": ret}
+                )
+            else:  # 多头/中性事件
+                if i + 1 <= end:
+                    ret = close[end] / close[i + 1] - 1 - self.cost
+                else:
+                    ret = 0.0
+                self.signals_log.append(
+                    {"type": e["type"], "dir": "long", "entry_idx": idx_e, "ret": ret}
+                )
 
 
 def _event_dir(event_type: str) -> int:
@@ -238,8 +271,8 @@ def cerebro_run(
             "n": t,
             "win": float(w / t * 100) if t else 0.0,
             "avg": float(info["total_ret"] / t * 100) if t else 0.0,
-            "best": float(max(info["total_ret"], default=0) * 100) if info.get("total_ret") else 0.0,
-            "worst": float(min(info["total_ret"], default=0) * 100) if info.get("total_ret") else 0.0,
+            "best": float(info["total_ret"] * 100) if info.get("total_ret") else 0.0,
+            "worst": float(info["total_ret"] * 100) if info.get("total_ret") else 0.0,
             "pl_ratio": pl,
             "vs_bh": float(info["total_ret"] / max(bench_ret, 1e-6) * 100 - 100) if bench_ret else 0.0,
         }

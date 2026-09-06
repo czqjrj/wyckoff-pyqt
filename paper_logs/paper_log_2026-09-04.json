@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-04",
+  "events": [
+    {
+      "ts": "2026-09-04 17:45:16",
+      "type": "account",
+      "detail": {
+        "equity": 1000922.09,
+        "cash": 332965.09,
+        "positions_count": 2,
+        "closed_count": 0
+      }
+    },
+    {
+      "ts": "2026-09-04 17:45:24",
+      "type": "scan",
+      "detail": {
+        "scan_count": 5,
+        "codes_scanned": 6000,
+        "candidates_found": 0
+      }
+    }
+  ],
+  "summary": {
+    "scan_count": 1,
+    "buy_count": 0,
+    "sell_count": 0,
+    "condition_count": 0,
+    "risk_block_count": 0,
+    "rebalance_count": 0
+  }
+}

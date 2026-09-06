@@ -210,6 +210,9 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
 
     _real_save = paper.save_state
     paper.save_state = lambda s: None
+    from wyckoff import paper_log
+
+    _log_off = paper_log.set_enabled(False)
     try:
         for D in all_days:
             df_by_code = {}
@@ -333,6 +336,7 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
                 }
             )
     finally:
+        paper_log.set_enabled(_log_off)
         paper.save_state = _real_save
     return st
 

@@ -27,18 +27,19 @@ def _vol_pct_median(df, window: int = 20) -> float:
     """计算最近 window 根 K 线的收盘价波动率中位数 (%): 以中位而非均值，避免极端行情 (黑天鹅/封 ST) 污染。
     若数据不足窗口，自动收窄至可用根数。"""
     close = df["close"].values.astype(float)
+    high = df["high"].values.astype(float)
+    low = df["low"].values.astype(float)
     win = min(window, len(close))
     if win < 3:
         return 0.02  # 极少数据回退最小阈值
-    # 逐根 True Range (最高-最低, 以及之和前收盘价的绝对差)
-    tr = np.zeros(len(close))
-    tr[0] = max(df["high"].iloc[0], df["close"].iloc[0]) - min(df["low"].iloc[0], df["close"].iloc[0])
-    for i in range(1, len(close)):
-        tr[i] = max(
-            df["high"].iloc[i] - df["low"].iloc[i],
-            abs(df["high"].iloc[i] - df["close"].iloc[i-1]),
-            abs(df["low"].iloc[i] - df["close"].iloc[i-1])
-        )
+    # 逐根 True Range (向量化, 数值与原逐根循环完全一致)
+    prev = np.empty_like(close)
+    prev[1:] = close[:-1]
+    prev[0] = close[0]
+    tr = np.maximum(
+        high - low,
+        np.maximum(np.abs(high - prev), np.abs(low - prev)),
+    )
     median_close = np.median(close[-win:])
     if median_close <= 0:
         return 0.03  # 防止零价位误判

@@ -17,6 +17,7 @@
   python scripts/paper_replay_bt.py --start 2023-06-01 --mkt-gate \
          --report docs/paper_replay_bt.md --export docs/paper_replay_trades.csv
 """
+
 import argparse
 import os
 import sys
@@ -37,6 +38,7 @@ from wyckoff import paper  # noqa: E402
 
 def _sdate(s):
     from datetime import date
+
     if isinstance(s, str):
         return date.fromisoformat(s)
     return s
@@ -73,12 +75,14 @@ def load_stock_events(code, min_conf, datalen):
     sector = ""
     try:
         from wyckoff.fundamental import fetch_sector
+
         sector = fetch_sector(code) or ""
     except Exception:
         pass
     chain_key = ""
     try:
         from wyckoff.chain import chain_cap_key
+
         chain_key = chain_cap_key(sector) or ""
     except Exception:
         pass
@@ -108,12 +112,12 @@ def load_market_gate(datalen=850):
     try:
         from wyckoff.datasource import fetch_kline
         from wyckoff.indicators import add_indicators
+
         df = add_indicators(fetch_kline("sh000001", datalen=datalen, scale=240))
         if df is None or len(df) < 60:
             return None
         m = {}
-        for d, cl, ma in zip(df["day"], df["close"].astype(float),
-                             df["price_ma20"]):
+        for d, cl, ma in zip(df["day"], df["close"].astype(float), df["price_ma20"]):
             if ma is not None and pd.notna(ma):
                 m[d] = (float(cl), float(ma))
         return m
@@ -153,8 +157,7 @@ def bear_signal_on(rec, j, window=10):
         idx = int(e.get("idx") or 0)
         if idx <= j and (j - idx) <= window:
             if best is None or idx > best["idx"]:
-                best = {"type": e["type"], "idx": idx,
-                        "conf": int(e.get("conf", 0) or 0)}
+                best = {"type": e["type"], "idx": idx, "conf": int(e.get("conf", 0) or 0)}
     return best
 
 
@@ -177,8 +180,9 @@ def va_candidate(rec, j, va_m):
     if hit is not None:
         return None if hit is False else dict(hit)
     evs = rec["all_evs"]
-    if not any(e.get("type") in paper.LONG_EVENT_TYPES
-               and 0 <= j - (e.get("idx") or -1) <= 20 for e in evs):
+    if not any(
+        e.get("type") in paper.LONG_EVENT_TYPES and 0 <= j - (e.get("idx") or -1) <= 20 for e in evs
+    ):
         _va_cache[key] = False
         return None
     df = rec["df"]
@@ -194,9 +198,12 @@ def va_candidate(rec, j, va_m):
         _va_cache[key] = False
         return None
     ev = sig["event"]
-    res = {"strategy": "screener_value_accumulation",
-           "type": ev["type"], "idx": int(ev.get("idx") or 0),
-           "conf": int(ev.get("conf", 0) or 0)}
+    res = {
+        "strategy": "screener_value_accumulation",
+        "type": ev["type"],
+        "idx": int(ev.get("idx") or 0),
+        "conf": int(ev.get("conf", 0) or 0),
+    }
     _va_cache[key] = res
     return dict(res)
 
@@ -237,8 +244,11 @@ def _flow_score(rec, j, back=5):
     if j < back:
         return None
     import numpy as np
-    b = np.asarray(rec["close"][j - back + 1: j + 1]) - np.asarray(rec["open"][j - back + 1: j + 1])
-    v = np.asarray(rec["volume"][j - back + 1: j + 1])
+
+    b = np.asarray(rec["close"][j - back + 1 : j + 1]) - np.asarray(
+        rec["open"][j - back + 1 : j + 1]
+    )
+    v = np.asarray(rec["volume"][j - back + 1 : j + 1])
     num = float(np.sum(b * v))
     den = float(np.sum(np.abs(b) * v)) or 1.0
     return num / den
@@ -258,12 +268,13 @@ def _sector_gate_ok(rec, ts, gate=0.60):
         return True, "无板块映射(放行)"
     try:
         from wyckoff.chain import strength_at
+
         pct = strength_at(sector, ts=pd.Timestamp(ts))
     except Exception:
         return True, "板块快照查询异常(放行)"
     if pct is None:
         return True, f"板块「{sector}」无历史快照(放行)"
-    return (pct >= gate), f"板块强度{pct*100:.0f}分位"
+    return (pct >= gate), f"板块强度{pct * 100:.0f}分位"
 
 
 def _window_df(rec, D, day_to_j):
@@ -273,7 +284,7 @@ def _window_df(rec, D, day_to_j):
     if j is None:
         sub = df[df["day"] <= D]  # 停牌日 carry 最近一根
         return sub if len(sub) else df.iloc[0:0]
-    return df.iloc[:j + 1]
+    return df.iloc[: j + 1]
 
 
 def replay(stocks, params, market_gate=None):
@@ -284,29 +295,35 @@ def replay(stocks, params, market_gate=None):
     建仓等权 (总权益/max_pos)。
     """
     from wyckoff.settings_keys import S
+
     hold = int(params.get("hold_bars") or 10**6)
     # 提速: 重放过程中 fill_buy/close_position 会反复 save_state 原子落盘,
     # 对网格对比是纯开销。这里临时把 save_state 降级为 no-op, 仅在回放结束时真落盘一次。
     _real_save = paper.save_state
     paper.save_state = lambda st: None
-    try:
-        st = _replay_impl(paper, hold, stocks, params, market_gate, S)
-        _real_save(st)
-        return st
-    finally:
-        paper.save_state = _real_save
+    from wyckoff import paper_log
+
+    with paper_log.disabled():  # 逐事件整文件日志读写是回放主开销, 一并关掉
+        try:
+            st = _replay_impl(paper, hold, stocks, params, market_gate, S)
+            _real_save(st)
+            return st
+        finally:
+            paper.save_state = _real_save
 
 
 def _replay_impl(paper, hold, stocks, params, market_gate, S):
-    paper.apply_paper_params({
-        S.Paper.INIT_CASH: params["init_cash"],
-        S.Paper.MAX_POS: params["max_pos"],
-        S.Paper.HOLD_BARS: hold,
-        S.Paper.STOP_LOSS: params["stop_loss"],
-        S.Paper.TAKE_PROFIT: params["take_profit"],
-        S.Paper.COST: params["cost"],
-        S.Paper.MIN_CONF: params["min_conf"],
-    })
+    paper.apply_paper_params(
+        {
+            S.Paper.INIT_CASH: params["init_cash"],
+            S.Paper.MAX_POS: params["max_pos"],
+            S.Paper.HOLD_BARS: hold,
+            S.Paper.STOP_LOSS: params["stop_loss"],
+            S.Paper.TAKE_PROFIT: params["take_profit"],
+            S.Paper.COST: params["cost"],
+            S.Paper.MIN_CONF: params["min_conf"],
+        }
+    )
     cfg = paper._CUR
     st = paper._new_state()
     st["_gathered_signals"] = []
@@ -353,15 +370,20 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                 # 价值吸筹·空头卖出宽限期: 吸筹建仓后前 N 根不因 UTAD/LPSY 平仓,
                 # 避免底部整固期的普通波动信号误伤过早离场 (-3~-4% 的秒卖)。
                 grace = int(params.get("va_bear_grace") or 0)
-                if (grace > 0
-                        and pos.get("strategy") == "screener_value_accumulation"
-                        and int(pos.get("entry_bars", 0) or 0) < grace):
+                if (
+                    grace > 0
+                    and pos.get("strategy") == "screener_value_accumulation"
+                    and int(pos.get("entry_bars", 0) or 0) < grace
+                ):
                     continue
                 dfw = df_by_code.get(pos["symbol"])
-                last = float(dfw["close"].iloc[-1]) if dfw is not None and len(dfw) else pos.get("last", pos["buy_px"])
+                last = (
+                    float(dfw["close"].iloc[-1])
+                    if dfw is not None and len(dfw)
+                    else pos.get("last", pos["buy_px"])
+                )
                 sell_price = last * (1 - paper.SLIP_SELL)
-                paper.close_position(st, pos, sell_price, "空头信号",
-                                     event_type=bear["type"])
+                paper.close_position(st, pos, sell_price, "空头信号", event_type=bear["type"])
 
         # 2) 建仓: 双策略候选 (纪律优先, 价值吸筹回退), 引擎等权口径成交
         cands = []
@@ -387,27 +409,42 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
             # 强链过滤 (历史快照无前视; 无快照 fail-open)
             if params.get("chain_min_pct"):
                 from wyckoff.chain import chain_factor_for
+
                 try:
                     cf = chain_factor_for(rec["sector"], ts=pd.Timestamp(D))
                     if cf is not None and cf["pct"] < params["chain_min_pct"]:
                         continue
                 except Exception:
                     pass
-            cands.append({"code": code, "conf": int(ev["conf"] or 0),
-                          "type": ev["type"], "open": rec["open"][j],
-                          "sector": rec.get("sector", ""),
-                          "chain": rec["chain"], "strategy": strategy,
-                          "flow": _flow_score(rec, j)})
+            cands.append(
+                {
+                    "code": code,
+                    "conf": int(ev["conf"] or 0),
+                    "type": ev["type"],
+                    "open": rec["open"][j],
+                    "sector": rec.get("sector", ""),
+                    "chain": rec["chain"],
+                    "strategy": strategy,
+                    "flow": _flow_score(rec, j),
+                }
+            )
             if track_on:
                 # 策略信号追踪: 与实盘 run_cycle 同口径记录 (record_signal 冷却合并),
                 # 但回放内先内存收集, 结束时一次性批量落盘 + 立即评估。
-                st["_gathered_signals"].append({
-                    "strategy": strategy, "symbol": code, "code": code,
-                    "name": "", "event_type": ev["type"],
-                    "conf": int(ev["conf"] or 0), "date": str(D),
-                    "ref_px": float(rec["open"][j] or 0),
-                    "fired": False, "df": rec["df"],
-                })
+                st["_gathered_signals"].append(
+                    {
+                        "strategy": strategy,
+                        "symbol": code,
+                        "code": code,
+                        "name": "",
+                        "event_type": ev["type"],
+                        "conf": int(ev["conf"] or 0),
+                        "date": str(D),
+                        "ref_px": float(rec["open"][j] or 0),
+                        "fired": False,
+                        "df": rec["df"],
+                    }
+                )
 
         # 大盘20日线门禁 (因果历史重建, 无前视)
         if params.get("mkt_gate") and market_gate is not None:
@@ -424,9 +461,9 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                 cands = []
         # 板块强度门禁 (历史快照, 无快照放行)
         if params.get("sect_gate"):
-            cands = [c for c in cands
-                     if _sector_gate_ok({"sector": c["sector"]},
-                                        ts=pd.Timestamp(D))[0]]
+            cands = [
+                c for c in cands if _sector_gate_ok({"sector": c["sector"]}, ts=pd.Timestamp(D))[0]
+            ]
         cands.sort(key=lambda x: -x["conf"])
 
         def _try_fill(cand):
@@ -437,26 +474,36 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
             cc = params.get("chain_cap") or 0
             if cc and cand["chain"]:
                 n_chain = sum(
-                    1 for p in st["positions"]
-                    if stocks[code_to_idx[p["symbol"]]].get("chain")
-                    == cand["chain"])
+                    1
+                    for p in st["positions"]
+                    if stocks[code_to_idx[p["symbol"]]].get("chain") == cand["chain"]
+                )
                 if n_chain >= cc:
                     return
             if paper._risk_blocks_entry(st, cand, cand["open"]):
                 return
-            order = paper._make_order(cand["code"], "", cand["type"],
-                                      cand["conf"], cand["open"], 0,
-                                      st["cash"], sector=cand["sector"],
-                                      strategy=cand["strategy"], st=st)
+            order = paper._make_order(
+                cand["code"],
+                "",
+                cand["type"],
+                cand["conf"],
+                cand["open"],
+                0,
+                st["cash"],
+                sector=cand["sector"],
+                strategy=cand["strategy"],
+                st=st,
+            )
             if order is None:
                 return
             paper.fill_buy(st, order)
             if track_on:
                 for s in reversed(st["_gathered_signals"]):
-                    if (s["symbol"] == order["symbol"]
-                            and s["strategy"] == (order.get("strategy")
-                                                  or "paper_discipline_bull")
-                            and not s["fired"]):
+                    if (
+                        s["symbol"] == order["symbol"]
+                        and s["strategy"] == (order.get("strategy") or "paper_discipline_bull")
+                        and not s["fired"]
+                    ):
                         s["fired"] = True
                         break
 
@@ -477,16 +524,18 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
         paper._rebalance_portfolio(st, df_by_code)
 
         # 4) 记录净值 (今日收盘市值)
-        st["equity_hist"].append({
-            "ts": str(D),
-            "cash": round(st["cash"], 2),
-            "equity": round(paper.equity(st, {}), 2),
-        })
+        st["equity_hist"].append(
+            {
+                "ts": str(D),
+                "cash": round(st["cash"], 2),
+                "equity": round(paper.equity(st, {}), 2),
+            }
+        )
 
     if track_on:
         from wyckoff import paper_strategy_accuracy as psa
-        st["_track_summary"] = psa.run_signal_pipeline(
-            st.get("_gathered_signals") or [])
+
+        st["_track_summary"] = psa.run_signal_pipeline(st.get("_gathered_signals") or [])
     st.pop("_gathered_signals", None)
     paper.save_state(st)
     return st
@@ -499,17 +548,25 @@ def build_report(st, params):
     L.append("# 模拟盘引擎·真实K线历史回放回测")
     L.append("")
     L.append(f"- 生成: {paper.time.strftime('%Y-%m-%d')}")
-    L.append(f"- 口径: 初始资金 {params['init_cash']:,.0f} · 持仓上限 {params['max_pos']} · "
-             f"conf≥{params['min_conf']} · 持{params['hold_bars']}K · "
-             f"止损-{params['stop_loss']*100:.0f}% · 止盈+{params['take_profit']*100:.0f}% · "
-             f"单边成本{params['cost']*100:.2f}%")
-    L.append("- 双策略选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先, "
-             "无纪律信号时回退价值吸筹(底部整固 + 近20根内吸筹事件, 无conf门槛)")
+    L.append(
+        f"- 口径: 初始资金 {params['init_cash']:,.0f} · 持仓上限 {params['max_pos']} · "
+        f"conf≥{params['min_conf']} · 持{params['hold_bars']}K · "
+        f"止损-{params['stop_loss'] * 100:.0f}% · 止盈+{params['take_profit'] * 100:.0f}% · "
+        f"单边成本{params['cost'] * 100:.2f}%"
+    )
+    L.append(
+        "- 双策略选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先, "
+        "无纪律信号时回退价值吸筹(底部整固 + 近20根内吸筹事件, 无conf门槛)"
+    )
     if params.get("va_confirm"):
-        L.append("- 价值吸筹入场: **确认式** (事件后首根收盘站上MA10才建仓, "
-                 "非事件即买; 减少底部回踩被止损的过早单)")
-    total_exit = (f"止盈+{params['take_profit']*100:.0f}% / 止损-{params['stop_loss']*100:.0f}% "
-                  f"/ 破位 / 到期")
+        L.append(
+            "- 价值吸筹入场: **确认式** (事件后首根收盘站上MA10才建仓, "
+            "非事件即买; 减少底部回踩被止损的过早单)"
+        )
+    total_exit = (
+        f"止盈+{params['take_profit'] * 100:.0f}% / 止损-{params['stop_loss'] * 100:.0f}% "
+        f"/ 破位 / 到期"
+    )
     if params.get("bear_exit"):
         total_exit += " + 空头信号主动卖出(UTAD/LPSY)"
     else:
@@ -524,24 +581,30 @@ def build_report(st, params):
     L.append(f"- 硬门禁: {('、'.join(on)) if on else '全部关闭'}")
     L.append("")
     if params.get("flow_gate") or params.get("sect_gate"):
-        L.append("> 门禁口径备注: 大盘门禁用历史前缀因果重建(收盘>MA20); 资金流门禁用"
-                 "近5根量价净流入占比, 按『当日候选池 ≥ 截面中位』过滤(fail-close, "
-                 "与实盘『净流入>50分位』一致; 属可回测的因果量价代理而非真实主力资金流); "
-                 "板块强度门禁用历史快照分位≥0.6(个股板块已通过 fetch_sector 注入, "
-                 "但板块强度快照仅自 2026-08 起, 回测区间此前无快照故 fail-open 放行, "
-                 "仅末尾有真实分位才过滤)。")
+        L.append(
+            "> 门禁口径备注: 大盘门禁用历史前缀因果重建(收盘>MA20); 资金流门禁用"
+            "近5根量价净流入占比, 按『当日候选池 ≥ 截面中位』过滤(fail-close, "
+            "与实盘『净流入>50分位』一致; 属可回测的因果量价代理而非真实主力资金流); "
+            "板块强度门禁用历史快照分位≥0.6(个股板块已通过 fetch_sector 注入, "
+            "但板块强度快照仅自 2026-08 起, 回测区间此前无快照故 fail-open 放行, "
+            "仅末尾有真实分位才过滤)。"
+        )
     else:
-        L.append("> 局限: 板块强度>60分位 与 资金流净流入>50分位 两道门禁缺历史数据，本次回测未执行（仅执行可历史重建的大盘20日线门禁 + 双策略选股[纪律conf≥阈值 / 价值吸筹] + 结构位止损 + 持仓上限）。")
+        L.append(
+            "> 局限: 板块强度>60分位 与 资金流净流入>50分位 两道门禁缺历史数据，本次回测未执行（仅执行可历史重建的大盘20日线门禁 + 双策略选股[纪律conf≥阈值 / 价值吸筹] + 结构位止损 + 持仓上限）。"
+        )
     L.append("")
     L.append("### 收益统计")
     L.append("")
     L.append(f"- 已平仓: **{s['n_closed']}** 笔 · 当前持仓 {s['n_positions']} 只")
-    L.append(f"- 累计收益(账面): **{s['total_return']*100:+.2f}%**")
+    L.append(f"- 累计收益(账面): **{s['total_return'] * 100:+.2f}%**")
     if s["win_rate"] is not None:
-        L.append(f"- 胜率: **{s['win_rate']*100:.1f}%** · 单笔均收 "
-                 f"{s['avg_ret']*100:+.2f}% · 盈亏比 {s['pl_ratio']}")
+        L.append(
+            f"- 胜率: **{s['win_rate'] * 100:.1f}%** · 单笔均收 "
+            f"{s['avg_ret'] * 100:+.2f}% · 盈亏比 {s['pl_ratio']}"
+        )
     if s["max_drawdown"] is not None:
-        L.append(f"- 最大回撤: **{s['max_drawdown']*100:.2f}%**")
+        L.append(f"- 最大回撤: **{s['max_drawdown'] * 100:.2f}%**")
     # CAGR
     if hist:
         first = hist[0].get("equity", params["init_cash"])
@@ -550,12 +613,13 @@ def build_report(st, params):
         t1 = hist[-1]["ts"][:10]
         try:
             from datetime import date
+
             y0 = date.fromisoformat(t0)
             y1 = date.fromisoformat(t1)
             years = (y1 - y0).days / 365.25
             if years > 0 and first > 0:
                 cagr = (last_e / first) ** (1 / years) - 1
-                L.append(f"- CAGR: **{cagr*100:+.2f}%** (区间 {t0} ~ {t1}, {years:.1f} 年)")
+                L.append(f"- CAGR: **{cagr * 100:+.2f}%** (区间 {t0} ~ {t1}, {years:.1f} 年)")
         except Exception:
             pass
     if s["by_reason"]:
@@ -563,58 +627,66 @@ def build_report(st, params):
         L.append("| 平仓原因 | 笔数 | 平均收益 |")
         L.append("|---|---|---|")
         for r, b in sorted(s["by_reason"].items(), key=lambda kv: -kv[1]["n"]):
-            L.append(f"| {r} | {b['n']} | {b['avg']*100:+.2f}% |")
+            L.append(f"| {r} | {b['n']} | {b['avg'] * 100:+.2f}% |")
     if s["by_type"]:
         L.append("")
         L.append("| 事件 | 笔数 | 胜率 | 平均收益 |")
         L.append("|---|---|---|---|")
         for t, b in sorted(s["by_type"].items(), key=lambda kv: -kv[1]["n"]):
-            L.append(f"| {t} | {b['n']} | {b['win']*100:.0f}% | {b['avg']*100:+.2f}% |")
+            L.append(f"| {t} | {b['n']} | {b['win'] * 100:.0f}% | {b['avg'] * 100:+.2f}% |")
     # 按策略拆解
     by_strat = {}
     for c in st["closed"]:
-        key = "纪律" if (c.get("strategy") or "paper_discipline_bull") \
-                       == "paper_discipline_bull" else "价值吸筹"
+        key = (
+            "纪律"
+            if (c.get("strategy") or "paper_discipline_bull") == "paper_discipline_bull"
+            else "价值吸筹"
+        )
         by_strat.setdefault(key, []).append(c["ret"])
     if by_strat:
         L.append("")
         L.append("| 策略 | 笔数 | 胜率 | 平均收益 | 收益合计 |")
         L.append("|---|---|---|---|---|")
-        for key, rets in sorted(by_strat.items(),
-                                key=lambda kv: -sum(kv[1])):
+        for key, rets in sorted(by_strat.items(), key=lambda kv: -sum(kv[1])):
             n = len(rets)
             wr = sum(1 for r in rets if r > 0) / n * 100 if n else 0
             mean = sum(rets) / n if n else 0
-            L.append(f"| {key} | {n} | {wr:.0f}% | {mean*100:+.2f}% | "
-                     f"{sum(rets)*100:+.1f}% |")
+            L.append(f"| {key} | {n} | {wr:.0f}% | {mean * 100:+.2f}% | {sum(rets) * 100:+.1f}% |")
     # 大样本策略追踪: 预测准确度 + 执行触点 + 盈利能力 (模拟盘策略追踪同口径)
     if params.get("strategy_track"):
         try:
             from wyckoff import paper_strategy_accuracy as psa
+
             rep = psa.strategy_report(st)
             L.append("")
             L.append("### 策略准确度与盈利能力 (信号追踪)")
             L.append("")
             ssum = rep.get("_summary", {})
-            L.append(f"- 信号样本: 累计 **{ssum.get('total', 0)}** 条 · "
-                     f"已评估 **{ssum.get('evaluated', 0)}** 条")
+            L.append(
+                f"- 信号样本: 累计 **{ssum.get('total', 0)}** 条 · "
+                f"已评估 **{ssum.get('evaluated', 0)}** 条"
+            )
             tb = st.get("_track_summary") or {}
             if tb:
-                L.append(f"- 本次回放: 新增 {tb.get('added', 0)} · "
-                         f"合并 {tb.get('merged', 0)} · "
-                         f"跳过 {tb.get('skipped', 0)} · "
-                         f"已评估 {tb.get('evaluated', 0)}")
+                L.append(
+                    f"- 本次回放: 新增 {tb.get('added', 0)} · "
+                    f"合并 {tb.get('merged', 0)} · "
+                    f"跳过 {tb.get('skipped', 0)} · "
+                    f"已评估 {tb.get('evaluated', 0)}"
+                )
             L.append("")
-            L.append("| 策略 | 信号 | 已评估 | 5根命中 | 10根命中 | 20根命中 "
-                     "| 20根均值 | 触点正确 | 平仓 | 胜率 | 平均收益 | "
-                     "累计收益 | 盈亏比 | 期望值 | 均持(根) |")
+            L.append(
+                "| 策略 | 信号 | 已评估 | 5根命中 | 10根命中 | 20根命中 "
+                "| 20根均值 | 触点正确 | 平仓 | 胜率 | 平均收益 | "
+                "累计收益 | 盈亏比 | 期望值 | 均持(根) |"
+            )
             L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 
             def _pf(v):
-                return f"{v*100:.0f}%" if v is not None else "-"
+                return f"{v * 100:.0f}%" if v is not None else "-"
 
             def _pm(v):
-                return f"{v*100:+.2f}%" if v is not None else "-"
+                return f"{v * 100:+.2f}%" if v is not None else "-"
 
             for s in psa.STRATEGY_ORDER:
                 d = rep.get(s, {})
@@ -623,14 +695,12 @@ def build_report(st, params):
                 pf = d.get("profit", {})
                 h = acc.get("horizons", {})
                 ca = exe.get("accuracy")
-                pos_txt = (f"{exe.get('correct', 0)}/{exe.get('done', 0)}"
-                           + (f"({ca*100:.0f}%)" if ca is not None else ""))
-                plr = (f"{pf['pl_ratio']:.2f}"
-                       if pf.get("pl_ratio") is not None else "-")
-                exp = (f"{pf['expectancy']:+.4f}"
-                       if pf.get("expectancy") is not None else "-")
-                ah = (f"{pf['avg_hold_bars']:.1f}"
-                      if pf.get("avg_hold_bars") is not None else "-")
+                pos_txt = f"{exe.get('correct', 0)}/{exe.get('done', 0)}" + (
+                    f"({ca * 100:.0f}%)" if ca is not None else ""
+                )
+                plr = f"{pf['pl_ratio']:.2f}" if pf.get("pl_ratio") is not None else "-"
+                exp = f"{pf['expectancy']:+.4f}" if pf.get("expectancy") is not None else "-"
+                ah = f"{pf['avg_hold_bars']:.1f}" if pf.get("avg_hold_bars") is not None else "-"
                 L.append(
                     f"| {d.get('name', s)} | {acc.get('n', 0)} "
                     f"| {acc.get('evaluated', 0)} "
@@ -641,21 +711,28 @@ def build_report(st, params):
                     f"| {pf.get('n', 0)} "
                     f"| {_pf(pf.get('win_rate'))} "
                     f"| {_pm(pf.get('avg_ret'))} "
-                    f"| {_pm(pf.get('cum_ret'))} | {plr} | {exp} | {ah} |")
+                    f"| {_pm(pf.get('cum_ret'))} | {plr} | {exp} | {ah} |"
+                )
         except Exception:
             pass
     if params.get("sect_gate"):
         L.append("")
         L.append("### 局限")
         L.append("")
-        L.append("- 板块强度门禁虽已通过 fetch_sector 为个股注入真实板块，但板块强度历史快照"
-                 "(wx_board_snap.json) 仅自 2026-08 起，回测区间(2023-06~2026-08)此前信号"
-                 "均落在快照之前 → fail-open 放行，故本门禁在历史回测中近乎空转，"
-                 "仅在末尾快照窗内才有真实过滤。")
-        L.append("- 要让板块门禁真正参与历史回测，需回填板块强度快照的历史序列(按日/按周回填"
-                 "东财行业板块分位)，使 strength_at 在回测区间内均能取到可信分位。")
-        L.append("- 资金流门禁为『近5根量价净流入占比 ≥ 当日候选池截面中位』的因果量价代理，"
-                 "非真实主力资金流(实盘用东财 main 净流入)；两者在量价承接方向一致但取值口径不同。")
+        L.append(
+            "- 板块强度门禁虽已通过 fetch_sector 为个股注入真实板块，但板块强度历史快照"
+            "(wx_board_snap.json) 仅自 2026-08 起，回测区间(2023-06~2026-08)此前信号"
+            "均落在快照之前 → fail-open 放行，故本门禁在历史回测中近乎空转，"
+            "仅在末尾快照窗内才有真实过滤。"
+        )
+        L.append(
+            "- 要让板块门禁真正参与历史回测，需回填板块强度快照的历史序列(按日/按周回填"
+            "东财行业板块分位)，使 strength_at 在回测区间内均能取到可信分位。"
+        )
+        L.append(
+            "- 资金流门禁为『近5根量价净流入占比 ≥ 当日候选池截面中位』的因果量价代理，"
+            "非真实主力资金流(实盘用东财 main 净流入)；两者在量价承接方向一致但取值口径不同。"
+        )
     L.append("")
     L.append("*历史回放，不构成投资建议。*")
     return "\n".join(L), s
@@ -672,38 +749,78 @@ def main():
     ap.add_argument("--cost", type=float, default=None, help="单边成本")
     ap.add_argument("--cash", type=float, default=None, help="初始资金")
     ap.add_argument("--window", type=int, default=10, help="信号可买入窗口(根)")
-    ap.add_argument("--chain-cap", type=int, default=0,
-                    help="同产业链最多同时持有N只 (0=不限, 需个股有板块映射)")
-    ap.add_argument("--chain-min-pct", type=float, default=0,
-                    help="强链过滤: 只交易信号日板块强度≥该分位(0~1)的链条内个股, "
-                         "用历史快照无前视 (0=关闭)")
-    ap.add_argument("--mkt-gate", action="store_true",
-                    help="大盘20日线门禁: 仅当日上证收盘>MA20才开新仓 (因果历史重建)")
-    ap.add_argument("--flow-gate", action="store_true",
-                    help="资金流门禁(因果代理): 信号日近5根量价净流入占比>0 (fail-close)")
-    ap.add_argument("--sect-gate", action="store_true",
-                    help="板块强度门禁: 历史快照分位≥0.6 (无快照期放行, 有数据才过滤)")
-    ap.add_argument("--no-bear-exit", action="store_false", dest="bear_exit",
-                    help="关闭事件型空头信号卖出 (默认开启: 持仓遇 UTAD/LPSY 主动平仓)")
+    ap.add_argument(
+        "--chain-cap",
+        type=int,
+        default=0,
+        help="同产业链最多同时持有N只 (0=不限, 需个股有板块映射)",
+    )
+    ap.add_argument(
+        "--chain-min-pct",
+        type=float,
+        default=0,
+        help="强链过滤: 只交易信号日板块强度≥该分位(0~1)的链条内个股, 用历史快照无前视 (0=关闭)",
+    )
+    ap.add_argument(
+        "--mkt-gate",
+        action="store_true",
+        help="大盘20日线门禁: 仅当日上证收盘>MA20才开新仓 (因果历史重建)",
+    )
+    ap.add_argument(
+        "--flow-gate",
+        action="store_true",
+        help="资金流门禁(因果代理): 信号日近5根量价净流入占比>0 (fail-close)",
+    )
+    ap.add_argument(
+        "--sect-gate",
+        action="store_true",
+        help="板块强度门禁: 历史快照分位≥0.6 (无快照期放行, 有数据才过滤)",
+    )
+    ap.add_argument(
+        "--no-bear-exit",
+        action="store_false",
+        dest="bear_exit",
+        help="关闭事件型空头信号卖出 (默认开启: 持仓遇 UTAD/LPSY 主动平仓)",
+    )
     ap.add_argument("--start", default="", help="回放起始日期 YYYY-MM-DD")
-    ap.add_argument("--datalen", type=int, default=700,
-                    help="每只标的拉取的K线根数 (覆盖回放起始前的历史, 建议≥850覆盖3年)")
-    ap.add_argument("--no-track", action="store_false", dest="strategy_track",
-                    help="关闭策略信号追踪 (默认开启: 回放同时统计双策略准确度与盈利能力)")
-    ap.add_argument("--va-confirm", action="store_true",
-                    help="价值吸筹·确认式入场: 事件后首根收盘站上MA10再建仓 "
-                         "(默认事件出现即买)")
-    ap.add_argument("--va-slots", type=int, default=0,
-                    help="价值吸筹独立槽位数 (默认0=无, 与纪律共享 max_pos; "
-                         ">0 时纪律最多 max_pos-va_slots 槽)")
-    ap.add_argument("--va-bear-grace", type=int, default=0,
-                    help="价值吸筹·空头卖出宽限期 (根): 吸筹建仓后前 N 根不因 "
-                         "UTAD/LPSY 空头事件平仓 (默认0=无宽限)")
+    ap.add_argument(
+        "--datalen",
+        type=int,
+        default=700,
+        help="每只标的拉取的K线根数 (覆盖回放起始前的历史, 建议≥850覆盖3年)",
+    )
+    ap.add_argument(
+        "--no-track",
+        action="store_false",
+        dest="strategy_track",
+        help="关闭策略信号追踪 (默认开启: 回放同时统计双策略准确度与盈利能力)",
+    )
+    ap.add_argument(
+        "--va-confirm",
+        action="store_true",
+        help="价值吸筹·确认式入场: 事件后首根收盘站上MA10再建仓 (默认事件出现即买)",
+    )
+    ap.add_argument(
+        "--va-slots",
+        type=int,
+        default=0,
+        help="价值吸筹独立槽位数 (默认0=无, 与纪律共享 max_pos; >0 时纪律最多 max_pos-va_slots 槽)",
+    )
+    ap.add_argument(
+        "--va-bear-grace",
+        type=int,
+        default=0,
+        help="价值吸筹·空头卖出宽限期 (根): 吸筹建仓后前 N 根不因 "
+        "UTAD/LPSY 空头事件平仓 (默认0=无宽限)",
+    )
     ap.add_argument("--report", default="", help="写出报告 md 路径")
     ap.add_argument("--export", default="", help="导出逐笔 CSV 路径")
-    ap.add_argument("--stocks-cache", default="",
-                    help="加载阶段产物缓存 pickle 路径 (跳过重复 fetch/指标计算, "
-                         "大幅加速参数实验迭代; 首次运行自动生成)")
+    ap.add_argument(
+        "--stocks-cache",
+        default="",
+        help="加载阶段产物缓存 pickle 路径 (跳过重复 fetch/指标计算, "
+        "大幅加速参数实验迭代; 首次运行自动生成)",
+    )
     args = ap.parse_args()
 
     defaults = paper.apply_paper_params(None)
@@ -736,8 +853,10 @@ def main():
     uni = []
     try:
         from wyckoff.utils import normalize_symbol
+
         list_path = os.path.join(repo_root, "wyckoff_all_stocks.json")
         import json
+
         with open(list_path, encoding="utf-8") as f:
             uni = [normalize_symbol(c) for c in json.load(f).keys()]
     except Exception:
@@ -747,24 +866,36 @@ def main():
         try:
             from wyckoff.fundamental import fetch_market_universe
             from wyckoff.utils import normalize_symbol
+
             uni = [normalize_symbol(c) for c in fetch_market_universe(args.max_codes)]
         except Exception:
             uni = []
     # 受限板块(创业板/科创板)与价值吸筹排除北交所; 纪律仅过滤受限板块
-    uni = [c for c in uni if not (c.startswith("sh688") or c.startswith("sh689")
-                                  or c.startswith("sz300") or c.startswith("sz301")
-                                  or c.startswith("bj"))]
-    uni = uni[:args.max_codes]
+    uni = [
+        c
+        for c in uni
+        if not (
+            c.startswith("sh688")
+            or c.startswith("sh689")
+            or c.startswith("sz300")
+            or c.startswith("sz301")
+            or c.startswith("bj")
+        )
+    ]
+    uni = uni[: args.max_codes]
 
-    print(f"扫描 {len(uni)} 只: conf≥{params['min_conf']} 持仓≤{params['max_pos']} "
-          f"持{params['hold_bars']}K 止损-{params['stop_loss']*100:.0f}% "
-          f"止盈+{params['take_profit']*100:.0f}% 成本{params['cost']*100:.2f}% "
-          f"门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
-          f"/板块{'开' if args.sect_gate else '闭'}"
-          f"/策略追踪{'开' if args.strategy_track else '闭'}")
+    print(
+        f"扫描 {len(uni)} 只: conf≥{params['min_conf']} 持仓≤{params['max_pos']} "
+        f"持{params['hold_bars']}K 止损-{params['stop_loss'] * 100:.0f}% "
+        f"止盈+{params['take_profit'] * 100:.0f}% 成本{params['cost'] * 100:.2f}% "
+        f"门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
+        f"/板块{'开' if args.sect_gate else '闭'}"
+        f"/策略追踪{'开' if args.strategy_track else '闭'}"
+    )
     stocks = None
     if args.stocks_cache and os.path.exists(args.stocks_cache):
         import pickle
+
         try:
             with open(args.stocks_cache, "rb") as f:
                 stocks = pickle.load(f)
@@ -776,21 +907,19 @@ def main():
         stocks = []
         for i, code in enumerate(uni):
             try:
-                rec = load_stock_events(code, params["min_conf"],
-                                        datalen=args.datalen)
+                rec = load_stock_events(code, params["min_conf"], datalen=args.datalen)
             except Exception as e:
-                print(f"  [{i+1}/{len(uni)}] {code} 失败: {e}")
+                print(f"  [{i + 1}/{len(uni)}] {code} 失败: {e}")
                 rec = None
             if rec is None:
                 continue
             stocks.append(rec)
-            print(f"  [{i+1}/{len(uni)}] {code} 事件{len(rec['events'])}个",
-                  flush=True)
+            print(f"  [{i + 1}/{len(uni)}] {code} 事件{len(rec['events'])}个", flush=True)
         if args.stocks_cache:
             import pickle
+
             try:
-                os.makedirs(os.path.dirname(os.path.abspath(args.stocks_cache)),
-                            exist_ok=True)
+                os.makedirs(os.path.dirname(os.path.abspath(args.stocks_cache)), exist_ok=True)
                 with open(args.stocks_cache, "wb") as f:
                     pickle.dump(stocks, f, protocol=4)
                 print(f"已写股票缓存: {len(stocks)} 只 → {args.stocks_cache}")
@@ -801,20 +930,47 @@ def main():
         print(f"\n有效股票 {len(stocks)} 只 (来自缓存), 开始回放 ...")
     market_gate = load_market_gate() if args.mkt_gate else None
     if args.mkt_gate:
-        print("大盘20日线门禁: 已启用" if market_gate else "大盘20日线门禁: 已启用(指数数据缺失, 视为不满足)")
+        print(
+            "大盘20日线门禁: 已启用"
+            if market_gate
+            else "大盘20日线门禁: 已启用(指数数据缺失, 视为不满足)"
+        )
     st = replay(stocks, params, market_gate=market_gate)
 
     if args.export:
         import csv
+
         with open(args.export, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["symbol", "type", "conf", "strategy", "buy_px",
-                        "sell_px", "ret", "reason", "bars", "close"])
+            w.writerow(
+                [
+                    "symbol",
+                    "type",
+                    "conf",
+                    "strategy",
+                    "buy_px",
+                    "sell_px",
+                    "ret",
+                    "reason",
+                    "bars",
+                    "close",
+                ]
+            )
             for c in st["closed"]:
-                w.writerow([c["symbol"], c["type"], c["conf"],
-                            c.get("strategy", "paper_discipline_bull"),
-                            c["buy_px"], c["sell_px"], c["ret"],
-                            c["reason"], c["bars"], c.get("close_ts", "")])
+                w.writerow(
+                    [
+                        c["symbol"],
+                        c["type"],
+                        c["conf"],
+                        c.get("strategy", "paper_discipline_bull"),
+                        c["buy_px"],
+                        c["sell_px"],
+                        c["ret"],
+                        c["reason"],
+                        c["bars"],
+                        c.get("close_ts", ""),
+                    ]
+                )
         print(f"已导出逐笔: {args.export}")
 
     md, s = build_report(st, params)
