@@ -808,6 +808,41 @@ class PaperWindow(QDialog):
         self.sp_trail_atr.setToolTip(
             "止损下沿再扣 ATR 缓冲 (剔除日内噪音), 0 表示不缓冲")
 
+        self.sp_trail_act = QDoubleSpinBox()
+        self.sp_trail_act.setRange(0.00, 1.00)
+        self.sp_trail_act.setSingleStep(0.05)
+        self.sp_trail_act.setDecimals(3)
+        self.sp_trail_act.setValue(
+            float(self._settings.get(S.Paper.TRAIL_ACTIVATE_PCT, 0.0)))
+        self.sp_trail_act.setToolTip(
+            "移动止盈激活浮盈%: 浮盈达到该值后才启用峰值回落保护; 0=复用止盈线")
+
+        self.sp_trail_back = QDoubleSpinBox()
+        self.sp_trail_back.setRange(0.01, 0.30)
+        self.sp_trail_back.setSingleStep(0.005)
+        self.sp_trail_back.setDecimals(3)
+        self.sp_trail_back.setValue(
+            float(self._settings.get(S.Paper.TRAIL_BACK_PCT, 0.08)))
+        self.sp_trail_back.setSuffix(" %")
+        self.sp_trail_back.setToolTip(
+            "移动止盈回落: 激活后从持仓峰值回撤该比例平仓 (回测推荐 8%)")
+
+        self.sp_va_weight = QDoubleSpinBox()
+        self.sp_va_weight.setRange(0.10, 1.00)
+        self.sp_va_weight.setSingleStep(0.05)
+        self.sp_va_weight.setDecimals(2)
+        self.sp_va_weight.setValue(
+            float(self._settings.get(S.Paper.VA_WEIGHT, 0.6)))
+        self.sp_va_weight.setSuffix(" x")
+        self.sp_va_weight.setToolTip(
+            "价值吸筹单仓资金权重 (回测推荐 0.6, 其余策略=1.0)")
+
+        self.ck_weak = QCheckBox("弱市过滤")
+        self.ck_weak.setChecked(
+            bool(self._settings.get(S.Paper.WEAK_FILTER, True)))
+        self.ck_weak.setToolTip(
+            "上证收盘<MA20 判定弱市 → 新开仓上限 1 只且停用价值吸筹")
+
         fields = (
             ("同持上限", self.sp_maxpos),
             ("置信度≥", self.sp_conf),
@@ -823,19 +858,27 @@ class PaperWindow(QDialog):
         grid.addWidget(self.ck_trailing, 1, 0, 1, 3)
         grid.addWidget(QLabel("ATR缓冲"), 1, 3)
         grid.addWidget(self.sp_trail_atr, 1, 4)
+        grid.addWidget(QLabel("激活%"), 2, 0)
+        grid.addWidget(self.sp_trail_act, 2, 1)
+        grid.addWidget(QLabel("回落%"), 2, 2)
+        grid.addWidget(self.sp_trail_back, 2, 3)
+        grid.addWidget(QLabel("价值权重"), 2, 4)
+        grid.addWidget(self.sp_va_weight, 2, 5)
+        grid.addWidget(self.ck_weak, 2, 6, 1, 6)
         for w in fields:
             w[1].setToolTip({
                 self.sp_maxpos: "同时持有的最大股票数 (1~5)",
                 self.sp_conf: "策略4·纪律只对置信度≥该值的强多头事件开仓",
                 self.sp_hold: "持有 K 根后到期强制平仓",
-                self.sp_stop: "止损幅度: 勾选用作追踪回撤触发, 否则为固定结构位止损",
-                self.sp_tp: "止盈幅度",
+                self.sp_stop: "固定止损兜底幅度 (追踪未激活时控制下行风险)",
+                self.sp_tp: "止盈/移动止盈激活线",
                 self.sp_cost: "单边成本 (佣金+印花税+滑点)",
                 self.sp_cash: "模拟盘初始资金 (更改后需重置账户)",
             }[w[1]])
-        hint = QLabel("回测最优参考: 止损 -3% / 止盈 +15% / 同持上限 3")
+        hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+15%·回落 8% / "
+                      "弱市过滤开 / 价值权重 0.6")
         hint.setStyleSheet(f"color: {theme.C_MUTED};")
-        grid.addWidget(hint, 2, 0, 1, len(fields) * 2 + 1)
+        grid.addWidget(hint, 3, 0, 1, len(fields) * 2 + 1)
 
         btn = _ghost_btn("保存到设置")
         btn.clicked.connect(self._save_config)
@@ -853,6 +896,10 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.INIT_CASH] = self.sp_cash.value()
         self._settings[S.Paper.TRAILING_STOP] = self.ck_trailing.isChecked()
         self._settings[S.Paper.TRAIL_ATR_MULT] = self.sp_trail_atr.value()
+        self._settings[S.Paper.TRAIL_ACTIVATE_PCT] = self.sp_trail_act.value()
+        self._settings[S.Paper.TRAIL_BACK_PCT] = self.sp_trail_back.value()
+        self._settings[S.Paper.VA_WEIGHT] = self.sp_va_weight.value()
+        self._settings[S.Paper.WEAK_FILTER] = self.ck_weak.isChecked()
 
     def _save_config(self):
         self._collect_config()

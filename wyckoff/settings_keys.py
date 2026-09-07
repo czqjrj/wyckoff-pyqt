@@ -91,10 +91,21 @@ class Paper(_Base):
     ENABLE_CHINEXT = "paper_enable_chinext"
     ENABLE_STAR = "paper_enable_star"
     # 追踪止损: 从持仓期内最高价回撤 trailing 幅度时平仓。
-    # 默认关闭: 固定 entry-3% 条件单止损总先触发, 追踪通道无效; 网格最优恰为固定-3%。
+    # 改进(2026-09 回测): 移动止盈默认开启 - 浮盈达 TRAIL_ACTIVATE_PCT 后才启动
+    # 峰值回落 TRAIL_BACK_PCT 平仓; 未激活前由固定 -STOP_LOSS 兜底。
     TRAILING_STOP = "paper_trailing_stop"
+    # 移动止盈回落幅度 (激活后从峰值回撤该比例平仓)
+    TRAIL_BACK_PCT = "paper_trail_back_pct"
+    # 移动止盈激活浮盈比例 (<=0 表示复用 TAKE_PROFIT)
+    TRAIL_ACTIVATE_PCT = "paper_trail_activate_pct"
     # 追踪止损 ATR 缓冲: stop = 杆位*(1-止损) - atr_mult*ATR (仅追踪开启时生效)
     TRAIL_ATR_MULT = "paper_trail_atr_mult"
+    # 弱市过滤: 指数(上证)收盘<MA20 → 新开仓上限 WEAK_MAX_POS 且停用价值吸筹
+    WEAK_FILTER = "paper_weak_filter"
+    WEAK_MAX_POS = "paper_weak_max_pos"
+    WEAK_INDEX_CODE = "paper_weak_index_code"
+    # 价值吸筹单仓资金权重
+    VA_WEIGHT = "paper_va_weight"
     # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
     REBALANCE = "paper_rebalance"
 
@@ -216,7 +227,7 @@ DEFAULTS = {
     Paper.INIT_CASH: 1_000_000,
     Paper.MAX_POS: 3,
     Paper.HOLD_BARS: 20,
-    Paper.STOP_LOSS: 0.06,
+    Paper.STOP_LOSS: 0.04,
     Paper.TAKE_PROFIT: 0.15,
     Paper.COST: 0.004,
     Paper.MIN_CONF: 90,

@@ -7,7 +7,8 @@
     ST/LPS) 且 conf 达标 (默认 ≥100) 的标的, 按 conf 排序。
   - 撮合: 候选按 conf 填充, 同持上限内用"最近收盘价 + 滑点"买入
     (无未来函数: 同一周期内新成交仓位不参与当期卖出评估)。
-  - 卖出触发: 持有满 HOLD_BARS 根到期 / 结构位-3%止损 / 破位 / +15%止盈。
+  - 卖出触发: 持有满 HOLD_BARS 根到期 / 结构位-4%止损 / 破位 /
+     +15%移动止盈 (浮盈达止盈线后从峰值回落8%平仓)。
   - 统计: 分类型/总账户 胜率、盈亏比、净值曲线、最大回撤。
   - 存储: 单 JSON (wx_paper.json), 与项目其他 wx_* 数据文件同目录同风格。
 数据目录用 paths.DATA_DIR, 测试用 WYCKOFF_DATA_DIR 隔离。
@@ -55,14 +56,26 @@ COST = 0.004
 # 买入滑点 (价格摩擦, 占成交价比例)
 SLIP_BUY = 0.001
 SLIP_SELL = 0.001
-# 止损: 优化后收紧至 -3% (2026-09-04 大样本回测验证: -3%止损 + conf=100
-# 组合盈亏比 3.13, 回撤 -2.47%, CAGR +40.33%, 显著优于 -6%止损)
-STOP_LOSS = 0.03
-# 追踪止损: 默认关闭。排查确认 _check_conditions 的固定 entry-3% 条件单止损总在
-# step 之前触发, 使峰值回撤追踪成为无效死通道; 且网格最优恰为固定 -3%, 故统一固定口径。
-TRAILING_STOP = False
+# 止损: 回测折中配置取 -4% (docs/paper3_backtrader_bt_improvement.md:
+# 全周期 +93%/夏普1.07/回撤-13.8%, 优于 -3% 被噪音反复洗出与 -6% 风险敞口过大)
+STOP_LOSS = 0.04
+# 追踪止损(移动止盈): 默认开启。语义= 先让利润奔跑至激活浮盈价
+# (TRAIL_ACTIVATE_PCT, 默认=TAKE_PROFIT), 之后才从峰值回落 TRAIL_BACK_PCT 平仓;
+# 未激活前仅由固定 -STOP_LOSS 兜底 (与回测移动止盈口径一致)。
+TRAILING_STOP = True
 # 追踪止损 ATR 缓冲: 仅在 TRAILING_STOP=True 时生效 (无网格实证, 默认关闭)
 TRAIL_ATR_MULT = 0.0
+# 移动止盈: 高位回落触发幅度 (峰值* (1-此值) 平仓)
+TRAIL_BACK_PCT = 0.08
+# 移动止盈激活浮盈比例: 浮盈达到该值后才启用回落卖出; <=0 表示取 TAKE_PROFIT
+TRAIL_ACTIVATE_PCT = 0.0
+# 弱市过滤: 指数收盘 < MA20 判定为弱势 → 新开仓上限 WEAK_MAX_POS 且停用价值吸筹
+WEAK_FILTER = True
+WEAK_MAX_POS = 1
+# 弱市断言指数代码 (与回测脚本一致, 上证指数)
+WEAK_INDEX_CODE = "sh000001"
+# 价值吸筹单仓资金权重 (其余策略=1.0; 降低弱策略敞口)
+VA_WEIGHT = 0.6
 # 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到 总权益/max_pos,
 # 消除"先买的大、后买的小"的顺序衰减与资金闲置 (利用率仅 ~66% 的根因)。
 REBALANCE = True
@@ -271,11 +284,20 @@ def apply_paper_params(settings=None):
         # 板块权限: 未开通创业板/科创板 → 扫描/选股排除对应代码
         "enable_chinext": bool(_get(S.Paper.ENABLE_CHINEXT, False)),
         "enable_star": bool(_get(S.Paper.ENABLE_STAR, False)),
-        # 追踪止损: 杆位止损 (从持仓期内最高价回撤), 避免固定-3%被噪音洗出
+        # 移动止盈/追踪止损: 峰值回撤平仓; 开启 trail_back_pct 时由条件单先"激活后回落"
         "trailing_stop": bool(_get(S.Paper.TRAILING_STOP,
                                    _get("paper_trailing_stop", TRAILING_STOP))),
         "trail_atr_mult": float(_get(S.Paper.TRAIL_ATR_MULT,
                                      _get("paper_trail_atr_mult", TRAIL_ATR_MULT))),
+        "trail_back_pct": float(_get(S.Paper.TRAIL_BACK_PCT, TRAIL_BACK_PCT)),
+        "trail_activate_pct": float(_get(S.Paper.TRAIL_ACTIVATE_PCT,
+                                         TRAIL_ACTIVATE_PCT)),
+        # 弱市降仓过滤
+        "weak_filter": bool(_get(S.Paper.WEAK_FILTER, WEAK_FILTER)),
+        "weak_max_pos": max(1, int(_get(S.Paper.WEAK_MAX_POS, WEAK_MAX_POS))),
+        "weak_index_code": _get(S.Paper.WEAK_INDEX_CODE, WEAK_INDEX_CODE),
+        # 价值吸筹资金降权
+        "va_weight": float(_get(S.Paper.VA_WEIGHT, VA_WEIGHT)),
         # 周期级等权再平衡
         "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
     }
@@ -303,6 +325,12 @@ _CUR = {
     "enable_star": False,
     "trailing_stop": TRAILING_STOP,
     "trail_atr_mult": TRAIL_ATR_MULT,
+    "trail_back_pct": TRAIL_BACK_PCT,
+    "trail_activate_pct": TRAIL_ACTIVATE_PCT,
+    "weak_filter": WEAK_FILTER,
+    "weak_max_pos": WEAK_MAX_POS,
+    "weak_index_code": WEAK_INDEX_CODE,
+    "va_weight": VA_WEIGHT,
     "rebalance": REBALANCE,
 }
 
@@ -1047,6 +1075,19 @@ from .discipline import (
 )
 
 
+# ── 弱市过滤 (改进: 指数未站上MA20 → 降仓 + 停用价值吸筹) ──
+def _weak_market_flag():
+    """按 _CUR 弱市过滤设置评估当前市场强弱, 返回是否弱市。
+    弱市过滤关闭或数据异常 → 视为不强 (不受限)。调用方负责把结果落 st["weak"]。"""
+    if not _CUR.get("weak_filter"):
+        return False
+    try:
+        ok, _reason = _market_trend_ok()
+        return not ok
+    except Exception:
+        return False
+
+
 def _strategy_manager():
     """策略管理器单例 (延迟实例化, 数据目录落在 DATA_DIR 下避免污染运行目录)。
 
@@ -1384,6 +1425,9 @@ def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
                  for p in st.get("positions", []))
         equity_base = float(st["cash"]) + mv
     budget = equity_base * (1.0 / max(1, _CUR["max_pos"]))
+    # 价值吸筹降权: 单仓资金×va_weight (弱策略敞口控制, 其余策略=1.0)
+    if strategy == "screener_value_accumulation":
+        budget *= float(_CUR.get("va_weight", 1.0) or 1.0)
     if budget < MIN_LOT:
         return None
     qty = int(budget // (price * (1 + SLIP_BUY)) // 100 * 100)
@@ -1409,7 +1453,12 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
     with _LOCK:
         if has_position(st, code):
             return None, "已持有"
-        if len(st["positions"]) >= _CUR["max_pos"]:
+        weak = _weak_market_flag()  # 刷新弱市标记 (UI 手动买入也走弱市限仓)
+        st["weak"] = weak
+        if weak and strategy == "screener_value_accumulation":
+            return None, "弱市已禁用价值吸筹"
+        limit = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
+        if len(st["positions"]) >= limit:
             return None, "同持已满"
         order = _make_order(code, name, type_, conf, price, n_total, st["cash"],
                             strategy=strategy, st=st)
@@ -1444,8 +1493,9 @@ _COND_KINDS = ("buy_price", "sell_price", "take_profit", "stop_loss", "trailing"
 
 
 def _cond(kind, symbol, price=None, pct=None, trigger="above", qty=0,
-          name="", reason="", amount=None):
-    """构造一条条件单记录 (status="active")。"""
+          name="", reason="", amount=None, activation=None):
+    """构造一条条件单记录 (status="active")。
+    activation: 移动止盈专用 - 浮盈价, 收盘价≥该价才启用回落跟踪 (未激活不触发)。"""
     c = {
         "cid": f"cond-{int(time.time() * 1_000_000)}",
         "kind": kind, "symbol": symbol, "name": name,
@@ -1453,6 +1503,8 @@ def _cond(kind, symbol, price=None, pct=None, trigger="above", qty=0,
         "pct": float(pct) if pct is not None else None,
         "trigger": trigger, "qty": int(qty or 0), "amount": amount,
         "reason": reason,
+        "activation": round(float(activation), 3) if activation is not None else None,
+        "activated": False,
         "status": "active", "created_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "matched_ts": "", "matched_price": None,
         "peak": None, "correct": None,  # correct: True/False/None(未评估)
@@ -1477,7 +1529,7 @@ def add_condition(st, kind, symbol, price=None, pct=None, trigger="above",
     return c, "已添加条件单"
 
 
-def _apply_auto_conditions(st, cand):
+def _apply_auto_conditions(st, cand, weak=False):
     """为迭代出的候选批量 upsert buy_price 条件单 (覆盖式去重, 不落盘)。
 
     由 run_scan/run_cycle 在最终 save_state 前调用一次, 避免扫描线程逐条
@@ -1506,6 +1558,8 @@ def _apply_auto_conditions(st, cand):
             seen[code] = c
     handled = set()  # 本批已处理(创建/更新)的代码, 保证候选内同代码只保留一条
     for e in cand or []:
+        if weak and e.get("strategy") == "screener_value_accumulation":
+            continue  # 弱市停用价值吸筹入场条件单
         price = e.get("auto_cond_price")
         if not price:
             continue
@@ -1574,16 +1628,28 @@ def _create_position_conditions(st, symbol, name="", buy_px=None):
         pos = next((p for p in st.get("positions", []) if p.get("symbol") == symbol), None)
         take_pct = (pos or {}).get("take_pct") if pos else None
         stop_pct = (pos or {}).get("stop_pct") if pos else None
-        for kind, pct in (("take_profit", take_pct or _CUR["take_profit"]),
-                          ("stop_loss", stop_pct or _CUR["stop_loss"])):
-            if pct is None:
-                continue
-            if any(c.get("kind") == kind and c.get("symbol") == symbol
-                   and c.get("status") == "active" for c in conds):
-                continue
+        active_kinds = {c.get("kind") for c in conds
+                        if c.get("symbol") == symbol and c.get("status") == "active"}
+        trailing_on = bool(_CUR.get("trailing_stop")
+                           and float(_CUR.get("trail_back_pct") or 0) > 0)
+        if trailing_on and "trailing" not in active_kinds:
+            # 移动止盈: 浮盈达激活价后才启用峰值回落保护; 激活价默认=止盈线
+            # (左侧买点带御设止盈则优先用其目标作为激活线)
+            act_pct = float(_CUR.get("trail_activate_pct") or 0) \
+                or (take_pct or _CUR["take_profit"])
             conds.append(_cond(
-                kind, symbol, pct=pct, name=name,
-                reason=f"持仓保护:{kind}"))
+                "trailing", symbol, pct=float(_CUR["trail_back_pct"]), name=name,
+                reason="持仓保护:移动止盈",
+                activation=buy_px * (1 + act_pct)))
+        elif not trailing_on and "take_profit" not in active_kinds:
+            conds.append(_cond(
+                "take_profit", symbol, pct=take_pct or _CUR["take_profit"], name=name,
+                reason="持仓保护:take_profit"))
+        if "stop_loss" not in active_kinds:
+            # 固定止损永远保留为底线保护 (未激活移动止盈时控制下行风险)
+            conds.append(_cond(
+                "stop_loss", symbol, pct=stop_pct or _CUR["stop_loss"], name=name,
+                reason="持仓保护:stop_loss"))
 
 
 def _backfill_position_protection(st):
@@ -1676,7 +1742,15 @@ def _check_conditions(st, df_by_code):
             if pos is None:
                 # 无持仓时追踪止损无法建立峰值, 保留但跳过
                 continue
-            peak = c.get("peak") or max(last, float(pos.get("last", pos["buy_px"])))
+            if c.get("activation") is not None and not c.get("activated"):
+                # 移动止盈: 浮盈价未达激活价不触发 (峰值回落保护未启用)
+                if last < c["activation"]:
+                    continue
+                c["activated"] = True
+                gold = last
+            else:
+                gold = float(pos.get("last", pos["buy_px"]))
+            peak = c.get("peak") or max(gold, float(pos.get("last", pos["buy_px"])))
             if last > peak:
                 peak = last
             c["peak"] = peak
@@ -1727,6 +1801,8 @@ def _judge_condition_correct(c, last, entry=None, ret=None, peak=None,
         return None
 
     if kind == "trailing":
+        if not c.get("activated"):
+            return None
         if peak is not None and pct is not None:
             # 触发时: 当前价是否已从峰值回撤 pct
             return last <= peak * (1 - pct)
@@ -1753,10 +1829,11 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
             c["status"] = "cancelled"
             c["note"] = "已持有该标的, 入场条件单取消"
             c["correct"] = None
-        elif order is None or len(st["positions"]) >= _CUR["max_pos"]:
+        elif order is None or len(st["positions"]) >= (
+                _CUR["weak_max_pos"] if st.get("weak") else _CUR["max_pos"]):
             # 预算不足/同持已满: 条件单转取消, 防止永久悬挂
             c["status"] = "cancelled"
-            c["note"] = "资金/同持上限不足, 未成交"
+            c["note"] = "资金/同持上限不足(含弱市限仓), 未成交"
             c["correct"] = None
         else:
             res, msg = fill_buy(st, order)
@@ -1893,11 +1970,17 @@ def step(st, df_by_code):
         ret = last / entry - 1
         pos["last"] = round(last, 3)
         pos["last_ret"] = round(float_ret(entry, last), 4)
-        # 止损价: 固定-3% 或 追踪止损 (从持仓期内最高价回撤, 防噪音洗出)。
+        # 止损价: 固定止损 或 追踪止损 (从持仓期内最高价回撤, 防噪音洗出)。
         # 左侧买点持仓优先按其自带御设止损/止盈百分比。
         pos_take = float(pos.get("take_pct") or _CUR["take_profit"])
         pos_stop = float(pos.get("stop_pct") or _CUR["stop_loss"])
-        if _CUR.get("trailing_stop", TRAILING_STOP):
+        # 移动止盈模式: 峰值回撤交给 trailing 条件单 (浮盈达激活价后回落平仓),
+        # 此处兜底只留固定结构止损 (相对买入价), 避免双重追踪截断回落窗口。
+        trailing_mode = bool(_CUR.get("trailing_stop", TRAILING_STOP)
+                             and float(_CUR.get("trail_back_pct", 0)) > 0)
+        if trailing_mode:
+            stop_px = entry * (1 - pos_stop)
+        elif _CUR.get("trailing_stop", TRAILING_STOP):
             hi = float(df["high"].iloc[-1])
             peak = float(pos.get("peak") or entry)
             if hi > peak:
@@ -1916,7 +1999,7 @@ def step(st, df_by_code):
         pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
         reason = None
         held = int(pos["entry_bars"])
-        if ret >= pos_take:
+        if not trailing_mode and ret >= pos_take:
             reason = "止盈"
         elif last <= stop_px:
             reason = "止损"
@@ -2405,6 +2488,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
         min_conf = _CUR["min_conf"]
 
     st = load_state()
+    # 弱市过滤: 指数未站上 MA20 → 降仓上限与停用价值吸筹 (与回测移动止盈口径一致)
+    st["weak"] = _weak_market_flag()
+    weak = st["weak"]
     # 1) 持仓防护回填: 对缺失止盈/止损保护条件单的已有持仓自动补齐
     #    (_create_position_conditions 幂等: 已有 active 不重复; 并消费同标的入场单)。
     #    覆盖历史遗留/非 fill_buy 路径建立的仓位, 避免"裸奔"只有 step 兜底。
@@ -2416,17 +2502,21 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
         cand = candidates
     st["candidates"] = cand
     # 自动买入条件单: 与候选一同在最终 save_state 落盘 (不被快照覆盖)
-    _apply_auto_conditions(st, cand)
+    _apply_auto_conditions(st, cand, weak=weak)
     # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合。
     #    三大硬门槛已由 pick_candidates 在候选入池时 fail-close 判定
     #    (大盘↑+板块>60分位+资金>50分位), 这里直接消费精筛后的候选。
     #    左侧买点特殊: 挂买点入场价, 价格未回踩到位 (last > entry_price) 时
     #    不直接成交, 交给下方 buy_price 条件单 (below) 等回踩。
     for e in cand:
-        if len(st["positions"]) >= _CUR["max_pos"]:
+        eff_max = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
+        if len(st["positions"]) >= eff_max:
             break
         code = e["code"]
         if has_position(st, code) or any(o["symbol"] == code for o in st["pending"]):
+            continue
+        # 弱市停用价值吸筹 (与回测弱市过滤口径一致)
+        if weak and e.get("strategy") == "screener_value_accumulation":
             continue
         px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
         last = float(e.get("last", 0) or 0)

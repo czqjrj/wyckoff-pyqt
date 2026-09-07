@@ -231,9 +231,11 @@ def test_left_buy_position_protection_uses_owned_pcts():
     pos = [p for p in st["positions"] if p["symbol"] == "sh600001"][0]
     assert pos["stop_pct"] == order["stop_pct"]
     assert pos["take_pct"] == order["take_pct"]
-    tp = [c for c in st["conditions"] if c.get("kind") == "take_profit"][0]
+    tp = [c for c in st["conditions"] if c.get("kind") == "trailing"][0]
     sl = [c for c in st["conditions"] if c.get("kind") == "stop_loss"][0]
-    assert tp["pct"] == pos["take_pct"]
+    # 移动止盈默认开启: 激活线 = 买点御设止盈 (而非固定 take_profit 条件单)
+    assert tp["activation"] is not None
+    assert abs(tp["activation"] - entry * (1 + pos["take_pct"])) < 0.05
     assert sl["pct"] == pos["stop_pct"]
 
 
@@ -292,6 +294,8 @@ def _state_with_position(cash=paper.INIT_CASH, entry=10.0, bars=5):
 
 def test_step_take_profit_closes(monkeypatch):
     monkeypatch.setattr("wyckoff.paper.execute_date", lambda c: "2024-05-02")
+    # 固定止盈兜底仅在移动止盈关闭时生效
+    monkeypatch.setattr(paper, "_CUR", {**paper._CUR, "trailing_stop": False})
     st = _state_with_position(entry=10.0)
     df = _mk([11.0, 12.0])  # +20% ≥ +15% 止盈
     paper.step(st, {"sh600001": df})
@@ -381,9 +385,10 @@ def test_expiry_after_hold_bars_cycles(monkeypatch):
 
 
 def test_run_cycle_end_to_end(monkeypatch, tmp_path):
-    """筛选→下单→持仓→步进→止盈卖出→统计 全链路。
+    """筛选→下单→持仓→步进→移动止盈卖出→统计 全链路。
 
-    fetch_kline 按调用次数返回递进行情: 第1次建仓, 第2次(+40%)触发止盈。
+    fetch_kline 按调用次数返回递进行情: 第1次建仓, 第2次(+40%)激活移动止盈,
+    第3次从峰值回落>8% 触发 trailing 条件单平仓。
     """
     import wyckoff.datasource as ds
     calls = {"n": 0}
@@ -392,7 +397,9 @@ def test_run_cycle_end_to_end(monkeypatch, tmp_path):
         calls["n"] += 1
         if calls["n"] <= 1:
             return _mk([10.0, 10.1, 10.2])
-        return _mk([12.0, 13.0, 14.0])
+        if calls["n"] == 2:
+            return _mk([13.5, 14.0, 14.0])   # 冲高激活并建立峰值
+        return _mk([12.4, 12.5, 12.8])       # 峰值回落 >8% → 移动止盈触发
 
     monkeypatch.setattr(ds, "fetch_kline", fake_fetch)
     monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
@@ -401,16 +408,19 @@ def test_run_cycle_end_to_end(monkeypatch, tmp_path):
     # 第一周期: 建仓
     s1 = paper.run_cycle()
     assert s1["n_positions"] == 1
-    # 第二周期: 持仓股已 +40%, 触发止盈平仓
+    # 第二周期: 持仓股 +40% 激活移动止盈 (峰值回落保护待命)
     monkeypatch.setattr(paper, "pick_candidates", lambda **k: [])
     s2 = paper.run_cycle()
-    assert s2["n_closed"] == 1
-    assert s2["n_positions"] == 0
+    assert s2["n_positions"] == 1
+    # 第三周期: 峰值回落>8% → trailing 条件单平仓
+    s3 = paper.run_cycle()
+    assert s3["n_closed"] == 1
+    assert s3["n_positions"] == 0
     st = paper.load_state()
-    # 建仓后自动生成持仓保护条件单; 条件单优先于默认止盈触发平仓
-    assert any(c["kind"] == "take_profit" and c["status"] == "done"
+    # 建仓后自动生成移动止盈/止损保护条件单; 移动止盈优先于默认止盈线触发平仓
+    assert any(c["kind"] == "trailing" and c["status"] == "done"
                for c in st["conditions"])
-    assert st["closed"][0]["reason"] == "条件单:take_profit"
+    assert st["closed"][0]["reason"] == "条件单:trailing"
     assert st["closed"][0]["type"] == "Spring"
     assert st["closed"][0]["conf"] == 96
 
@@ -470,7 +480,7 @@ def test_condition_stop_loss():
 
 
 def test_buy_generates_tp_sl_conditions():
-    """建仓后自动生成 止盈/止损 条件单, 并消费同标的入场条件单。"""
+    """建仓后自动生成 移动止盈/止损 条件单, 并消费同标的入场条件单。"""
     st = paper._new_state()
     st["cash"] = paper.INIT_CASH
     paper.add_condition(st, "buy_price", "sh600001", price=10.0,
@@ -478,16 +488,20 @@ def test_buy_generates_tp_sl_conditions():
     o = paper._make_order("sh600001", "测试", "Spring", 90, 10.0, 0, st["cash"])
     paper.fill_buy(st, o)
     kinds = {(c["kind"], c["status"]) for c in st["conditions"]}
-    assert ("take_profit", "active") in kinds
+    assert ("trailing", "active") in kinds      # 移动止盈默认开启
     assert ("stop_loss", "active") in kinds
+    trailing = [c for c in st["conditions"] if c["kind"] == "trailing"][0]
+    # 激活线 = 买入价*(1+止盈), 供移动止盈启用前由固定止损兜底
+    assert abs(trailing["activation"] - 10.0 * (1 + paper.TAKE_PROFIT)) < 0.05
     # buy_price 入场条件已被消费, 不会重复买入
     assert not any(c["kind"] == "buy_price" and c["status"] == "active"
                    for c in st["conditions"])
     # 二次买入同标的: 不重复生成保护条件单
-    n_tp = sum(1 for c in st["conditions"] if c["kind"] == "take_profit")
+    n_protect = sum(1 for c in st["conditions"]
+                    if c["kind"] in ("trailing", "take_profit"))
     paper.fill_buy(st, dict(o, symbol="sh600001"))
     assert sum(1 for c in st["conditions"]
-               if c["kind"] == "take_profit") == n_tp
+               if c["kind"] in ("trailing", "take_profit")) == n_protect
 
 
 def test_condition_trailing_stop():
@@ -639,7 +653,7 @@ def test_step_trailing_stop_protects_gains(monkeypatch):
     """追踪止损: 持仓从高点回落 stop_loss 幅度时平仓, 而非回到买入价才止。"""
     monkeypatch.setattr(paper, "_CUR", {
         **paper._CUR,
-        "trailing_stop": True, "trail_atr_mult": 0.0,
+        "trailing_stop": True, "trail_back_pct": 0.0, "trail_atr_mult": 0.0,
         "stop_loss": 0.05, "take_profit": 0.15, "hold_bars": paper.HOLD_BARS,
     })
     st = paper._new_state()
@@ -917,3 +931,90 @@ def test_value_accum_conf_floor():
         assert paper._value_accum_candidate("sh600001", None, None, None) is None
     finally:
         pass
+
+
+# ───────────────── 改进: 移动止盈/弱市过滤/价值降权 (docs/paper3_backtrader_bt_improvement.md) ─────────────────
+def _mk_trailing_cond(st, pct=0.08, activation=None):
+    c = paper._cond("trailing", "sh600001", pct=pct, name="测试",
+                    activation=activation)
+    st["conditions"].append(c)
+    return c
+
+
+def test_trailing_only_sells_after_activation():
+    """移动止盈: 浮盈未达激活价绝不触发; 触发后从峰值回落 pct 平仓。"""
+    assert paper._CUR["trailing_stop"] is True  # 默认移动止盈开启
+    st = paper._new_state()
+    st["cash"] = paper.INIT_CASH
+    o = paper._make_order("sh600001", "测试", "Spring", 90, 10.0, 0, st["cash"])
+    paper.fill_buy(st, o)
+    c = _mk_trailing_cond(st, pct=0.08, activation=round(10.0 * 1.15, 3))
+    st["conditions"] = [c]  # 只用本测试的移动止盈条件单
+    # 未达激活价 (浮盈+5%), 即使现价低于前高也不触发
+    paper.step(st, {"sh600001": _mk([10.5, 10.6])})
+    assert len(st["positions"]) == 1
+    assert c["activated"] is False
+    # 达到激活价 (浮盈+20%) → 激活, 此时未回落不触发
+    paper.step(st, {"sh600001": _mk([11.9, 12.2])})
+    assert c["activated"] is True
+    assert len(st["positions"]) == 1
+    # 从峰值 +20% 回落超 8% (峰≈12.26, 触发价≈11.28) → 平仓
+    paper.step(st, {"sh600001": _mk([11.0, 11.2])})
+    assert st["positions"] == []
+    assert c["status"] == "done"
+    assert st["closed"][0]["reason"] == "条件单:trailing"
+
+
+def test_weak_filter_caps_and_skips_value(monkeypatch):
+    """弱市过滤: 指数未站上MA20 → 新开仓上限=1 且价值吸筹候选被跳过。"""
+    import wyckoff.datasource as ds
+    df = _mk([10.0, 10.1, 10.2])
+    monkeypatch.setattr(ds, "fetch_kline", lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
+    monkeypatch.setattr(paper, "_market_trend_ok",
+                        lambda: (False, "大盘未站上MA20"))
+    cand = [
+        _candidate(code="sh600001", type_="Spring", conf=100),
+        _candidate(code="sh600002", type_="Spring", conf=98),
+    ]
+    cand[1]["strategy"] = "screener_value_accumulation"
+    # 弱市过滤经 settings 传入 (run_cycle 内部会重建 _CUR)
+    s1 = paper.run_cycle(settings={"paper_weak_filter": True,
+                                   "paper_max_single_conc": 0.5},
+                         candidates=cand)
+    assert s1["n_positions"] == 1          # 弱市上限 1
+    st = paper.load_state()
+    assert st.get("weak") is True
+    assert st["positions"][0]["symbol"] == "sh600001"  # 价值候选被跳过
+    # 弱市下价值候选不生成入场条件单
+    assert not any(c.get("kind") == "buy_price" and c.get("status") == "active"
+                   for c in st["conditions"])
+
+
+def test_weak_filter_off_allows_full_positions(monkeypatch):
+    """弱市过滤关闭: 不受弱市限制, 正常开 2 仓。"""
+    import wyckoff.datasource as ds
+    df = _mk([10.0, 10.1, 10.2])
+    monkeypatch.setattr(ds, "fetch_kline", lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
+    monkeypatch.setattr(paper, "_market_trend_ok",
+                        lambda: (False, "大盘未站上MA20"))
+    cand = [_candidate(code="sh600001"), _candidate(code="sh600002")]
+    s1 = paper.run_cycle(settings={"paper_weak_filter": False,
+                                   "paper_max_single_conc": 0.5},
+                         candidates=cand)
+    assert s1["n_positions"] == 2
+    assert paper.load_state().get("weak") is False
+
+
+def test_va_weight_scales_budget():
+    """价值吸筹单仓预算 = 等权目标 × va_weight (默认 0.6)。"""
+    st = paper._new_state()
+    st["cash"] = 900_000.0
+    disc = paper._make_order("sh600001", "A", "Spring", 95, 10.0, 0,
+                             st["cash"], strategy="paper_discipline_bull", st=st)
+    va = paper._make_order("sh600002", "B", "Spring", 95, 10.0, 0,
+                           st["cash"], strategy="screener_value_accumulation", st=st)
+    assert disc["qty"] > va["qty"]
+    ratio = va["qty"] / disc["qty"]
+    assert 0.5 < ratio < 0.72   # 预算 ×0.6 (允许整手取整偏差)
