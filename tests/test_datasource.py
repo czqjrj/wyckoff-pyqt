@@ -423,10 +423,12 @@ def test_fetch_market_universe_excludes_restricted_boards(monkeypatch):
     fundamental._MARKET_CACHE.clear()
 
 
-def test_pick_candidates_filters_restricted_boards(monkeypatch):
-    """扫描选股: 明确传入含受限板块的 universe 时, 应按板块权限过滤后再扫描。"""
+def test_pick_candidates_restricts_to_main_board(monkeypatch):
+    """扫描选股: 模拟盘宇宙收敛沪深主板 (沪 600/601/603/605 + 深 000/001/002/003)。
+    创业板/科创板/北交所代码即便传入也被提前剔除, 不进入并行扫描;
+    开通板块权限开关也不再放行 (主板块范围是模拟盘固定口径)。"""
     from wyckoff import _shared, paper
-    paper.apply_paper_params({})  # 默认未开通创业/科创
+    paper.apply_paper_params({})
     _codes_seen = []
 
     # 截断 parallel_map, 捕获其收到的 _codes 列表并直接返回 [] (不触发真实 _probe)。
@@ -435,19 +437,14 @@ def test_pick_candidates_filters_restricted_boards(monkeypatch):
         return []
 
     monkeypatch.setattr(_shared, "parallel_map", fake_parallel_map)
-    u = ["sz300750", "sh688981", "sh600018", "sz000001"]
-    paper.pick_candidates(universe=u, max_codes=4, skip_gates=True)
-    assert "sz300750" not in _codes_seen
-    assert "sh688981" not in _codes_seen
-    assert "sh600018" in _codes_seen
-    assert "sz000001" in _codes_seen
+    u = ["sz300750", "sh688981", "sh600018", "sz000001", "bj830899", "sh605099"]
+    paper.pick_candidates(universe=u, max_codes=6, skip_gates=True)
+    assert sorted(_codes_seen) == ["sh600018", "sh605099", "sz000001"]
 
-    # 已开通创业板/科创板 → 不再过滤
+    # 开通创业板/科创板 → 仍只扫主板 (范围口径固定, 不扫描非主板)
     from wyckoff.settings_keys import S
     paper.apply_paper_params({S.Paper.ENABLE_CHINEXT: True,
                               S.Paper.ENABLE_STAR: True})
     _codes_seen.clear()
-    paper.pick_candidates(universe=u, max_codes=4, skip_gates=True)
-    assert "sz300750" in _codes_seen
-    assert "sh688981" in _codes_seen
-    assert "sh600018" in _codes_seen
+    paper.pick_candidates(universe=u, max_codes=6, skip_gates=True)
+    assert sorted(_codes_seen) == ["sh600018", "sh605099", "sz000001"]

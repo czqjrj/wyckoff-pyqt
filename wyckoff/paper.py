@@ -1241,6 +1241,11 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             except Exception:
                 universe = []
     universe = [normalize_symbol(c) for c in universe]
+    # 主板块范围收敛 (沪 600/601/603/605 + 深 000/001/002/003): 无论 universe 来自
+    # 本地全A/东财Top/调用方, 一律过滤到主板, 创业板/科创板/北交所等不参与模拟盘
+    # 三策略并线扫描。
+    from .fundamental import is_main_board
+    universe = [c for c in universe if is_main_board(c)]
     # 纪律门禁 ①: 大盘20日线向上 (全市场统一, 一次判定; fail-close)。
     # 不再整池短路: 左侧买点属独立赛道, 大盘弱市也可出候选; 纪律/价值吸筹
     # 在 scan_individual 按 market_ok 拦截。
@@ -1317,25 +1322,9 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
 
     out = []
     _flow_map = {}  # code -> 近5日主力净流入
+    # 主板块收敛已在上方统一完成 (沪 600/601/603/605 + 深 000/001/002/003),
+    # 创业板/科创板/北交所等不再进入并行扫描 (_codes 无需再按权限过滤)。
     _codes = universe[:max_codes]
-    # 板块权限: 未开通创业板/科创板时, 在并行扫描前统一过滤对应代码, 减少扫描量。
-    if not _CUR.get("enable_chinext") or not _CUR.get("enable_star"):
-        from .fundamental import is_restricted_board
-        allow_chinext = bool(_CUR.get("enable_chinext"))
-        allow_star = bool(_CUR.get("enable_star"))
-        _filtered = []
-        for c in _codes:
-            if not is_restricted_board(c):
-                _filtered.append(c)
-                continue
-            rest = str(c).lower()
-            rest = rest[2:] if rest[:2] in ("sh", "sz", "bj") else rest
-            if rest.startswith(("300", "301")) and not allow_chinext:
-                continue
-            if rest.startswith(("688", "689")) and not allow_star:
-                continue
-            _filtered.append(c)
-        _codes = _filtered
     _total = len(_codes)
     try:
         from ._shared import parallel_map
@@ -2269,7 +2258,7 @@ def stats(st):
             b["win"] = round(sum(1 for r in rs if r > 0) / len(rs), 4)
             b.pop("rets", None)
         out["by_sector"] = by_sector
-        # 策略分层 (模拟盘双策略: 纪律 / 价值吸筹) — 盈利能力口径。
+        # 策略分层 (模拟盘三策略并线: 纪律 / 左侧买点 / 价值吸筹) — 盈利能力口径。
         # cum 用 (1+r) 连乘再减一, 反映真实累计, 避免简单累加被单笔大单主导。
         by_strategy = {}
         for c in closed:
@@ -2584,7 +2573,8 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
         st: 交易状态 dict
         scan_type: 保留兼容 (旧 "volume_surge"/"pnf_breakout"/"sector_driven"
                    在纪律下统一走 pick_candidates, 忽略具体类型)
-        n_codes: 要扫描的代码数量 (universe 截取, 默认 6000=全A 名单)
+        n_codes: 要扫描的代码数量上限 (pick_candidates 内部会把 universe 收敛为
+                 沪深主板 600/601/603/605 + 000/001/002/003, 实际扫描量以主板为准)
         progress: 可选进度回调 (done, total, code), 透传给 pick_candidates
 
     返回:

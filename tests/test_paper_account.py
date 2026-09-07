@@ -216,6 +216,50 @@ def test_pick_candidates_left_buy_ignores_market_gate(monkeypatch):
     assert e["entry_price"] == 10.1
 
 
+def test_is_main_board():
+    """主板范围判定: 沪 600/601/603/605 + 深 000/001/002/003 (前缀/裸码均可)。"""
+    from wyckoff.fundamental import is_main_board
+    assert is_main_board("sh600000")
+    assert is_main_board("601398")
+    assert is_main_board("603259")
+    assert is_main_board("sh605099")
+    assert is_main_board("000001")
+    assert is_main_board("sz002415")
+    assert is_main_board("003816")
+    assert not is_main_board("300750")
+    assert not is_main_board("sz301236")
+    assert not is_main_board("688981")
+    assert not is_main_board("sh689009")
+    assert not is_main_board("bj830899")
+    assert not is_main_board("900901")
+
+
+def test_pick_candidates_restricts_to_main_board(monkeypatch):
+    """模拟盘三策略扫描收敛到沪深主板: 创业板/科创板/北交所代码被提前剔除,
+    不进入 _probe 扫描 (也不会被重复拉 K 线)。"""
+    seen = []
+    df = _mk(np.linspace(10.0, 10.5, 400))
+
+    def fake_fetch(code, *a, **k):
+        seen.append(code)
+        return df.copy()
+
+    monkeypatch.setattr("wyckoff.datasource.fetch_kline", fake_fetch)
+    monkeypatch.setattr("wyckoff.indicators.add_indicators",
+                        lambda df, **k: df)
+    monkeypatch.setattr("wyckoff.indicators.find_pivots", lambda *a, **k: [])
+    monkeypatch.setattr("wyckoff.events.detect_all",
+                        lambda *a, **k: [_candidate(idx=395)])
+    monkeypatch.setattr("wyckoff.fundamental.fetch_sector", lambda c: "")
+    universe = ["sh600000", "sz000001", "sz002415", "sh605099",
+                "sh300750", "sz300501", "sh688981", "bj830899", "sz900901"]
+    out = paper.pick_candidates(universe=universe, max_codes=50,
+                                min_conf=85, skip_gates=True)
+    assert {c for c in seen} == {"sh600000", "sz000001", "sz002415", "sh605099"}
+    assert {c.get("code") for c in out} == {"sh600000", "sz000001",
+                                            "sz002415", "sh605099"}
+
+
 def test_left_buy_position_protection_uses_owned_pcts():
     """左侧买点入场把买点御设止损/止盈折算入狐保护条件单 (而非账户默认)。"""
     st = paper._new_state()

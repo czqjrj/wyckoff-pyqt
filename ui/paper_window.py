@@ -139,6 +139,7 @@ _CN_SIG_HEAD = ("日期", "策略", "代码", "名称", "事件", "置信", "信
                 "5根", "10根", "20根", "状态")
 
 # 策略管理器信号来源 → 界面中文标签 (策略注册信息唯一来源: 策略管理器)
+from wyckoff.settings_keys import S
 from wyckoff.strategies.manager import STRATEGY_CN as _STRAT_CN
 from wyckoff.strategies.manager import STRATEGY_ORDER as _STRAT_ORDER
 
@@ -366,10 +367,14 @@ class PaperWindow(QDialog):
         self.auto_on.addItems(["自动执行: 关闭",
                                "每 15 分钟自动执行周期",
                                "每 30 分钟自动执行周期"])
-        # 默认: 每 30 分钟自动执行一次完整周期 (筛选+下单+卖出)，
-        # 与设置键 paper_scan_interval 默认值 1800s 对齐
-        self.auto_on.setCurrentIndex(2)
-        self.auto_on.setToolTip("定时自动执行一个完整周期 (筛选+下单+卖出)")
+        # 默认: 每 30 分钟自动执行一次完整周期 (筛选+下单+卖出+统计)，
+        # 与设置键 paper_scan_interval 默认值 1800s 对齐; 用户选择会持久化。
+        _auto_sec = int(self._settings.get(S.Paper.SCAN_INTERVAL, 1800) or 0)
+        self.auto_on.setCurrentIndex(
+            0 if _auto_sec <= 0 else 1 if _auto_sec <= 900 else 2)
+        self.auto_on.setToolTip(
+            "定时自动执行一个完整周期 (筛选+下单+卖出+统计)\n"
+            "默认每 30 分钟执行一次, 可切换 15 分钟或关闭")
         hb.addWidget(self.auto_on)
 
         self.btn_refresh = _ghost_btn("刷新面板")
@@ -414,9 +419,10 @@ class PaperWindow(QDialog):
         self.sp_scan_n.setValue(6000)
         self.sp_scan_n.setSuffix(" 只")
         self.sp_scan_n.setToolTip(
-            "扫描数量 (上限 6000 = 全A 名单 ~5900 只)\n"
-            "全市场扫描走本地全A 名单 (去 ST/退市/新股), "
-            "名单不可用才降级东财成交额 Top 兜底")
+            "扫描数量 (默认上限 6000)\n"
+            "模拟盘扫描范围收敛为沪深主板: 沪 600/601/603/605 + 深 000/001/002/003 ≈ 3100 只\n"
+            "创业板/科创板/北交所不参与三策略并线; "
+            "数量仅是上限, 实际以主板全量为准")
         hb_scan.addWidget(self.sp_scan_n)
 
         self.btn_scan = _ghost_btn("扫描")
@@ -462,7 +468,8 @@ class PaperWindow(QDialog):
         # 定时器: 自动执行周期 (默认 30 分钟)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_auto_timer)
-        self.auto_on.currentIndexChanged.connect(self._apply_auto_interval)
+        self.auto_on.currentIndexChanged.connect(
+            lambda _i=0: self._apply_auto_interval())
         self._apply_auto_interval()
 
         # 定时器: 行情热刷新 (现价随实时行情变动, 每 10s, 不跑周期)
@@ -478,7 +485,7 @@ class PaperWindow(QDialog):
 
     # ── 自动执行定时器 ─────────────────────────────────────
     def _apply_auto_interval(self):
-        """根据下拉框切换自动执行间隔 (0=关闭, 15/30 分钟)。"""
+        """根据下拉框切换自动执行间隔 (0=关闭, 15/30 分钟) 并持久化选择。"""
         self.timer.stop()
         idx = self.auto_on.currentIndex()
         if idx == 1:      # 15 分钟
@@ -488,6 +495,13 @@ class PaperWindow(QDialog):
             self.timer.setInterval(30 * 60 * 1000)
             self.timer.start()
         # idx == 0: 关闭, 不启动
+        # 持久化用户选择 (paper_scan_interval: 0 / 900=15m / 1800=30m)
+        self._settings[S.Paper.SCAN_INTERVAL] = (0, 900, 1800)[idx]
+        try:
+            from wyckoff.storage import save_settings
+            save_settings(self._settings)
+        except Exception:
+            pass
         self._update_scan_info()
 
     def _on_auto_timer(self):
@@ -900,6 +914,9 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.TRAIL_BACK_PCT] = self.sp_trail_back.value()
         self._settings[S.Paper.VA_WEIGHT] = self.sp_va_weight.value()
         self._settings[S.Paper.WEAK_FILTER] = self.ck_weak.isChecked()
+        # 自动执行模式 (0=关闭 / 900=15m / 1800=30m)
+        self._settings[S.Paper.SCAN_INTERVAL] = (
+            0, 900, 1800)[self.auto_on.currentIndex()]
 
     def _save_config(self):
         self._collect_config()

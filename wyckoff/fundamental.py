@@ -109,6 +109,26 @@ def fetch_market_universe(n: int = 100):
     return codes
 
 
+# 模拟盘/选股主板块范围 (用户指定): 沪主板 600/601/603/605, 深主板 000/001/002/003。
+# 其余板块 (创业板/科创板/北交所) 不参与模拟盘三策略并线扫描。
+MAIN_BOARD_SH_PREFIXES = ("600", "601", "603", "605")
+MAIN_BOARD_SZ_PREFIXES = ("000", "001", "002", "003")
+MAIN_BOARD_PREFIXES = MAIN_BOARD_SH_PREFIXES + MAIN_BOARD_SZ_PREFIXES
+
+
+def is_main_board(code) -> bool:
+    """是否沪深主板 (沪 600/601/603/605, 深 000/001/002/003)。
+
+    入参为带 sh/sz/bj 前缀或裸 6 位代码均可。用于宇宙构建与选股扫描统一过滤。
+    """
+    sym = str(code).lower()
+    for pref in ("sh", "sz", "bj"):
+        if sym.startswith(pref):
+            sym = sym[len(pref):]
+            break
+    return sym[:3] in MAIN_BOARD_PREFIXES
+
+
 # 需额外开通权限的板块 (未开通则不应扫描/交易): 创业板(300/301)、科创板(688/689)。
 RESTRICTED_BOARD_PREFIXES = ("300", "301", "688", "689")
 
