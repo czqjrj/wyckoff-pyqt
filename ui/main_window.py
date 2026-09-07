@@ -1356,6 +1356,7 @@ class MainWindow(QMainWindow):
             if isinstance(res, dict) and res.get("ok"):
                 self._status("账户数据同步完成")
                 self.reload_watchlist()
+                self._refresh_paper_ui()
             else:
                 self._status(
                     f"账户同步失败: {(res or {}).get('error', '未知错误')}")
@@ -1381,6 +1382,7 @@ class MainWindow(QMainWindow):
             if isinstance(res, dict) and res.get("ok"):
                 self._status("从远端同步私有数据完成")
                 self.reload_watchlist()
+                self._refresh_paper_ui()
             else:
                 self._status(
                     f"从远端同步失败: {(res or {}).get('error', '未知错误')}")
@@ -1393,6 +1395,16 @@ class MainWindow(QMainWindow):
     # ── 自选股 ──
     def reload_watchlist(self):
         self._reload_watchlist()
+
+    def _refresh_paper_ui(self):
+        """账户同步/从云下载完成后, 重读模拟盘状态并刷新面板。"""
+        pt = getattr(self, "paper_tab", None)
+        if pt is None:
+            return
+        try:
+            pt.refresh()
+        except Exception:
+            pass
 
     def _watch_menu(self, pos):
         from PyQt6.QtWidgets import QMenu
@@ -1459,6 +1471,7 @@ class MainWindow(QMainWindow):
         self._refresh_watch_rt()
         self._schedule_accuracy_eval()
         self._schedule_auto_sync()
+        self._schedule_profile_auto_sync()
 
     def _add_watch_item(self, code, name):
         from PyQt6.QtCore import QSize
@@ -2659,6 +2672,7 @@ class MainWindow(QMainWindow):
         timer.start(60 * 60 * 1000)  # 每小时一次, 与 run_pending_eval 的 min_interval 对齐
         self._acc_eval_timer = timer
         self._schedule_auto_scan()
+        self._schedule_profile_auto_sync()
 
     def _cancel_accuracy_eval(self):
         t = getattr(self, "_acc_eval_timer", None)
@@ -2857,6 +2871,74 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log_exc("自动同步结果展示失败", e)
         self._schedule_auto_sync()
+
+    # ── 账户私有数据自动同步 (模拟盘/自选/笔记/组合 与云端) ──
+    _PROFILE_SYNC_CHECK_INTERVAL = 20    # 调度轮询间隔 (秒)
+    _PROFILE_SYNC_MIN_INTERVAL = 300     # 实际执行同步的最小间隔 (秒)
+
+    def _schedule_profile_auto_sync(self):
+        """轮询账户私有数据自动同步 (profile_sync 开关开启且已登录时执行)。"""
+        self._cancel_profile_auto_sync()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._profile_auto_sync_check)
+        timer.start(self._PROFILE_SYNC_CHECK_INTERVAL * 1000)
+        self._profile_auto_sync_timer = timer
+
+    def _cancel_profile_auto_sync(self):
+        t = getattr(self, "_profile_auto_sync_timer", None)
+        if t is not None:
+            t.stop()
+        self._profile_auto_sync_timer = None
+
+    def _profile_auto_sync_check(self):
+        """满足条件则后台执行一次双向同步 (sync_once: 拉取云端→合并→写本机→回写)。"""
+        self._cancel_profile_auto_sync()
+        if getattr(self, "_closing", False):
+            return
+        try:
+            if not bool(self.settings.get(S.Runtime.PROFILE_SYNC, False)):
+                self._schedule_profile_auto_sync()
+                return
+            from wyckoff import account
+            if not account.current_user():
+                self._schedule_profile_auto_sync()
+                return
+            th = getattr(self, "_profile_auto_sync_th", None)
+            if th is not None and th.isRunning():
+                self._schedule_profile_auto_sync()
+                return
+            last = getattr(self, "_profile_auto_sync_last_ts", 0) or 0
+            if time.time() - last < self._PROFILE_SYNC_MIN_INTERVAL:
+                self._schedule_profile_auto_sync()
+                return
+        except Exception as e:
+            log_exc("账户自动同步调度失败", e)
+            self._schedule_profile_auto_sync()
+            return
+
+        def _work():
+            import wyckoff.profile_sync as ps
+            return ps.sync_once()
+
+        th = AutoSyncThread(_work, self)
+        th.result.connect(lambda res: self._on_profile_auto_sync_done(th, res))
+        self._profile_auto_sync_th = th
+        th.start()
+
+    def _on_profile_auto_sync_done(self, th, result):
+        if getattr(self, "_profile_auto_sync_th", None) is th:
+            self._profile_auto_sync_th = None
+        if getattr(self, "_closing", False):
+            return
+        self._profile_auto_sync_last_ts = time.time()
+        try:
+            if isinstance(result, dict) and result.get("ok"):
+                self.reload_watchlist()
+                self._refresh_paper_ui()
+        except Exception as e:
+            log_exc("账户自动同步结果刷新失败", e)
+        self._schedule_profile_auto_sync()
 
     # ── 图表导出 ──
     def _export_current_fig(self):
@@ -3460,6 +3542,7 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
             self._apply_chart_font()
             self._sync_focus_btns()
             self._schedule_auto_sync()
+            self._schedule_profile_auto_sync()
             self._status("设置已保存", theme.C_DOWN)
 
     def _apply_fonts(self):
@@ -3593,6 +3676,7 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         self._cancel_accuracy_eval()
         self._cancel_auto_scan()
         self._cancel_auto_sync()
+        self._cancel_profile_auto_sync()
         try:
             if hasattr(self, "status_ticker"):
                 self.status_ticker.clear()

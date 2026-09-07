@@ -366,7 +366,9 @@ class PaperWindow(QDialog):
         self.auto_on.addItems(["自动执行: 关闭",
                                "每 15 分钟自动执行周期",
                                "每 30 分钟自动执行周期"])
-        self.auto_on.setCurrentIndex(0)
+        # 默认: 每 30 分钟自动执行一次完整周期 (筛选+下单+卖出)，
+        # 与设置键 paper_scan_interval 默认值 1800s 对齐
+        self.auto_on.setCurrentIndex(2)
         self.auto_on.setToolTip("定时自动执行一个完整周期 (筛选+下单+卖出)")
         hb.addWidget(self.auto_on)
 
@@ -457,10 +459,11 @@ class PaperWindow(QDialog):
         tabs.addTab(self._log_page, "日志")
         root.addWidget(tabs, 1)
 
-        # 定时器: 自动执行周期 (默认关闭)
+        # 定时器: 自动执行周期 (默认 30 分钟)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_auto_timer)
         self.auto_on.currentIndexChanged.connect(self._apply_auto_interval)
+        self._apply_auto_interval()
 
         # 定时器: 行情热刷新 (现价随实时行情变动, 每 10s, 不跑周期)
         self.qt_timer = QTimer(self)

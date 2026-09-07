@@ -127,6 +127,48 @@ def test_collect_detects_add_delete_and_persists_shadow(tmp_path):
     assert st["600104"]["ts"] == shad["600104"]["ts"]
 
 
+def test_apply_profile_persists_shadow_for_later_pull(tmp_path):
+    """从云下载应用合并结果后, 影子必须同步到磁盘状态。
+
+    回归背景: apply 后影子若停留在拉取前的旧值, 下一次 collect 会把刚拉下来的
+    云端版本误判为本地新变更(打 now 时间戳), LWW 合并中文档反而被本机覆盖,
+    「从云下载」的模拟盘数据无法稳定生效。
+    """
+    m = _reload_modules(tmp_path)
+    # 1) 本地先有一份旧模拟盘状态并建立影子
+    old = {"cash": 1_000_000, "positions": [], "closed": [],
+           "orders": [], "candidates": [], "pending": [],
+           "conditions": [], "equity_hist": [], "meta": {}}
+    _write(tmp_path, "wx_paper.json", old)
+    st = m._collect_type("paper")
+    assert st["paper"]["v"] == old
+    old_ts = st["paper"]["ts"]
+
+    # 2) 云端已有更新 (远端版本号更晚)
+    new_state = dict(old)
+    new_state["closed"] = [{"symbol": "600000", "buy_px": 10.0,
+                            "sell_px": 11.0, "ret": 0.1, "reason": "stop_loss",
+                            "type": "Spring", "strategy": "paper_discipline_bull",
+                            "bars": 5, "close_ts": "2026-09-07",
+                            "name": "浦发银行", "qty": 1000}]
+    bundle = {"schema": m.SCHEMA, "types": {"paper": {"items": {
+        "paper": {"v": new_state, "ts": old_ts + 10.0}}}}}
+
+    # 3) 应用合并且影子同步为新值 → 磁盘与影子一致
+    r = m.apply_profile(bundle)
+    assert r["changed"] is True
+    with open(os.path.join(tmp_path, "wx_paper.json"), encoding="utf-8") as f:
+        assert json.load(f)["closed"]  == new_state["closed"]
+    shadow = m._load_shadow()["paper"]
+    assert shadow["paper"]["v"] == new_state
+    assert shadow["paper"]["ts"] == old_ts + 10.0
+
+    # 4) 磁盘未再变 → 再 collect 不再打新 ts, 远端版号得以保留
+    st2 = m._collect_type("paper")
+    assert st2["paper"]["v"] == new_state
+    assert st2["paper"]["ts"] == old_ts + 10.0
+
+
 def test_no_net_guards_git_ops():
     assert ps._no_net() is True
     assert ps._git(["status"]) == ("", 0)

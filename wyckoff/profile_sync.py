@@ -23,10 +23,9 @@ import subprocess
 import time
 import uuid
 
-from . import account, storage
+from . import account, cloud_db, storage
 from . import paths as P
 from . import settings_keys as SK
-from . import cloud_db
 from ._shared import atomic_write_json
 
 DATA_DIR = P.DATA_DIR
@@ -363,7 +362,29 @@ def apply_profile(bundle):
             st = {k: (v if isinstance(v, dict) else {"v": v, "ts": 0})
                   for k, v in items.items()}
             changed |= writer(st)
+    _persist_shadow(bundle)
     return {"changed": changed}
+
+
+def _persist_shadow(bundle):
+    """把已应用的合并结果写回影子, 保持影子==磁盘状态。
+
+    历史 bug: apply 后影子停留在"拉取前"的值, 导致下次 collect 时把刚拉下来的
+    新版数据误判为本地新变更 (打 now 时间戳), 在 LWW 合并中反过来覆盖云端/远端,
+    「从云下载」拉取的内容因此无法稳定生效。
+    """
+    shadow = _load_shadow()
+    for tname in TYPES:
+        items = ((bundle.get("types", {}) or {}).get(tname, {}) or {}).get(
+            "items", {})
+        norm = {}
+        for k, rec in items.items():
+            if isinstance(rec, dict) and "v" in rec:
+                norm[str(k)] = {"v": rec["v"], "ts": rec.get("ts", 0.0)}
+            else:
+                norm[str(k)] = {"v": rec, "ts": 0.0}
+        shadow[tname] = norm
+    _save_shadow(shadow)
 
 
 # ── git 传输 ────────────────────────────────────────────────
