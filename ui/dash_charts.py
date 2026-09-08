@@ -1,14 +1,18 @@
 """仪表盘图表控件 (pyqtgraph) — 让大盘状态一图看懂。
 
 数据由主线程 set_data() 注入渲染, 控件不触网 (与 dashboard_widget 同模式)。
-三个图表:
+图表:
   - SseKlineChart   上证指数 K线 + MA20/50 + 成交量
   - IndexCompareChart  多指数归一化对比 (同基期 100)
   - SectorFlowChart 板块资金流横向条形图
+  - SectorHeatmap   板块热力图 (方块=成交额, 颜色=涨跌幅)
 """
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QColor, QFontMetrics, QPainter
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QToolTip, QVBoxLayout,
+                             QWidget)
 from pyqtgraph.Qt import QtGui
 
 from . import theme
@@ -241,7 +245,7 @@ class SectorFlowChart(_ChartCard):
         self.plot = pg.PlotWidget(background=theme.C_PANEL)
         self.plot.hideAxis("left")
         self.plot.showGrid(x=True, y=False, alpha=0.25)
-        self.plot.getAxis("bottom").setStyle(tickFont=_mk_font(7))
+        self.plot.getAxis("bottom").setStyle(tickFont=_mk_font(11))
         self.plot_host.addWidget(self.plot)
 
     def set_data(self, rows):
@@ -257,14 +261,14 @@ class SectorFlowChart(_ChartCard):
         colors = [theme.C_UP if f > 0 else theme.C_DOWN
                   if f < 0 else theme.C_MUTED for f in flows]
         bars = pg.BarGraphItem(x=x, height=np.asarray(flows, dtype=float),
-                               width=0.6, brushes=[pg.mkBrush(c) for c in colors],
+                               width=0.62, brushes=[pg.mkBrush(c) for c in colors],
                                pen=None)
         self.plot.addItem(bars)
         for i, n in enumerate(names):
             color = colors[i]
             ti = pg.TextItem(n, color=color, anchor=(0.5, 1))
-            ti.setFont(_mk_font(7))
-            ti.setPos(i, -top * 0.06)
+            ti.setFont(_mk_font(11))
+            ti.setPos(i, -top * 0.05)
             self.plot.addItem(ti)
         self.plot.getAxis("bottom").setTicks([[(i, n) for i, n in enumerate(names)]])
         self.plot.getAxis("left").setTicks([])
@@ -272,4 +276,182 @@ class SectorFlowChart(_ChartCard):
     def clear(self):
         self.plot.setBackground(theme.C_PANEL)
         self.plot.clear()
+        self._repaint_theme()
+
+
+# ── 板块热力图 ──
+
+
+class _HeatCell:
+    __slots__ = ("name", "pct", "amount_yi", "rect", "color")
+
+    def __init__(self, name, pct, amount_yi):
+        self.name = name
+        self.pct = pct
+        self.amount_yi = amount_yi
+        self.rect = None
+        self.color = theme.C_MUTED
+
+
+class _HeatGrid(QWidget):
+    """自绘热力图网格: 行高∝该行成交额合计, 块宽∝板块成交额占比, 色=涨跌幅。
+
+    红涨绿跌、深浅按幅度走 (theme.C_UP/C_DOWN + alpha), hover 显示明细。
+    """
+
+    COLUMNS = 6
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._cells: list[_HeatCell] = []
+        self._hover: _HeatCell | None = None
+
+    def set_cells(self, cells):
+        self._cells = cells
+        self._hover = None
+        self.update()
+
+    def clear(self):
+        self._cells = []
+        self._hover = None
+        self.update()
+
+    def _cell_color(self, cell):
+        pct = cell.pct
+        if pct == 0:
+            return QColor(theme.C_MUTED)
+        base = QColor(theme.C_UP if pct > 0 else theme.C_DOWN)
+        # 幅度 → 亮度 (不透明, 保留色相): 满幅=主题原色最亮, 小幅=加深但可辨
+        ratio = min(1.0, abs(pct) / 1.5)
+        hsv = base.toHsv()
+        hue = max(hsv.hue(), 0)
+        sat = max(hsv.saturation(), 0)
+        value = int((0.78 + 0.22 * ratio) * 255)
+        return QColor.fromHsv(hue, sat, value, hsv.alpha())
+
+    def _text_color(self, cell):
+        return QColor("#ffffff") if cell.pct != 0 else QColor(theme.C_MUTED)
+
+    def _layout(self, inner_w, inner_h, gap):
+        cells = self._cells
+        if not cells:
+            return
+        rows = (len(cells) + self.COLUMNS - 1) // self.COLUMNS
+        total_all = sum(c.amount_yi for c in cells) or 0
+        usable_w = inner_w - gap * (self.COLUMNS - 1)
+        usable_h = inner_h - gap * (rows - 1)
+        top = 0.0
+        for r in range(rows):
+            row_cells = cells[r * self.COLUMNS:(r + 1) * self.COLUMNS]
+            row_total = sum(c.amount_yi for c in row_cells)
+            if total_all > 0:
+                h = usable_h * row_total / total_all
+            else:
+                h = usable_h / rows
+            left = 0.0
+            for c in row_cells:
+                w = (usable_w * c.amount_yi / row_total
+                     if row_total > 0 else usable_w / len(row_cells))
+                c.rect = (float(left), float(top),
+                          float(max(w - gap, 8)), float(max(h - gap, 8)))
+                left += w
+            top += h
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        gap = 3
+        if not self._cells:
+            p.setPen(QColor(theme.C_MUTED))
+            p.setFont(_mk_font(10))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, "暂无板块数据")
+            p.end()
+            return
+        self._layout(rect.width(), rect.height(), gap)
+        name_font = _mk_font(13, bold=True)
+        pct_font = _mk_font(11)
+        for c in self._cells:
+            if not c.rect:
+                continue
+            x, y, w, h = c.rect
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(self._cell_color(c))
+            p.drawRoundedRect(QRectF(x, y, w, h), 3, 3)
+            if w < 34 or h < 24:
+                continue
+            p.setPen(self._text_color(c))
+            inner = QRectF(x + 5, y + 3, w - 10, h - 6)
+            if h >= 38:
+                p.setFont(name_font)
+                fm = QFontMetrics(name_font)
+                name = c.name
+                if fm.horizontalAdvance(name) > inner.width():
+                    name = fm.elidedText(name, Qt.TextElideMode.ElideRight,
+                                         int(inner.width()))
+                p.drawText(inner, Qt.AlignmentFlag.AlignTop
+                           | Qt.AlignmentFlag.AlignHCenter, name)
+                p.setFont(pct_font)
+                p.drawText(QRectF(x, y + h - 20, w, 18),
+                           Qt.AlignmentFlag.AlignRight
+                           | Qt.AlignmentFlag.AlignBottom,
+                           f"{c.pct:+.2f}%")
+            else:
+                p.setFont(pct_font)
+                p.drawText(inner, Qt.AlignmentFlag.AlignCenter,
+                           f"{c.pct:+.2f}%")
+        p.end()
+
+    def _cell_at(self, pos):
+        for c in self._cells:
+            if c.rect is None:
+                continue
+            x, y, w, h = c.rect
+            if x <= pos.x() <= x + w and y <= pos.y() <= y + h:
+                return c
+        return None
+
+    def mouseMoveEvent(self, ev):
+        c = self._cell_at(ev.position())
+        if c is not self._hover:
+            self._hover = c
+            self.update()
+        if c:
+            QToolTip.showText(
+                ev.globalPosition().toPoint(),
+                f"{c.name}   {c.pct:+.2f}%\n成交额 {c.amount_yi:,.2f} 亿",
+                self)
+        else:
+            QToolTip.hideText()
+
+    def leaveEvent(self, ev):
+        self._hover = None
+        QToolTip.hideText()
+        self.update()
+
+
+class SectorHeatmap(_ChartCard):
+    """板块热力图 (方块=成交额, 颜色=涨跌幅)。"""
+
+    def __init__(self, parent=None):
+        super().__init__("板块热力图 · 量价", height=360, parent=parent)
+        self.grid = _HeatGrid()
+        self.grid.setMinimumHeight(300)
+        self.plot_host.addWidget(self.grid)
+
+    def set_data(self, rows):
+        self.clear()
+        if not rows:
+            return
+        cells = [_HeatCell(r["name"], r.get("pct", 0),
+                           r.get("amount_yi", 0)) for r in rows]
+        self.grid.set_cells(cells)
+        total = sum(c.amount_yi for c in cells)
+        self.sub_lab.setText(f"Top {len(rows)} · 合计 {total:,.0f} 亿")
+        self.sub_lab.setStyleSheet(
+            "color:%s;background:transparent;" % theme.C_MUTED)
+
+    def clear(self):
+        self.grid.clear()
         self._repaint_theme()

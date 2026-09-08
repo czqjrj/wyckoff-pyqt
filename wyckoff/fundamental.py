@@ -648,7 +648,8 @@ def _fetch_constituents_akshare(bk_code: str, limit: int):
 
 def fetch_all_board_stats():
     """批量获取所有行业板块的基础统计: 名称/代码/最新价/涨跌幅/20日主力净流入。
-    返回 [{name, bk_code, price, pct, flow20, live}, ...] 按 flow20 降序。
+    返回 [{name, bk_code, price, pct, flow20, amount, live}, ...] 按 flow20 降序。
+    amount: 板块总成交额 (亿元, THS 源可得; 东财源/离线为 0)。
     主源: 同花顺 akshare (透传, 90个行业板块), 后备: 东财 push2 批量 API。
     两者均失败时回退离线列表 (名称+代码, live=False)。"""
     now = time.time()
@@ -682,7 +683,7 @@ def fetch_all_board_stats():
         return stats
     # ── 离线回退 ──
     stats = [{"name": name, "bk_code": code, "price": 0, "pct": 0,
-              "flow20": 0, "live": False}
+              "flow20": 0, "amount": 0, "live": False}
              for name, code in sorted(bmap.items())]
     with _LOCK:
         _BOARD_CACHE["__stats__"] = (time.time(), stats)
@@ -702,21 +703,28 @@ def _fetch_board_stats_ths():
             name = str(row.get("板块", ""))
             pct_str = str(row.get("涨跌幅", "0"))
             flow_str = str(row.get("净流入", "0"))
+            amount_str = str(row.get("总成交额", "0"))
             try:
                 pct = float(pct_str)
             except (ValueError, TypeError):
                 pct = 0.0
             try:
-                flow20 = float(flow_str)  # 单位: 万元
+                flow20 = float(flow_str)  # 单位: 亿元
             except (ValueError, TypeError):
                 flow20 = 0.0
+            try:
+                amount = float(amount_str)  # 单位: 亿元
+            except (ValueError, TypeError):
+                amount = 0.0
             if not name:
                 continue
             stats.append({
                 "name": name, "bk_code": "",
-                "price": 0, "pct": pct, "flow20": flow20, "live": True,
+                "price": 0, "pct": pct, "flow20": flow20,
+                "amount": amount, "live": True,
             })
         stats.sort(key=lambda x: -x["flow20"])
+        return stats
         return stats
     except Exception:
         return []
@@ -747,7 +755,8 @@ def _fetch_board_stats_em(bmap):
                 stats.append({
                     "name": name, "bk_code": bk_code,
                     "price": float(price), "pct": float(pct or 0),
-                    "flow20": float(flow_raw or 0), "live": True,
+                    "flow20": float(flow_raw or 0),
+                    "amount": 0, "live": True,
                 })
     except (ValueError, KeyError):
         pass

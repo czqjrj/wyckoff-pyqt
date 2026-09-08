@@ -42,11 +42,52 @@ def test_fetch_breadth_offline_none_or_dict():
             assert key in val
 
 
+def test_breadth_falls_back_to_legu(monkeypatch):
+    """东财源失败时自动回退乐咕源。"""
+    from wyckoff import market_dashboard as md
+    monkeypatch.setattr(md, "_breadth_from_em", lambda: None)
+    monkeypatch.setattr(
+        md, "_breadth_from_legu",
+        lambda: {"up": 3257, "down": 1859, "flat": 91,
+                 "limit_up": 74, "limit_down": 1, "total": 5207, "src": "legu"})
+    md.clear_cache()
+    val = md.fetch_market_breadth()
+    assert val is not None and val["up"] == 3257 and val["src"] == "legu"
+
+
 def test_fetch_sector_ranking_offline_list():
     from wyckoff.market_dashboard import fetch_sector_ranking, clear_cache
     clear_cache()
     val = fetch_sector_ranking()
     assert isinstance(val, list)
+    for s in val:
+        assert "amount_yi" in s
+
+
+def test_build_sector_heatmap_sorted(monkeypatch):
+    """热力图按成交额降序取 top_n，成交额缺失时按强度兜底。"""
+    from wyckoff import market_dashboard as md
+    fake = [
+        {"name": f"B{i}", "pct": i - 5, "tone": "neutral",
+         "amount_yi": i, "score": i}
+        for i in range(1, 40)
+    ]
+    monkeypatch.setattr(md, "fetch_sector_ranking", lambda: fake)
+    md.clear_cache()
+    rows = md.build_sector_heatmap(top_n=24)
+    assert len(rows) == 24
+    assert rows[0]["amount_yi"] == 39 and rows[-1]["amount_yi"] == 16
+    assert rows[0]["name"] == "B39"
+    for r in rows:
+        assert set(r) >= {"name", "pct", "tone", "amount_yi"}
+
+    # amount 全缺 (东财源) → 按 score 兜底排序, 仍返回合法列表
+    fake2 = [{"name": f"A{i}", "pct": 1.0, "tone": "neutral",
+              "amount_yi": 0, "score": i} for i in range(1, 30)]
+    monkeypatch.setattr(md, "fetch_sector_ranking", lambda: fake2)
+    md.clear_cache()
+    rows2 = md.build_sector_heatmap(top_n=10)
+    assert len(rows2) == 10 and rows2[0]["name"] == "A29"
 
 
 def test_fetch_north_offline_list():
@@ -73,12 +114,25 @@ def test_clear_cache():
 # ── 图表数据 ──
 
 def test_build_dashboard_data_has_chart_keys():
-    """聚合结果包含 3 组图表数据键。"""
+    """聚合结果包含全部图表数据键与主力资金键。"""
     from wyckoff.market_dashboard import build_dashboard_data, clear_cache
     clear_cache()
     data = build_dashboard_data()
-    for key in ("sse_chart", "index_compare", "sector_flow"):
+    for key in ("sse_chart", "index_compare", "sector_flow", "fund_flow",
+                "sector_heatmap"):
         assert key in data
+
+
+def test_fetch_market_fund_flow_offline():
+    """离线时主力资金为 None 或合法结构。"""
+    from wyckoff.market_dashboard import fetch_market_fund_flow, clear_cache
+    clear_cache()
+    val = fetch_market_fund_flow()
+    if val is None:
+        return
+    assert "items" in val and "total_yi" in val
+    for it in val["items"]:
+        assert "name" in it and "net_yi" in it
 
 
 def test_sse_chart_structure():
@@ -148,28 +202,38 @@ def test_dashboard_widget_set_empty_and_theme():
 
 
 def test_chart_widgets_render_offline():
-    """三个图表控件可离线构建+渲染 (数据为 None / {} / [] 时不抛异常)。"""
+    """全部图表控件可离线构建+渲染 (数据为 None / {} / [] 时不抛异常)。"""
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
-    from ui.dash_charts import SseKlineChart, IndexCompareChart, SectorFlowChart
+    from ui.dash_charts import (IndexCompareChart, SectorFlowChart,
+                                SectorHeatmap, SseKlineChart)
     from wyckoff.market_dashboard import (
-        build_sse_chart, build_index_compare, build_sector_flow_chart, clear_cache)
+        build_index_compare, build_sector_flow_chart, build_sector_heatmap,
+        build_sse_chart, clear_cache)
     clear_cache()
     c1 = build_sse_chart()
     c2 = build_index_compare()
     c3 = build_sector_flow_chart()
-    w1, w2, w3 = SseKlineChart(), IndexCompareChart(), SectorFlowChart()
+    c4 = build_sector_heatmap()
+    w1, w2 = SseKlineChart(), IndexCompareChart()
+    w3, w4 = SectorFlowChart(), SectorHeatmap()
     w1.set_data(c1)
     w2.set_data(c2)
     w3.set_data(c3)
+    w4.set_data(c4)
     # 空数据降级路径
     w1.set_data(None)
     w2.set_data({})
     w3.set_data([])
-    w1.deleteLater()
-    w2.deleteLater()
-    w3.deleteLater()
+    w4.set_data([])
+    # 真实结构渲染分支
+    w4.set_data([{"name": "半导体", "pct": 2.1, "tone": "bullish",
+                  "amount_yi": 280.5}])
+    for w in (w1, w2, w3, w4):
+        w.show()
+        w.repaint()
+        w.deleteLater()
 
 
 def test_dashboard_widget_renders_charts_with_data():
@@ -199,6 +263,18 @@ def test_dashboard_widget_renders_charts_with_data():
             {"name": "半导体", "flow": 12.3, "pct": 1.2, "tone": "bullish"},
             {"name": "银行", "flow": -5.0, "pct": -0.4, "tone": "bearish"},
         ],
+        "sector_heatmap": [
+            {"name": "半导体", "pct": 2.1, "tone": "bullish", "amount_yi": 280.5},
+            {"name": "油气开采", "pct": 4.2, "tone": "bullish", "amount_yi": 86.9},
+            {"name": "农化制品", "pct": 4.7, "tone": "bullish", "amount_yi": 281.4},
+        ],
+        "fund_flow": {
+            "items": [
+                {"name": "上证指数", "net_yi": 27.2, "net_pct": 30},
+                {"name": "深证成指", "net_yi": -109.2, "net_pct": -104},
+            ],
+            "total_yi": -82.0,
+        },
     }
     w = DashboardWidget(font_size=11)
     w.set_data(fake)

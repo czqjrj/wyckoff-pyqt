@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import (
 from . import theme
 from .components.card import Card
 from .components.panel_header import PanelHeader
-from .dash_charts import IndexCompareChart, SectorFlowChart, SseKlineChart
+from .dash_charts import (IndexCompareChart, SectorFlowChart, SectorHeatmap,
+                          SseKlineChart)
 
 # ── 工具 ──
 
@@ -436,17 +437,16 @@ class DashboardWidget(QWidget):
         left.layout_.addStretch(1)
         two_col.addWidget(left, 1)
 
-        # 右: 资金流向 + 涨停池
+        # 右: 资金流向 (主力资金 + 涨停池)
         right = self._new_card()
         right.layout_.addWidget(PanelHeader("资金流向"))
-        self._north_title = _label("北向资金", 10, True, theme.C_MUTED)
-        right.layout_.addWidget(self._north_title)
-        self._north_row = None
-        self._north_total = _pill("合计 --", theme.C_MUTED, _tint(theme.C_MUTED, 22))
-        right.layout_.addWidget(self._north_total)
-        self._north_detail = _label("暂无数据", 10, False, theme.C_MUTED)
-        self._north_detail.setWordWrap(True)
-        right.layout_.addWidget(self._north_detail)
+        self._flow_title = _label("主力资金", 10, True, theme.C_MUTED)
+        right.layout_.addWidget(self._flow_title)
+        self._flow_total = _pill("合计 --", theme.C_MUTED, _tint(theme.C_MUTED, 22))
+        right.layout_.addWidget(self._flow_total)
+        self._flow_detail = _label("暂无数据", 10, False, theme.C_MUTED, mono=True)
+        self._flow_detail.setWordWrap(True)
+        right.layout_.addWidget(self._flow_detail)
         right.layout_.addSpacing(6)
         self._zt_title = _label("涨停池", 10, True, theme.C_MUTED)
         right.layout_.addWidget(self._zt_title)
@@ -462,6 +462,9 @@ class DashboardWidget(QWidget):
     def _build_sector_section(self):
         card = self._new_card()
         card.layout_.addWidget(PanelHeader("板块轮动"))
+
+        self._sector_heatmap = SectorHeatmap()
+        card.add_widget(self._sector_heatmap)
 
         self._sector_table = QTableWidget()
         self._sector_table.setColumnCount(4)
@@ -527,6 +530,8 @@ class DashboardWidget(QWidget):
         self._sse_chart.set_data(data.get("sse_chart"))
         self._index_compare.set_data(data.get("index_compare"))
         self._sector_flow.set_data(data.get("sector_flow"))
+        # 板块热力图
+        self._sector_heatmap.set_data(data.get("sector_heatmap"))
 
         # 市场广度
         if breadth:
@@ -573,31 +578,36 @@ class DashboardWidget(QWidget):
             detail_parts.append(f"MA200 {ma200:,.2f}")
         self._phase_detail.setText("  ·  ".join(detail_parts))
 
-        # 北向资金
-        if north:
-            parts = []
-            total_net = 0.0
-            for n in north:
-                net = n.get("net")
-                mkt = n.get("market", "")
-                if net is None:
-                    continue
-                total_net += net
-                parts.append(f"{mkt} {net / 1e8:+.2f}亿")  # EM 单位: 元 → 亿
-            nc = theme.C_UP if total_net > 0 else theme.C_DOWN if total_net < 0 else theme.C_MUTED
-            self._north_total.setText(f"合计 {total_net / 1e8:+.2f}亿")
-            self._north_total.setStyleSheet(
+        # 主力资金
+        fund_flow = data.get("fund_flow") or {}
+        flow_items = fund_flow.get("items") or []
+        if flow_items:
+            total = fund_flow.get("total_yi", 0)
+            nc = theme.C_UP if total > 0 else theme.C_DOWN if total < 0 else theme.C_MUTED
+            self._flow_total.setText(f"三大指数合计 {total:+.2f}亿")
+            self._flow_total.setStyleSheet(
                 f"color:{nc};background:{_tint(nc, 22)};"
                 f"border-radius:{theme.radius('full')}px;padding:2px 10px;")
-            self._north_detail.setText("\n".join(parts) if parts else "暂无数据")
-            self._north_detail.setStyleSheet(f"color:{_tint(nc, 220)};background:transparent;")
+            lines = []
+            for it in flow_items:
+                name = it.get("name", "")
+                net = it.get("net_yi", 0)
+                pct = it.get("net_pct")
+                pct_txt = f"占 {pct / 100:+.2f}%" if pct is not None else "占 --"
+                lines.append(f"{name}  {net:+.2f}亿  ·  {pct_txt}")
+            self._flow_detail.setText("\n".join(lines))
+            first_c = theme.C_UP if flow_items[0].get("net_yi", 0) > 0 else theme.C_DOWN
+            self._flow_detail.setStyleSheet(
+                f"color:{_tint(first_c, 210)};background:transparent;")
         else:
-            self._north_total.setText("合计 --")
-            self._north_total.setStyleSheet(
+            self._flow_total.setText("合计 --")
+            self._flow_total.setStyleSheet(
                 f"color:{theme.C_MUTED};background:{_tint(theme.C_MUTED, 22)};"
                 f"border-radius:{theme.radius('full')}px;padding:2px 10px;")
-            self._north_detail.setText("暂无数据")
-            self._north_detail.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+            self._flow_detail.setText(
+                "暂无数据 (北向自 2024-08 起停止逐日披露)")
+            self._flow_detail.setStyleSheet(
+                "color:%s;background:transparent;" % theme.C_MUTED)
 
         # 涨停池
         if zt_pool:
