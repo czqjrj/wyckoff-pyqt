@@ -230,7 +230,7 @@ DEFAULTS = {
     Paper.STOP_LOSS: 0.04,
     Paper.TAKE_PROFIT: 0.15,
     Paper.COST: 0.004,
-    Paper.MIN_CONF: 90,
+    Paper.MIN_CONF: 100,
     Paper.SCAN_INTERVAL: 1800,
     Paper.ENABLE_CHINEXT: False,
     Paper.ENABLE_STAR: False,

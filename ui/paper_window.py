@@ -150,9 +150,10 @@ def _strat_cn(s):
 
 # ── 扫描模式 (多策略并行) ─────────────────────────────────
 _SCAN_MODES = (
-    ("混合扫描(纪律+左侧买点+价值吸筹)", ""),  # 综合: 走 run_scan 默认, 全策略并行
+    ("混合扫描(纪律+左侧买点+价值吸筹)", ""),  # 综合: 走 run_scan 默认, 三策略并行
     ("纪律扫描(强多头+硬门禁)", "discipline"),
     ("价值吸筹扫描(底部整固)", "value_accumulation"),
+    ("左侧买点扫描", "long_buy_left"),
 )
 
 
@@ -170,14 +171,18 @@ class _CycleThread(QThread):
     def run(self):
         from wyckoff._log import log_exc
         from wyckoff.paper import run_cycle
+        from wyckoff.strategies.constants import STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT
         settings = dict(self._settings or {})
-        if self._mode == "value_accumulation":
-            # 纯价值吸筹: 降低强制 conf 门槛, 让价值吸筹逻辑优先
-            from wyckoff.settings_keys import S
-            settings[S.Paper.MIN_CONF] = min(
-                int(settings.get(S.Paper.MIN_CONF, 90)), 50)
+        # 根据 mode 推断 strategies 子集
+        strategies = None
+        if self._mode == "discipline":
+            strategies = (STRATEGY_DISCIPLINE,)
+        elif self._mode == "value_accumulation":
+            strategies = (STRATEGY_VALUE_ACC,)
+        elif self._mode == "long_buy_left":
+            strategies = (STRATEGY_LONG_LEFT,)
         try:
-            st = run_cycle(settings=settings, candidates=self._candidates)
+            st = run_cycle(settings=settings, candidates=self._candidates, strategies=strategies)
         except Exception as e:
             log_exc("模拟盘周期执行失败", e)
             st = {"error": str(e)}
@@ -407,9 +412,10 @@ class PaperWindow(QDialog):
         for label, _mode in _SCAN_MODES:
             self.cb_scan_mode.addItem(label)
         self.cb_scan_mode.setToolTip(
-            "混合: 双策略并行 (纪律优先, 价值吸筹兜底)\n"
+            "混合: 三策略并行 (纪律/左侧买点/价值吸筹)\n"
             "纪律: 仅策略4·纪律 (强多头+硬门禁)\n"
-            "价值吸筹: 仅综合选股·价值吸筹 (底部整固+20根吸筹)")
+            "价值吸筹: 仅综合选股·价值吸筹 (底部整固+20根吸筹)\n"
+            "左侧买点: 威科夫完整做多买点")
         hb_scan.addWidget(self.cb_scan_mode)
 
         hb_scan.addWidget(_flabel("扫描数"))
@@ -773,7 +779,7 @@ class PaperWindow(QDialog):
 
         self.sp_conf = QSpinBox()
         self.sp_conf.setRange(50, 100)
-        self.sp_conf.setValue(int(self._settings.get(S.Paper.MIN_CONF, 90)))
+        self.sp_conf.setValue(int(self._settings.get(S.Paper.MIN_CONF, 100)))
 
         self.sp_hold = QSpinBox()
         self.sp_hold.setRange(1, 120)
@@ -784,7 +790,7 @@ class PaperWindow(QDialog):
         self.sp_stop.setRange(0.01, 0.30)
         self.sp_stop.setSingleStep(0.005)
         self.sp_stop.setDecimals(3)
-        self.sp_stop.setValue(float(self._settings.get(S.Paper.STOP_LOSS, 0.03)))
+        self.sp_stop.setValue(float(self._settings.get(S.Paper.STOP_LOSS, 0.04)))
 
         self.sp_tp = QDoubleSpinBox()
         self.sp_tp.setRange(0.05, 1.00)

@@ -124,11 +124,11 @@ class WyckoffStrategyManager:
 
     # ── 候选生成 (委托 candidates, 保持历史方法签名) ──────────────
     def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
-                        name="", event_types=None):
+                        name="", event_types=None, strategies=None):
         """对单只股票产出模拟盘候选 (纪律→左侧买点→价值吸筹)。"""
         return _candidates.scan_individual(
             code, df=df, min_conf=min_conf, gates_ok=gates_ok,
-            name=name, event_types=event_types)
+            name=name, event_types=event_types, strategies=strategies)
 
     @staticmethod
     def _discipline_latest(evs, n, min_conf=90, event_types=None):

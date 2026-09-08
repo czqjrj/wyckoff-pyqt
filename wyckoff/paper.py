@@ -39,6 +39,11 @@ except Exception:  # pragma: no cover
 from . import paper_log, paper_strategy_accuracy
 from .paths import PAPER_FILE
 from .settings_keys import S
+from .strategies.constants import (
+    STRATEGY_DISCIPLINE,
+    STRATEGY_LONG_LEFT,
+    STRATEGY_VALUE_ACC,
+)
 
 _LOCK = threading.RLock()
 
@@ -527,19 +532,25 @@ def _risk_blocks_entry(st, cand, price) -> bool:
     按候选现价预估仓位; 数据不足以精确判定时 (同持有 sector 缺失) fail-soft 放行,
     仅在可判定且超限时拦截。
     """
+    from wyckoff.strategies.constants import STRATEGY_VALUE_ACC
     ok, msg = check_drawdown_limit(st)
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
         try:
             paper_log.log_risk_block(cand["code"], cand.get("name", ""),
-                                     msg or "回撤超限", risk_type="drawdown")
+                                      msg or "回撤超限", risk_type="drawdown")
         except Exception:
             pass
         return True
     # 预估 qty (与 _make_order 同口径: 按账户总权益等权, 而非剩余现金)
     mv = sum(float(p.get("last", p["buy_px"])) * p["qty"]
              for p in st.get("positions", []))
+    # 价值吸筹单仓资金权重: 降低弱策略敞口
+    va_weight = float(_CUR.get("va_weight", 0.6) or 1.0)
+    strategy = cand.get("strategy", "")
     budget = (float(st["cash"]) + mv) * (1.0 / max(1, _CUR["max_pos"]))
+    if strategy == STRATEGY_VALUE_ACC:
+        budget *= va_weight
     entry = float(price)
     qty = int(budget // (entry * (1 + SLIP_BUY)) // 100 * 100)
     if qty <= 0:
@@ -1157,7 +1168,7 @@ def _value_accum_candidate(code, df, piv, evs):
         return None
     if _is_low_quality(sig["event"].get("code") or code):
         return None
-    return {"strategy": "screener_value_accumulation",
+    return {"strategy": STRATEGY_VALUE_ACC,
             "type": ev["type"], "idx": int(ev.get("idx") or 0),
             "conf": int(ev.get("conf", 0) or 0)}
 
@@ -1167,7 +1178,7 @@ VA_EXCLUDE_BJ = True
 VA_EXCLUDE_ST = True
 VA_MIN_PRICE = 3.0
 VA_MIN_CONF = 80
-LONG_STRATEGY = "long_buy_left"
+LONG_STRATEGY = STRATEGY_LONG_LEFT
 LONG_MIN_CONF = 60
 LB_ENTRY_MARGIN = 0.0
 LB_MAX = 8
@@ -1265,13 +1276,18 @@ def _mainboard_universe(max_codes=6000):
 
 
 def pick_candidates(universe=None, max_codes=6000, min_conf=None,
-                    cancel_event=None, progress=None, skip_gates=False):
+                    cancel_event=None, progress=None, skip_gates=False,
+                    strategies=None):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
 
     选股统一由策略管理器 (WyckoffStrategyManager.scan_individual) 产出,
     本函数只负责编排: 拉K线 → 管理器选股 → 门禁 → 低质过滤 → 排序。
     单只股票优先级: 纪律 (受门禁) → 威科夫左侧买点 (独立赛道, 不受门禁)
                     → 价值吸筹 (受门禁, 纪律兜底)。
+
+    strategies: 可选策略 key 子集 (如仅左侧买点); None/空=三策略并线。
+    单策略扫描时直接把子集传给 scan_individual, 避免 STRATEGY_ORDER 优序
+    掩盖低优先级策略候选。
 
     纪律硬门禁 (缺一不可, 数据不可用即拦截; skip_gates=True 跳过全部门禁,
     供离线/测试/仅排序场景使用):
@@ -1327,7 +1343,7 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             cand = m.scan_individual(
                 code, df, min_conf=min_conf,
                 gates_ok=(market_ok, _market_reason), name=name,
-                event_types=LONG_EVENT_TYPES)
+                event_types=LONG_EVENT_TYPES, strategies=strategies)
             if cand is None:
                 return code, None, None
             cand["code"] = code
@@ -1470,7 +1486,7 @@ def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
         equity_base = float(st["cash"]) + mv
     budget = equity_base * (1.0 / max(1, _CUR["max_pos"]))
     # 价值吸筹降权: 单仓资金×va_weight (弱策略敞口控制, 其余策略=1.0)
-    if strategy == "screener_value_accumulation":
+    if strategy == STRATEGY_VALUE_ACC:
         budget *= float(_CUR.get("va_weight", 1.0) or 1.0)
     if budget < MIN_LOT:
         return None
@@ -1499,7 +1515,7 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
             return None, "已持有"
         weak = _weak_market_flag()  # 刷新弱市标记 (UI 手动买入也走弱市限仓)
         st["weak"] = weak
-        if weak and strategy == "screener_value_accumulation":
+        if weak and strategy == STRATEGY_VALUE_ACC:
             return None, "弱市已禁用价值吸筹"
         limit = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
         if len(st["positions"]) >= limit:
@@ -1537,9 +1553,10 @@ _COND_KINDS = ("buy_price", "sell_price", "take_profit", "stop_loss", "trailing"
 
 
 def _cond(kind, symbol, price=None, pct=None, trigger="above", qty=0,
-          name="", reason="", amount=None, activation=None):
+          name="", reason="", amount=None, activation=None, strategy=""):
     """构造一条条件单记录 (status="active")。
-    activation: 移动止盈专用 - 浮盈价, 收盘价≥该价才启用回落跟踪 (未激活不触发)。"""
+    activation: 移动止盈专用 - 浮盈价, 收盘价≥该价才启用回落跟踪 (未激活不触发)。
+    strategy: 信号来源策略 (scan_individual 带入, 供条件单路径补策略归属)。"""
     c = {
         "cid": f"cond-{int(time.time() * 1_000_000)}-{next(_CID_SEQ)}",
         "kind": kind, "symbol": symbol, "name": name,
@@ -1549,6 +1566,7 @@ def _cond(kind, symbol, price=None, pct=None, trigger="above", qty=0,
         "reason": reason,
         "activation": round(float(activation), 3) if activation is not None else None,
         "activated": False,
+        "strategy": strategy or "",
         "status": "active", "created_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "matched_ts": "", "matched_price": None,
         "peak": None, "correct": None,  # correct: True/False/None(未评估)
@@ -1609,7 +1627,7 @@ def _apply_auto_conditions(st, cand, weak=False):
             seen[code] = c
     handled = set()  # 本批已处理(创建/更新)的代码, 保证候选内同代码只保留一条
     for e in cand or []:
-        if weak and e.get("strategy") == "screener_value_accumulation":
+        if weak and e.get("strategy") == STRATEGY_VALUE_ACC:
             continue  # 弱市停用价值吸筹入场条件单
         price = e.get("auto_cond_price")
         if not price:
@@ -1640,13 +1658,15 @@ def _apply_auto_conditions(st, cand, weak=False):
             existing["name"] = e.get("name", "")
             existing["reason"] = reason
             existing["trigger"] = e.get("trigger", "above")
+            existing["strategy"] = e.get("strategy", "")
             existing["updated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
             touched += 1
             continue
         newc = _cond(
             "buy_price", code, price=float(price),
             trigger=e.get("trigger", "above"),
-            name=e.get("name", ""), reason=reason)
+            name=e.get("name", ""), reason=reason,
+            strategy=e.get("strategy", ""))
         conds.append(newc)
         seen[code] = newc
         touched += 1
@@ -1892,8 +1912,12 @@ def _judge_condition_correct(c, last, entry=None, ret=None, peak=None,
     return None
 
 
-def _fire_condition(st, c, last, df, side="buy", pos=None):
-    """执行触发动作后把条件单标记为已触发 (status → "done")。"""
+def _fire_condition(st, c, last, df, side="buy", pos=None,
+                    strategy=None, stop_pct=None, take_pct=None):
+    """执行触发动作后把条件单标记为已触发 (status → "done")。
+
+    策略/止盈/止损参数均可由调用方传入; 未传入时沿用候选快照/原有逻辑回退。
+    """
     # 首先判断正确性
     entry_price = None
     condition_ret = None
@@ -1907,10 +1931,25 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
 
     if side == "buy":
         # 统一权益/3 等权口径: 传 st 让 _make_order 按 账户总权益/max_pos 分配,
-        # 避免条件单路径走现金/3 导致「先买的大、后买的小」的顺序衰减与资金闲置。
+        # 避免条件单路径走现金/3 导致"先买的大、后买的小"的顺序衰减与资金闲置。
         budget = c.get("amount") or st["cash"]
+        # 条件单路径补齐策略归属与离场特化: 与 run_cycle 直接买入同口径。
+        # 策略优先取传入参数, 兼容旧数据则回退候选快照。
+        if strategy is None:
+            strategy = c.get("strategy") or _cond_cand_meta.get("strategy", "")
+        if stop_pct is None or take_pct is None:
+            entry_px = _cond_cand_meta.get("entry_price")
+            if strategy == STRATEGY_LONG_LEFT and entry_px:
+                stop_px = float(_cond_cand_meta.get("stop_price") or 0)
+                target_px = float(_cond_cand_meta.get("target_price") or 0)
+                if stop_px:
+                    stop_pct = round((entry_px - stop_px) / entry_px, 4) if stop_pct is None else stop_pct
+                if target_px > stop_px:
+                    take_pct = round((target_px - entry_px) / entry_px, 4) if take_pct is None else take_pct
         order = _make_order(c["symbol"], c.get("name", ""), "条件单",
-                            c.get("qty", 0) or 0, last, 0, budget, st=st)
+                            c.get("qty", 0) or 0, last, 0, budget, st=st,
+                            strategy=strategy,
+                            stop_pct=stop_pct, take_pct=take_pct)
         if has_position(st, c["symbol"]):
             # 已持有该标的: 取消条件单, 防止对同一标的重建仓 (避免资金/仓位被重复占用)
             c["status"] = "cancelled"
@@ -1992,14 +2031,6 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
         )
 
 
-# 价值吸筹独立止损/止盈 (暂无可采纳证据, 保持关闭):
-#   80 只扩展池复验 (docs/paper_priority_bt.md) 显示 3% vs 6% 对价值吸筹
-#   结果无系统性差异; 24 白马池里 6% 的改善仅构建在 2 笔样本上, 不稳健。
-#   置 None → 沿用全局止损, 与事件即买口径一致。
-VALUE_STOP_PCT = None
-VALUE_TAKE_PCT = 0.15
-
-
 def fill_buy(st, order, event_type: str = None):
     """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。"""
     price = order["price"]
@@ -2009,15 +2040,11 @@ def fill_buy(st, order, event_type: str = None):
     if st.get("cash", 0) < spend:
         return None, "现金不足"
     st["cash"] -= spend
-    # 价值吸筹订单缺省止损/止盈 → 注入策略特异参数 (条件单与 step 平仓同生效)
+    # 止损/止盈: 左侧买点自带御设 (run_cycle/条件单路径已折算为 stop_pct/take_pct);
+    # 其余策略走账户默认 (价值吸筹无需特化: 实证无独立止盈/止损可采纳证据,
+    # 与全局默认一致, 见 _rebalance/离场逻辑)。
     stop_pct = order.get("stop_pct")
     take_pct = order.get("take_pct")
-    va_strategy = order.get("strategy")
-    if va_strategy == "screener_value_accumulation":
-        if stop_pct is None and VALUE_STOP_PCT:
-            stop_pct = VALUE_STOP_PCT
-        if take_pct is None and VALUE_TAKE_PCT:
-            take_pct = VALUE_TAKE_PCT
     st["positions"].append({
         "symbol": order["symbol"], "name": order.get("name", ""),
         "type": order["type"], "conf": order.get("conf", 50),
@@ -2145,6 +2172,7 @@ def _rebalance_portfolio(st, df_by_code):
 
     df_by_code: 需含待补仓标的当根行情 (用于现价与成交)。
     """
+    from wyckoff.strategies.constants import STRATEGY_VALUE_ACC
     if not _CUR.get("rebalance", False):
         return 0
     eff_max = _CUR["weak_max_pos"] if st.get("weak") else _CUR["max_pos"]
@@ -2159,8 +2187,14 @@ def _rebalance_portfolio(st, df_by_code):
         sym = pos["symbol"]
         last = float(pos.get("last") or pos["buy_px"])
         cur_mv = float(pos.get("last", pos["buy_px"])) * pos["qty"]
+        # 价值吸筹单仓资金权重: 降低弱策略敞口
+        va_weight = float(_CUR.get("va_weight", 0.6) or 1.0)
+        strategy = pos.get("strategy", "")
+        effective_target = target
+        if strategy == STRATEGY_VALUE_ACC:
+            effective_target = target * va_weight
         # 容忍带: 仅当权重明显不足 (< 目标*0.75) 且现金可覆盖时才补
-        short = target * 0.75 - cur_mv
+        short = effective_target * 0.75 - cur_mv
         if short <= 0:
             continue
         if st.get("weak"):
@@ -2642,7 +2676,7 @@ def _scan_due(st):
 
 
 def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
-              force_scan=False):
+              force_scan=False, strategies=None):
     """无头自动运行一个周期: 筛选→下单→步进→统计。返回统计。
 
     供 cron / 调度线程 / 手动触发。每周期持仓 K 数 +1,
@@ -2653,6 +2687,8 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     candidates 为 None 时, 若距上次扫描仍在冷却窗口内且已有候选快照, 则复用
     st["candidates"] 而非无条件重扫全市场 (多周期调度每 30 分钟触发一次全市场
     重扫会造成选股覆盖与节流), 用 force_scan=True 强制立即重扫。
+    strategies: 可选策略 key 子集 (与 run_scan 单策略模式同语义), 仅在需要
+    重扫时透传给 pick_candidates; 复用候选/传入候选时过滤由调用方保证。
     """
     from .datasource import fetch_kline
     from .indicators import add_indicators
@@ -2675,7 +2711,8 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         if reuse:
             cand = st["candidates"]
         else:
-            cand = pick_candidates(universe=universe, min_conf=min_conf)
+            cand = pick_candidates(universe=universe, min_conf=min_conf,
+                                   strategies=strategies)
             _now = datetime.now()
             st["last_scan_time"] = _now.isoformat()
             st["next_scan_time"] = (
@@ -2698,7 +2735,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         if has_position(st, code) or any(o["symbol"] == code for o in st["pending"]):
             continue
         # 弱市停用价值吸筹 (与回测弱市过滤口径一致)
-        if weak and e.get("strategy") == "screener_value_accumulation":
+        if weak and e.get("strategy") == STRATEGY_VALUE_ACC:
             continue
         px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
         last = float(e.get("last", 0) or 0)
@@ -2715,7 +2752,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
         # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
         stop_pct = take_pct = None
-        if e.get("strategy") == "long_buy_left" and px > 0:
+        if e.get("strategy") == STRATEGY_LONG_LEFT and px > 0:
             stop_px = float(e.get("stop_price") or 0)
             target_px = float(e.get("target_price") or 0)
             if stop_px:
@@ -2764,17 +2801,19 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     return stats(st)
 
 
-def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
-    """运行纪律扫描并更新状态。
+def run_scan(st, scan_type='', n_codes=6000, progress=None):
+    """运行扫描并更新状态。
 
-    按纪律执行: 强多头事件 (Spring/Shakeout/ST/LPS/SC) + conf≥阈值 + 三大硬门禁
-    (大盘20日线向上 / 板块强度>60分位 / 资金流净流入>50分位截面)。候选写入
-    st["candidates"] 并落盘 (save_state)。返回描述字符串。
+    三策略并线扫描 (纪律 + 威科夫左侧买点 + 价值吸筹): 强多头事件 (Spring/
+    Shakeout/ST/LPS/SC) + conf≥阈值; 纪律/价值吸筹受大盘门禁, 左侧买点独立观。
+    候选写入 st["candidates"] 并落盘 (save_state)。返回描述字符串。
 
     参数:
         st: 交易状态 dict
-        scan_type: 保留兼容 (旧 "volume_surge"/"pnf_breakout"/"sector_driven"
-                   在纪律下统一走 pick_candidates, 忽略具体类型)
+        scan_type: 策略过滤。""=三策略并线; 或一个策略 key
+                   (STRATEGY_DISCIPLINE/STRATEGY_VALUE_ACC/STRATEGY_LONG_LEFT)
+                   单策略模式只产出该策略候选 (旧 "volume_surge"/"pnf_breakout"/
+                   "discipline" 等历史值按纪律并线兼容)。
         n_codes: 要扫描的代码数量上限 (pick_candidates 内部会把 universe 收敛为
                  沪深主板 600/601/603/605 + 000/001/002/003, 实际扫描量以主板为准)
         progress: 可选进度回调 (done, total, code), 透传给 pick_candidates
@@ -2786,6 +2825,14 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
     now = datetime.now().isoformat()
     st['last_scan_time'] = now
 
+    # 策略过滤: 历史兼容值统一按纪律; 未知值视为并线
+    _LEGACY_SINGLE = {"discipline", "volume_surge", "pnf_breakout", "sector_driven"}
+    if scan_type in _LEGACY_SINGLE:
+        strategies = (STRATEGY_DISCIPLINE,)
+    elif scan_type in (STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT):
+        strategies = (scan_type,)
+    else:
+        strategies = None
     # 纪律扫描: 强多头事件 + conf≥min_conf + 三大硬门禁
     try:
         scanned_universe = _mainboard_universe(n_codes)
@@ -2795,7 +2842,7 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
     try:
         cand = pick_candidates(universe=scanned_universe or None,
                                max_codes=n_codes, min_conf=_CUR["min_conf"],
-                               progress=progress)
+                               progress=progress, strategies=strategies)
     except Exception:
         cand = []
     cand.sort(key=lambda e: (-int(e.get("conf", 0) or 0), e.get("code", "")))
@@ -2807,11 +2854,15 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
     except Exception:
         pass
 
-    label = "策略管理器扫描(纪律+左侧买点+价值吸筹)"
+    if scan_type in (STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT):
+        label = f"策略管理器扫描({paper_strategy_accuracy.STRATEGY_CN.get(scan_type, scan_type)})"
+        empty_note = (f"{label}: 无满足条件的候选 (该策略的门禁/conf/事件未满足)")
+    else:
+        label = "策略管理器扫描(纪律+左侧买点+价值吸筹)"
+        empty_note = ("策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁拦截, "
+                      "左侧买点未现于可执行窗口, 价值吸筹未现于底部整固)")
     result_str = (f"{label}: 扫描{scanned} 码, 命中 {len(cand)} 个候选"
-                  if cand else
-                  "策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁拦截, "
-                  "左侧买点未现于可执行窗口, 价值吸筹未现于底部整固)")
+                  if cand else empty_note)
     st['last_scan_result'] = result_str
     st['next_scan_time'] = (datetime.now() + timedelta(minutes=30)).isoformat()
 
