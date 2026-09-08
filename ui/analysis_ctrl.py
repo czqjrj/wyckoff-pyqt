@@ -58,7 +58,7 @@ class AnalysisController:
         self._thread.failed.connect(self._on_error)
         self._analysis_threads[self._thread] = self._thread
         self._thread.finished.connect(
-            lambda: self._analysis_threads.pop(self._thread, None))
+            lambda th=self._thread: self._analysis_threads.pop(th, None))
         self._thread.start()
 
     def _sync_analyze_btn(self, analyzing):

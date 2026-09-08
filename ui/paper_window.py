@@ -1323,6 +1323,19 @@ class PaperWindow(QDialog):
         if n and n > 0:
             self.refresh()
 
+    def shutdown(self, wait_ms=8000):
+        """退出前调用: 停止定时器并等待后台线程结束, 避免销毁运行中 QThread。"""
+        for t in (getattr(self, "timer", None), getattr(self, "qt_timer", None)):
+            if t is not None:
+                try:
+                    t.stop()
+                except Exception:
+                    pass
+        for th in (self._thread, self._scan_thread, self._quote_thread,
+                   self._track_eval_thread):
+            if th is not None and th.isRunning():
+                th.wait(wait_ms)
+
     def refresh(self):
         from wyckoff.paper import apply_paper_params, load_state, stats
         st = load_state()

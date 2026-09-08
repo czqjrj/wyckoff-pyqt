@@ -3734,6 +3734,23 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         for t in list(getattr(self, "_label_ai_threads", {}) or {}):
             if t is not None and t.isRunning():
                 t.wait(5000)
+        c = getattr(self, "_analysis_ctrl", None)
+        if c is not None:
+            for t in list(getattr(c, "_analysis_threads", {}) or {}):
+                if t is not None and t.isRunning():
+                    t.wait(8000)
+            tk = getattr(c, "_analysis_ticker_th", None)
+            if tk is not None and tk.isRunning():
+                tk.wait(3000)
+        tk = getattr(self, "_analysis_ticker_th", None)
+        if tk is not None and tk.isRunning():
+            tk.wait(3000)
+        pt = getattr(self, "paper_tab", None)
+        if pt is not None:
+            try:
+                pt.shutdown(wait_ms=8000)
+            except Exception:
+                pass
         super().closeEvent(e)
 
 
