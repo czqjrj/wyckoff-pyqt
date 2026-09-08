@@ -9,6 +9,8 @@
 import os
 import tempfile
 
+import pytest
+
 os.environ.setdefault("WYCKOFF_DATA_DIR", tempfile.mkdtemp())
 
 
@@ -51,6 +53,7 @@ def test_feature_vector_dir_from_type():
 
 def test_train_model_small_and_gating(tmp_path, monkeypatch):
     """少量样本训练不崩; 未达门槛时不接管 conf。"""
+    pytest.importorskip("sklearn")  # sklearn 为可选依赖, 缺失时跳过
     monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m.json"))
     recs = [_rec(0.1 if k % 2 == 0 else -0.1, date=f"2024-06-{k % 28 + 1:02d}")
             for k in range(10)]
@@ -91,6 +94,7 @@ def test_spearman_guard_constant():
 
 def test_train_takeover_conf_direction(tmp_path, monkeypatch):
     """特征强可识别 + 样本达标 → 接管 conf; 多头高 P(up) 推高 conf。"""
+    pytest.importorskip("sklearn")  # sklearn 为可选依赖, 缺失时跳过
     monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m2.json"))
     monkeypatch.setattr(om, "MODEL_MIN_TRAIN", 40)
     monkeypatch.setattr(om, "MODEL_MIN_OOS", 8)

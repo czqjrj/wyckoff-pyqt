@@ -240,14 +240,490 @@
         "positions_count": 2,
         "closed_count": 0
       }
+    },
+    {
+      "ts": "2026-09-07 14:23:10",
+      "type": "scan",
+      "detail": {
+        "scan_count": 1,
+        "codes_scanned": 3100,
+        "candidates_found": 43,
+        "candidates": [
+          {
+            "code": "sz000652",
+            "name": "泰达股份",
+            "type": "弹簧二次测试",
+            "conf": 98,
+            "last": 3.49,
+            "strategy": "long_buy_left",
+            "sector": "环境治理"
+          },
+          {
+            "code": "sz000685",
+            "name": "中山公用",
+            "type": "弹簧二次测试",
+            "conf": 98,
+            "last": 11.43,
+            "strategy": "long_buy_left",
+            "sector": "环境治理"
+          },
+          {
+            "code": "sh601218",
+            "name": "吉鑫科技",
+            "type": "弹簧二次测试",
+            "conf": 97,
+            "last": 4.5,
+            "strategy": "long_buy_left",
+            "sector": "风电设备"
+          },
+          {
+            "code": "sz000544",
+            "name": "中原环保",
+            "type": "弹簧二次测试",
+            "conf": 97,
+            "last": 7.38,
+            "strategy": "long_buy_left",
+            "sector": "环境治理"
+          },
+          {
+            "code": "sh600894",
+            "name": "广日股份",
+            "type": "弹簧二次测试",
+            "conf": 95,
+            "last": 7.43,
+            "strategy": "long_buy_left",
+            "sector": "专用设备"
+          },
+          {
+            "code": "sz000686",
+            "name": "东北证券",
+            "type": "弹簧二次测试",
+            "conf": 95,
+            "last": 8.11,
+            "strategy": "long_buy_left",
+            "sector": "证券Ⅱ"
+          },
+          {
+            "code": "sz002818",
+            "name": "富森美",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 95,
+            "last": 11.03,
+            "strategy": "long_buy_left",
+            "sector": "一般零售"
+          },
+          {
+            "code": "sh600273",
+            "name": "嘉化能源",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 93,
+            "last": 6.72,
+            "strategy": "long_buy_left",
+            "sector": "化学制品"
+          },
+          {
+            "code": "sh600435",
+            "name": "北方导航",
+            "type": "弹簧二次测试",
+            "conf": 93,
+            "last": 11.59,
+            "strategy": "long_buy_left",
+            "sector": "地面兵装Ⅱ"
+          },
+          {
+            "code": "sz002939",
+            "name": "长城证券",
+            "type": "弹簧二次测试",
+            "conf": 93,
+            "last": 8.13,
+            "strategy": "long_buy_left",
+            "sector": "证券Ⅱ"
+          },
+          {
+            "code": "sz000550",
+            "name": "江铃汽车",
+            "type": "弹簧二次测试",
+            "conf": 92,
+            "last": 17.19,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sz002261",
+            "name": "拓维信息",
+            "type": "弹簧二次测试",
+            "conf": 92,
+            "last": 25.48,
+            "strategy": "long_buy_left",
+            "sector": "软件开发"
+          },
+          {
+            "code": "sh601311",
+            "name": "骆驼股份",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 7.66,
+            "strategy": "long_buy_left",
+            "sector": "电池"
+          },
+          {
+            "code": "sz002039",
+            "name": "黔源电力",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 19.4,
+            "strategy": "long_buy_left",
+            "sector": "电力"
+          },
+          {
+            "code": "sh603300",
+            "name": "海南华铁",
+            "type": "弹簧二次测试",
+            "conf": 90,
+            "last": 4.9,
+            "strategy": "long_buy_left",
+            "sector": "多元金融"
+          },
+          {
+            "code": "sz002937",
+            "name": "兴瑞科技",
+            "type": "SC后二次测试(ST)",
+            "conf": 89,
+            "last": 28.04,
+            "strategy": "long_buy_left",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sh600178",
+            "name": "东安动力",
+            "type": "弹簧二次测试",
+            "conf": 88,
+            "last": 10.1,
+            "strategy": "long_buy_left",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sz000778",
+            "name": "新兴铸管",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 87,
+            "last": 3.71,
+            "strategy": "long_buy_left",
+            "sector": "普钢"
+          },
+          {
+            "code": "sz000951",
+            "name": "中国重汽",
+            "type": "弹簧二次测试",
+            "conf": 86,
+            "last": 21.96,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sz002478",
+            "name": "常宝股份",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 86,
+            "last": 7.01,
+            "strategy": "long_buy_left",
+            "sector": "特钢Ⅱ"
+          }
+        ]
+      }
+    },
+    {
+      "ts": "2026-09-07 14:23:17",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sz000685",
+        "name": "中山公用",
+        "reason": "单笔风险 4.5% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-07 14:23:17",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sh601218",
+        "name": "吉鑫科技",
+        "reason": "单笔风险 2.5% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-07 14:23:17",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sz000686",
+        "name": "东北证券",
+        "reason": "单笔风险 2.4% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-07 14:23:18",
+      "type": "buy",
+      "detail": {
+        "symbol": "sz002939",
+        "name": "长城证券",
+        "qty": 40900,
+        "price": 8.138,
+        "amount": 332844.2,
+        "conf": 93,
+        "strategy": "long_buy_left",
+        "event_type": "",
+        "sector": "证券Ⅱ",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-07 14:23:18",
+      "type": "account",
+      "detail": {
+        "equity": 998341.42,
+        "cash": 665824.42,
+        "positions_count": 1,
+        "closed_count": 0
+      }
+    },
+    {
+      "ts": "2026-09-07 14:51:20",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "测试",
+        "qty": 1000,
+        "price": 10.0,
+        "amount": 10000.0,
+        "conf": 90,
+        "strategy": "paper_discipline_bull",
+        "event_type": "",
+        "sector": "",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-07 14:51:59",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "测试",
+        "qty": 1000,
+        "price": 10.0,
+        "amount": 10000.0,
+        "conf": 90,
+        "strategy": "paper_discipline_bull",
+        "event_type": "",
+        "sector": "",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-07 14:51:59",
+      "type": "sell",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "测试",
+        "qty": 1000,
+        "buy_price": 10.0,
+        "sell_price": 9.282,
+        "pnl": -718.0,
+        "ret": -0.0792,
+        "ret_pct": "-7.92%",
+        "reason": "条件单:stop_loss",
+        "bars_held": 2,
+        "strategy": "paper_discipline_bull",
+        "event_type": null
+      }
+    },
+    {
+      "ts": "2026-09-07 14:51:59",
+      "type": "condition",
+      "detail": {
+        "symbol": "sh600001",
+        "name": "测试",
+        "kind": "stop_loss",
+        "trigger_price": null,
+        "current_price": 9.291,
+        "action": "卖出",
+        "reason": "条件单:stop_loss"
+      }
+    },
+    {
+      "ts": "2026-09-07 15:51:39",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sz000685",
+        "name": "中山公用",
+        "reason": "单笔风险 4.4% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-07 15:51:39",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sh601218",
+        "name": "吉鑫科技",
+        "reason": "单笔风险 2.5% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-07 15:51:39",
+      "type": "risk_block",
+      "detail": {
+        "symbol": "sz000686",
+        "name": "东北证券",
+        "reason": "单笔风险 2.4% 超过限制 2.0%",
+        "risk_type": "risk_budget"
+      }
+    },
+    {
+      "ts": "2026-09-07 15:51:39",
+      "type": "buy",
+      "detail": {
+        "symbol": "sz002939",
+        "name": "长城证券",
+        "qty": 40900,
+        "price": 8.138,
+        "amount": 332844.2,
+        "conf": 93,
+        "strategy": "long_buy_left",
+        "event_type": "",
+        "sector": "证券Ⅱ",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-07 15:51:39",
+      "type": "account",
+      "detail": {
+        "equity": 997546.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 16:22:24",
+      "type": "account",
+      "detail": {
+        "equity": 997546.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 16:50:59",
+      "type": "account",
+      "detail": {
+        "equity": 997546.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 17:20:47",
+      "type": "account",
+      "detail": {
+        "equity": 997546.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 17:50:41",
+      "type": "account",
+      "detail": {
+        "equity": 997546.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 20:40:52",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 21:11:30",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 21:40:24",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 22:09:17",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 22:39:01",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 23:09:19",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
+    },
+    {
+      "ts": "2026-09-07 23:39:04",
+      "type": "account",
+      "detail": {
+        "equity": 995092.3,
+        "cash": 665029.3,
+        "positions_count": 1,
+        "closed_count": 1
+      }
     }
   ],
   "summary": {
-    "scan_count": 1,
-    "buy_count": 1,
-    "sell_count": 0,
-    "condition_count": 1,
-    "risk_block_count": 0,
+    "scan_count": 2,
+    "buy_count": 5,
+    "sell_count": 1,
+    "condition_count": 2,
+    "risk_block_count": 6,
     "rebalance_count": 0
   }
 }

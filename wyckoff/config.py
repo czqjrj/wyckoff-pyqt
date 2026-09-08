@@ -419,6 +419,10 @@ DEFAULT_SETTINGS = {
     # 默认开启账户私有数据自动同步 (登录后按固定间隔双向同步云端);
     # 未登录/未配置时自动跳过, 不产生网络请求。
     "profile_sync": True,
+    # ── 硬件感知设置 (仅作参考, 可在设置面板中人工覆盖) ──
+    "hw_cpu_count": "auto",
+    "hw_parallel_max": "auto",
+    "hw_phase_cache_days": "auto",
 }
 
 # ── 通用阈值 ──

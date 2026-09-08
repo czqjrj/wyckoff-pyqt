@@ -177,25 +177,33 @@ def test_speak_starts_and_can_stop():
 
 def test_play_mp3_stop_terminates_player(tmp_path, monkeypatch):
     """回归: 停止事件置位后必须立即终止播放器进程 (原阻塞 subprocess.run 会让
-    ffplay 把整段长解读放完, 表现'一直响'/新旧播报叠播)。"""
+    ffplay 把整段长解读放完, 表现'一直响'/新旧播报叠播)。
+
+    Windows 上 CreateProcess 只按名追加 .exe, PATH 里的脚本文件无法遮蔽真实的
+    ffplay.EXE, 因此不依赖 PATH 注入假播放器: 改为标注 _play_mp3 内部实际创建
+    的子进程为一条真实长期运行的 python 子进程, 仍然走到真实的轮询/终止逻辑。
+    """
     import threading
     import time as _time
 
+    import wyckoff.tts as tts_mod
     from wyckoff.tts import _play_mp3
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_player = bin_dir / "ffplay"
-    fake_player.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys, time\n"
-        "time.sleep(600)\n"
-        "print('should not reach', file=sys.stderr)\n")
-    fake_player.chmod(0o755)
+    monkeypatch.setattr(tts_mod, "_probe", lambda player: True)
+    spawned = {}
+    real_popen = tts_mod.subprocess.Popen
+
+    def _fake_popen(cmd, **kw):
+        args = [sys.executable, "-c", "import time; time.sleep(600)"] \
+            if cmd and cmd[0] in tts_mod._MP3_PLAYERS else cmd
+        p = real_popen(args, **kw)
+        spawned["p"] = p
+        return p
+
+    monkeypatch.setattr(tts_mod.subprocess, "Popen", _fake_popen)
+
     mp3 = tmp_path / "t.mp3"
     mp3.write_bytes(b"\x00" * 32)
-
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
 
     stop_ev = threading.Event()
     timer = threading.Timer(0.4, stop_ev.set)
@@ -206,6 +214,7 @@ def test_play_mp3_stop_terminates_player(tmp_path, monkeypatch):
     elapsed = _time.time() - t0
     assert result is False
     assert elapsed < 5.0, f"停止后播放器未及时终止, 耗时 {elapsed:.1f}s"
+    assert spawned["p"].poll() is not None  # 子进程确实被终止
 
 
 def test_chunk_speech_text_splits_long_text():

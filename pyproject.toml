@@ -15,6 +15,8 @@ dependencies = [
     "pyqtgraph>=0.13",
     "PyQt6>=6.6",
     "requests>=2.31",
+    # 行情数据容灾兜底源 (三个 HTTP 源全挂时用 akshare 兜底; 惰性导入)
+    "akshare>=1.14",
     "pypinyin>=0.50",
     "openai>=1.30",
     "msgpack>=1.0",

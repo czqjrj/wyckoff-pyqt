@@ -4,6 +4,7 @@
 """
 import json
 import os
+import platform
 import tempfile
 import threading
 import time
@@ -16,9 +17,31 @@ from .config import W_RECENT
 # ── 共享 HTTP Session ──
 # 全项目所有行情/基本面请求复用一条连接池: 每请求省去完整 TCP+TLS 握手
 # (实测 0.13s → 0.05s), 全市场扫描数千请求累计节省数分钟。
-# urllib3 连接池线程安全, 可多线程共享; connect/read 失败自动重试 1 次。
+# urllib3 连接池线程安全, 可多线程共享; connect/read 失败自动重试 1 欦.
 _SESSION = None
 _SESSION_LOCK = threading.Lock()
+
+# ── 系统信息探测 ──
+# 仅用 os.cpu_count(): 曾直接调用 kernel32.GetNativeSystemInfo 但不传 SYSTEM_INFO
+# 指针 (未定义行为) → 多数机器返回垃圾值 1 或访问违例, 把并行扫描压成单线程。
+# os.cpu_count() 语义与 dwNumberOfProcessors 一致 (逻辑核数), 更可靠。
+try:
+    _CPU_COUNT = max(1, int(os.cpu_count() or 4))
+except Exception:
+    _CPU_COUNT = 4
+
+# 架构探测 (x86_64 / aarch64 / mips64 / loongarch64)
+_ARCH = platform.machine() or "unknown"  # e.g. 'AMD64', 'ARM64', 'mips64el', 'loongarch64'
+_IS_X86 = _ARCH in ("AMD64", "x86_64")
+_IS_LOONGARCH = _ARCH in ("loongarch64", "mips64el", "mips64")
+
+# ── 硬件感知配置 (仅作参考, 可在设置面板中覆盖) ──
+# 自动检测的CPU核心数 (Windows k32)
+_HW_CPU_COUNT = _CPU_COUNT
+# 自动检测的并行工作线程上限 (受硬件限制, 可在设置中人工覆盖)
+_PARALLEL_WORKERS_MAX = min(_CPU_COUNT, 12) if _CPU_COUNT else 8
+# 16GB+内存下的阶段缓存保留天数 (天)
+_HW_PHASE_CACHE_DAYS = 3 if _CPU_COUNT and _CPU_COUNT >= 8 else 2
 
 
 def http_session():
@@ -91,8 +114,8 @@ def parallel_map(codes, fn, workers=8, stop_fn=None, progress=None, on_result=No
     参数:
       codes        可迭代的条目 (str 代码)
       fn(code)     单条处理函数; 正常返回任意结果 (会在结果里收集),
-                   返回 None 或抛异常则跳过该条
-      workers      并发数 (自动 clamp 到 [1, 12]; 0/负/None 视为串行)
+                    返回 None 或抛异常则跳过该条
+      workers      并发数 (自动 clamp 到 [_PARALLEL_WORKERS_MAX]; 0/负/None 视为串行)
       stop_fn()    可选; 调用返回 True 时尽早停止派发/收集
       progress(done, total, code)  可选进度回调
       on_result(r, code) 可选; 每条 fn 返回非 None 结果时的增量回调
@@ -103,7 +126,7 @@ def parallel_map(codes, fn, workers=8, stop_fn=None, progress=None, on_result=No
     total = len(items)
     if total == 0:
         return []
-    nw = max(1, min(int(workers or 1), 12)) if workers else 1
+    nw = max(1, min(int(workers or _PARALLEL_WORKERS_MAX), _PARALLEL_WORKERS_MAX)) if workers else 1
     out = []
     lock = threading.Lock()
     done = [0]

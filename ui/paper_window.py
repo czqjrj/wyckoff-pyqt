@@ -108,9 +108,9 @@ def _cond_kind_cn(kind, trigger=None):
 
 # ── 列定义 ────────────────────────────────────────────────
 _CN_POS = ("symbol", "name", "strategy", "type", "conf", "qty", "buy_px",
-           "last", "last_ret", "entry_bars")
+           "last", "last_ret", "unrealized", "entry_bars")
 _CN_POS_HEAD = ("代码", "名称", "策略", "事件", "置信", "数量", "成本", "现价",
-                "浮盈亏", "已持K")
+                "浮盈亏", "浮盈额", "已持K")
 _CN_CLOSED = ("symbol", "name", "strategy", "type", "reason", "buy_px",
               "sell_px", "ret", "bars", "close_ts")
 _CN_CLOSED_HEAD = ("代码", "名称", "策略", "事件", "平仓原因", "买入价",
@@ -1066,7 +1066,8 @@ class PaperWindow(QDialog):
             self, "重置模拟盘", "清空账户全部持仓/历史/统计并回到初始资金？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if ok == QMessageBox.StandardButton.Yes:
-            from wyckoff.paper import _new_state, save_state
+            from wyckoff.paper import _new_state, _reset_logs, save_state
+            _reset_logs()
             save_state(_new_state())
             self.refresh()
 
@@ -1125,6 +1126,13 @@ class PaperWindow(QDialog):
             return
         last = pos.get("last", pos["buy_px"])
         ret = (last / pos["buy_px"] - 1) * 100
+        from datetime import date
+        entry_day = pos.get("entry_day") or ""
+        if entry_day == date.today().isoformat():
+            QMessageBox.warning(
+                self, "手动平仓",
+                f"{symbol} 今日买入, A股 T+1 当日不可卖出 (次一交易日方可平仓)")
+            return
         ok = QMessageBox.question(
             self, "手动平仓",
             f"按现价 {last:.3f} 平仓 {symbol} {pos.get('name','')} "
@@ -1342,15 +1350,21 @@ class PaperWindow(QDialog):
         self._maybe_eval_signals()
 
         # 持仓
+        from wyckoff.paper import float_ret, net_cost_rate
         rows = []
         for p in st["positions"]:
+            buy_px = float(p["buy_px"])
+            last = float(p.get("last", buy_px))
+            net_ret = float(p.get("last_ret", float_ret(buy_px, last)))
+            pnl_amt = net_ret * buy_px * net_cost_rate() * int(p["qty"])
             rows.append({
                 "symbol": p["symbol"], "name": p.get("name", ""),
                 "strategy": _strat_cn(p.get("strategy", "")),
                 "type": p.get("type", ""), "conf": float(p.get("conf", 50)),
-                "qty": f"{p['qty']:,}", "buy_px": float(p["buy_px"]),
-                "last": float(p.get("last", p["buy_px"])),
+                "qty": f"{p['qty']:,}", "buy_px": buy_px,
+                "last": last,
                 "last_ret": float(p.get("last_ret", 0) * 100),
+                "unrealized": round(pnl_amt, 2),
                 "entry_bars": p.get("entry_bars", 0),
             })
         _fill_paper(self.t_pos, _CN_POS, dict(zip(_CN_POS, _CN_POS_HEAD)),

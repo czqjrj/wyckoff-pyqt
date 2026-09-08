@@ -25,9 +25,10 @@ from .utils import normalize_symbol
 
 _KLINE_CACHE = OrderedDict()   # {(symbol, scale): (ts, full_df)} — LRU, 存全量按需截断
 _KLINE_CACHE_TTL = 300  # 5分钟
-# 全市场扫描几百只股票, 64 条 FIFO 会把刚写入的缓存立刻挤出 (二级扫描全量回源
-# SQLite); 提到 512 并改 LRU, 每条约 24KB, 总占用 ~12MB 可接受。
-_KLINE_CACHE_MAX = 512
+# 全市场扫描 (沪深主板约 3100 只) + 配平/候选重探都会复用这些帧; 512 条在整池
+# 冷扫描后立刻被挤出, 二级重探全量回源 SQLite。提到 2048 (每条约 24KB ≈ 48MB,
+# 16G 内存可接受), 显著提高扫描-再探命中率。
+_KLINE_CACHE_MAX = 2048
 _KLINE_LOCK = Lock()
 
 # SQLite 持久缓存 TTL: 内存未命中时回退到落盘的行情数据, 跨会话复用。
@@ -231,12 +232,16 @@ def _fetch_kline_tencent(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
 
 
 # ── 阿克share (备源3) ──
-_AK_PERIOD = {240: 101, 120: 101, 60: 60, 30: 30, 15: 15}
+# 仅声明真实支持的周期: 日线 / 60 / 30 / 15 分钟 (2小时无对应 akshare 接口)。
+_AK_PERIOD = {240: "daily", 60: "60min", 30: "30min", 15: "15min"}
 
 
 def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     """使用 akshare 获取 K 线数据, 作为第三级容灾源。
-    akshare 多数据口径已前复权, 与新浪/东财/腾讯口径一致 (经 _apply_sina_qfq 兜底)。
+
+    日线主用新浪口径 stock_zh_a_daily (前复权, 与主源新浪同源同口径, 东财接口
+    被限/变动时仍可用), 失败回退东财口径 stock_zh_a_hist; 分钟级仅 hist 支持。
+    指数代码 (sh000*/sz399*) stock_zh_a_daily 不适用, 直接走 hist。
     """
     period = _AK_PERIOD.get(scale)
     if period is None:
@@ -245,42 +250,45 @@ def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
         import akshare as ak
     except ImportError:
         raise RuntimeError("未安装 akshare, 请 pip install akshare")
-    # akshare 不同周期对应不同参数
-    if scale == 240:  # 日线
-        df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date="", end_date="", adjust="")
-    elif scale == 60:  # 小时线
-        df = ak.stock_zh_a_hist(symbol=symbol, period="60min", start_date="", end_date="", adjust="")
-    elif scale == 30:  # 30分钟
-        df = ak.stock_zh_a_hist(symbol=symbol, period="30min", start_date="", end_date="", adjust="")
-    elif scale == 120:  # 2小时
-        df = ak.stock_zh_a_hist(symbol=symbol, period="2daily", start_date="", end_date="", adjust="")
-    else:
-        df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date="", end_date="", adjust="")
-    # akshare 返回可能含未复权数据, 需要确保口径一致
-    # 这里尝试复权: 如果有 'close' 且幅度合理, 视为已前复权
-    if df is not None and len(df) > 0:
-        # 确保列名统一
-        col_map = {"日期": "day", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume"}
-        for k, v in col_map.items():
-            if k in df.columns and v not in df.columns:
-                df[v] = df[k]
-        # 只保留需要的列
-        keep = [c for c in ["day", "open", "high", "low", "close", "volume"] if c in df.columns]
-        df = df[keep]
-        # 转换日期格式
-        if "day" in df.columns:
-            df["day"] = pd.to_datetime(df["day"])
-        # 确保数值类型
-        for col in ["open", "high", "low", "close", "volume"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        # 降序→正序
-        df = df.sort_values("day").reset_index(drop=True)
-        # 截取 datalen 根
-        if len(df) > datalen:
-            df = df.tail(datalen).copy()
-        return df
-    raise RuntimeError(f"阿克share未返回 {symbol} 数据")
+    code = symbol[-6:]   # stock_zh_a_hist 只认 6 位代码; stock_zh_a_daily 需带 sh/sz 前缀
+    is_index = symbol.startswith(("sh000", "sz399"))
+    df = None
+    if period == "daily" and not is_index:
+        try:
+            # 新浪口径, 前复权; 必须给显式日期范围 (空串会触发 DatetimeIndex 切片异常)
+            df = ak.stock_zh_a_daily(symbol=symbol, start_date="19900101",
+                                     end_date="21000101", adjust="qfq")
+        except Exception:
+            df = None
+    if df is None or df.empty:
+        df = ak.stock_zh_a_hist(symbol=code, period=period,
+                                start_date="19900101", end_date="21000101",
+                                adjust="qfq")
+    if df is None or df.empty:
+        raise RuntimeError(f"阿克share未返回 {symbol} 数据")
+    # 口径统一: akshare 两接口分别返回中文列 (日期/开盘/...) 或英文列 (date/open/...)
+    col_map = {"日期": "day", "开盘": "open", "收盘": "close", "最高": "high",
+               "最低": "low", "成交量": "volume", "date": "day"}
+    for k, v in col_map.items():
+        if k in df.columns and v not in df.columns:
+            df[v] = df[k]
+    # 只保留需要的列
+    keep = [c for c in ["day", "open", "high", "low", "close", "volume"] if c in df.columns]
+    df = df[keep]
+    # 转换日期格式
+    if "day" in df.columns:
+        df["day"] = pd.to_datetime(df["day"])
+    # 确保数值类型
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["close"])
+    # 降序→正序
+    df = df.sort_values("day").reset_index(drop=True)
+    # 截取 datalen 根
+    if len(df) > datalen:
+        df = df.tail(datalen).copy()
+    return df
 
 
 def _kline_cache_get(symbol, scale, datalen):

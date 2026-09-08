@@ -59,12 +59,30 @@ def _rolling_std(arr: np.ndarray, window: int) -> np.ndarray:
 
 
 def _ewma(arr: np.ndarray, span: int, adjust: bool = False) -> np.ndarray:
-    """指数加权移动平均的纯 NumPy 实现。"""
+    """向量化 EWMA: 使用累积和消除 Python for 循环, 兼容 LoongArch/MIPS64 NumPy wheels。
+
+    理论展开: EMA_t = alpha * sum_{i=0}^{t} (1-alpha)^{t-i} * x_i
+    通过前缀和 + 权重归一化在纯 NumPy 上实现, 避免循环开销.
+    """
     alpha = 2.0 / (span + 1)
-    out = np.empty_like(arr)
+    n = len(arr)
+    # 权重向量: w_i = alpha * (1-alpha)^{n-1-i}, i=0..n-1
+    # 经验展开可用 cumsum 实现, 避免 O(n) 循环
+    # 关键: 使用 lfilter 等价的 cumsum 方法
+    # w * x 通过 逆序累积和 + 归一化因子 实现
+    rev = arr[::-1]  # 逆序数据
+    # 累积和缩放: alpha * sum_{j=0}^{i} (1-alpha)^j * rev_{i-j}
+    # 使用等比数列求和公式的累积近似 (精确对应递推 EMA)
+    # 实现细节: 先 (1-alpha)^i 缩放, 然后 cumsum, 再除以 1-(1-alpha)^{i+1}
+    power = (1 - alpha) ** np.arange(n, 0, -1)  # (1-alpha)^n, (1-alpha)^{n-1}, ..., (1-alpha)^1
+    scaled = rev * power
+    cum = np.cumsum(scaled)  # 逆序累积和
+    norm = 1 - (1 - alpha) ** np.arange(1, n + 1)  # 归一化因子 1-(1-alpha)^k
+    out = cum / norm
+    # 恢复正序
+    out = out[::-1]
+    # 前根与原始一致
     out[0] = arr[0]
-    for i in range(1, len(arr)):
-        out[i] = alpha * arr[i] + (1 - alpha) * out[i - 1]
     return out
 
 

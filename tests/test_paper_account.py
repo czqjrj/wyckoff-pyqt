@@ -376,6 +376,80 @@ def test_step_no_close_when_flat():
     assert st["closed"] == []
 
 
+# ───────────────────────── A股 T+1 禁售 ─────────────────────────
+def test_t1_blocks_same_day_close_via_step(monkeypatch):
+    """当日买入 (entry_day == 当日) 的持仓, step 中即使触发止损也不平仓。"""
+    st = _state_with_position(entry=10.0, bars=1)
+    df = _mk([9.2, 9.0])  # 触发止损 (-8%)
+    st["positions"][0]["entry_day"] = str(df["day"].iloc[-1])  # 同日
+    paper.step(st, {"sh600001": df})
+    assert st["positions"]  # 仍未平仓 (T+1 禁售)
+    assert st["closed"] == []
+
+
+def test_t1_allows_next_day_close_via_step():
+    """次一交易日 (entry_day != 当日) 正常平仓。"""
+    st = _state_with_position(entry=10.0, bars=1)
+    df = _mk([9.2, 9.0])
+    st["positions"][0]["entry_day"] = "2023-01-01"  # 更早买入日
+    paper.step(st, {"sh600001": df})
+    assert st["positions"] == []
+    assert st["closed"][0]["reason"] == "止损"
+
+
+def test_t1_blocks_condition_sell_same_day():
+    """当日买入的持仓, 条件单 (止盈/止损) 当日也不得触发平仓。"""
+    st = _state_with_position(entry=10.0, bars=1)
+    df = _mk([11.0, 12.0])  # +20% 触发止盈
+    st["positions"][0]["entry_day"] = str(df["day"].iloc[-1])  # 同日
+    paper._create_position_conditions(st, "sh600001", name="测试", buy_px=10.0)
+    paper._check_conditions(st, {"sh600001": df})
+    assert st["positions"]  # 止盈条件单被 T+1 拦截
+    assert st["closed"] == []
+
+
+def test_t1_allows_condition_sell_next_day(monkeypatch):
+    """次一交易日, 条件单止盈/止损正常触发。"""
+    monkeypatch.setattr(paper, "_CUR", {**paper._CUR, "trailing_stop": False})
+    st = _state_with_position(entry=10.0, bars=1)
+    df = _mk([11.0, 12.0])
+    st["positions"][0]["entry_day"] = "2023-01-01"  # 更早买入日
+    paper._create_position_conditions(st, "sh600001", name="测试", buy_px=10.0)
+    paper._check_conditions(st, {"sh600001": df})
+    assert st["positions"] == []
+    assert "take_profit" in st["closed"][0]["reason"]
+
+
+def test_t1_blocks_manual_force_close():
+    """当日买入的持仓, 手动平仓也被 T+1 拒绝。"""
+    st = _state_with_position(entry=10.0, bars=1)
+    from datetime import date
+    st["positions"][0]["entry_day"] = date.today().isoformat()
+    got = paper.force_close_position(st, "sh600001", "手动平仓")
+    assert got is None
+    assert len(st["positions"]) == 1
+
+
+def test_t1_allows_manual_force_close_older():
+    """非当日买入 (entry_day 为空或更早) 可手动平仓; 历史无 entry_day 不受限。"""
+    st = _state_with_position(entry=10.0, bars=1)
+    got = paper.force_close_position(st, "sh600001", "手动平仓")
+    assert got is not None
+    assert len(st["positions"]) == 0
+
+
+def test_t1_detail_register_helpers():
+    """fill_buy 记录 entry_day; 无 entry_day 的历史持仓 _t1_blocked=False。"""
+    st = paper._new_state()
+    st["cash"] = 1_000_000
+    o = paper._make_order("sh600001", "", "Spring", 95, 10.0, 0, st["cash"])
+    o["day"] = "2026-01-05"
+    paper.fill_buy(st, o)
+    assert st["positions"][0]["entry_day"] == "2026-01-05"
+    # 无 df 时不误判
+    assert paper._t1_blocked(st["positions"][0], None) is False
+
+
 # ───────────────────────── 收益统计 ─────────────────────────
 def _closed(type_, ret, reason):
     return {"symbol": "s", "name": "", "type": type_, "conf": 90,
@@ -409,10 +483,22 @@ def test_stats_empty():
 
 # ───────────────────────── 全周期闭环 ─────────────────────────
 def test_expiry_after_hold_bars_cycles(monkeypatch):
-    """平价横盘下, 经过 HOLD_BARS 个周期后因到期平仓。"""
+    """平价横盘下, 经过 HOLD_BARS 个交易日 (每个周期 K 线窗口后移一日) 后到期平仓。
+
+    持仓期按交易日计数: 同一 K 线日多周期重复推进不再被高估
+    (曾出现 20 周期≈10 小时即到期)。每次周期触发行情拉取时把窗口整体后移一天。
+    """
     import wyckoff.datasource as ds
-    monkeypatch.setattr(ds, "fetch_kline",
-                        lambda *a, **k: _mk([10.0] * 60))
+    ctr = {"dx": 0}
+
+    def fake_fetch(code, datalen=None, scale=None):
+        ctr["dx"] += 1
+        base = pd.date_range("2023-12-25", periods=80, freq="B")
+        df = _mk([10.0] * 60)
+        df["day"] = base[ctr["dx"] - 1: ctr["dx"] - 1 + 60].values
+        return df
+
+    monkeypatch.setattr(ds, "fetch_kline", fake_fetch)
     monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
     monkeypatch.setattr(paper, "pick_candidates",
                         lambda **k: [_candidate(type_="Spring", conf=95)],
@@ -1062,3 +1148,147 @@ def test_va_weight_scales_budget():
     assert disc["qty"] > va["qty"]
     ratio = va["qty"] / disc["qty"]
     assert 0.5 < ratio < 0.72   # 预算 ×0.6 (允许整手取整偏差)
+
+
+# ───────────────── 不合理的点修复回归 (2026-09-08) ─────────────────
+def test_entry_bars_counts_trading_days_not_cycles():
+    """持仓 K 数按交易日计数: 同一 K 线日重复周期推进不再 +1。"""
+    st = _state_with_position(entry=10.0, bars=1)
+    df = _mk([10.0, 10.05, 10.02])  # 平价横盘不触发卖出
+    paper.step(st, {"sh600001": df})
+    assert st["positions"][0]["entry_bars"] == 2
+    paper.step(st, {"sh600001": df})  # 同一天第二个周期: 不推进
+    assert st["positions"][0]["entry_bars"] == 2
+
+
+def test_cond_cid_unique_in_loop():
+    """条件单 cid 在同一轮回内也保持唯一 (此前 trailing/stop_loss 微秒撞车)。"""
+    a = paper._cond("trailing", "sh600001", pct=0.08)
+    b = paper._cond("stop_loss", "sh600001", pct=0.04)
+    assert a["cid"] != b["cid"]
+    assert len({paper._cond("buy_price", "sh600001", price=10.0)["cid"]
+                for _ in range(50)}) == 50
+
+
+def test_condition_buy_respects_drawdown_gate():
+    """条件单买入接入风控门禁: 账户回撤超限时, 触发的不下单且条件单取消。"""
+    st = paper._new_state()
+    st["cash"] = paper.INIT_CASH
+    st["equity_hist"] = [
+        {"ts": "2026-01-02", "cash": 1_000_000.0, "equity": 1_000_000.0},
+        {"ts": "2026-01-05", "cash": 800_000.0, "equity": 800_000.0},  # -20% 回撤
+    ]
+    paper.add_condition(st, "buy_price", "sh600001", price=10.0,
+                        trigger="below", name="测试", save=False)
+    paper.step(st, {"sh600001": _mk([12.0, 9.5])})  # 现价 9.5 ≤ 10 触发
+    assert st["positions"] == []                     # 风控拦截, 未买入
+    assert st["conditions"][0]["status"] == "cancelled"
+    assert "风控" in st["conditions"][0]["note"]
+
+
+def test_fill_buy_defaults_entry_day_today():
+    """手动买入 (order 缺 day) 默认 entry_day=今日, 当日禁售 T+1 生效。"""
+    from datetime import date
+    st = paper._new_state()
+    st["cash"] = 1_000_000
+    o = paper._make_order("sh600001", "", "Spring", 95, 10.0, 0, st["cash"])
+    paper.fill_buy(st, o)
+    assert st["positions"][0]["entry_day"] == date.today().isoformat()
+    assert paper.force_close_position(st, "sh600001") is None  # 当日手动平仓被拒
+
+
+def test_rebalance_weak_caps_concentration(monkeypatch):
+    """弱市再平衡: 单仓补仓后市值不超过 总权益×max_single_conc (防过度集中)。"""
+    monkeypatch.setattr(paper, "_CUR", {
+        **paper._CUR, "weak_max_pos": 1, "max_pos": 3, "rebalance": True,
+        "max_single_conc": 0.25,
+    })
+    st = paper._new_state()
+    st["cash"] = 300_000.0
+    st["weak"] = True
+    st["positions"] = [{
+        "symbol": "sh600001", "name": "A", "type": "Spring", "conf": 95,
+        "qty": 2000, "buy_px": 10.0, "last": 10.0, "cost": 80.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 3, "staged": False,
+        "strategy": "paper_discipline_bull",
+    }]
+    paper._rebalance_portfolio(st, {"sh600001": _mk([10.0, 11.0])})
+    p = st["positions"][0]
+    assert p["qty"] > 2000  # 弱市满仓也触发补仓 (机制改进)
+    mv = p["qty"] * p["last"]
+    equity = st["cash"] + mv
+    assert mv / equity <= 0.25001  # 不超过集中度上限
+    # 本次加仓份额 T+1: 合并持仓 entry_day 顺延为本次交易日
+    assert str(p.get("entry_day", ""))[:10] == "2024-01-03"
+
+
+def test_signal_stats_text_none_safe():
+    """signal_stats_text 在无回撤数据时不崩溃, 且不再把三元表达式字符串化。"""
+    st = paper._new_state()
+    txt = paper.signal_stats_text(st)
+    assert "最大回撤: -" in txt
+    assert "if s['max_drawdown']" not in txt
+
+
+def test_equity_hist_normalizes_mixed_ts():
+    """load_state 把混用 "YYYY-MM-DD" 与 datetime 串的净值历史归一化并按日合并。"""
+    st = paper._new_state()
+    st["equity_hist"] = [
+        {"ts": "2026-09-07", "cash": 1.0, "equity": 1.0},
+        {"ts": "2026-09-07 00:00:00", "cash": 2.0, "equity": 2.0},
+        {"ts": "2026-09-08", "cash": 3.0, "equity": 3.0},
+    ]
+    paper.save_state(st)
+    got = paper.load_state()
+    ts = [h["ts"] for h in got["equity_hist"]]
+    assert ts == ["2026-09-07", "2026-09-08"]
+    assert len(got["equity_hist"]) == 2
+    assert got["equity_hist"][0]["equity"] == 2.0  # 同日期保留当天最后一条
+
+
+def test_apply_auto_conditions_skips_held_codes():
+    """已持标的不再生成/遗留 active 入场条件单; 未持标的不受影响。"""
+    st = paper._new_state()
+    st["positions"].append({
+        "symbol": "sh600001", "name": "A", "type": "Spring", "conf": 95,
+        "qty": 1000, "buy_px": 10.0, "last": 10.0, "cost": 40.0,
+        "entry_ts": "2024-01-02 10:00:00", "entry_bars": 2, "staged": False,
+        "strategy": "paper_discipline_bull",
+    })
+    paper.add_condition(st, "buy_price", "sh600001", price=10.0, save=False)
+    cand = [
+        {"code": "sh600001", "name": "A", "strategy": "paper_discipline_bull",
+         "type": "Spring", "conf": 95, "auto_cond_price": 11.0},
+        {"code": "sh600002", "name": "B", "strategy": "paper_discipline_bull",
+         "type": "Spring", "conf": 96, "auto_cond_price": 11.5},
+    ]
+    n = paper._apply_auto_conditions(st, cand)
+    assert n == 1  # 仅 sh600002 生成
+    active = [c for c in st["conditions"]
+              if c.get("kind") == "buy_price" and c.get("status") == "active"]
+    assert [c["symbol"] for c in active] == ["sh600002"]
+    # 已持标的遗留的 active 入场条件单被取消
+    held_conds = [c for c in st["conditions"]
+                  if c.get("kind") == "buy_price" and c.get("symbol") == "sh600001"]
+    assert held_conds and all(c["status"] == "cancelled" for c in held_conds)
+
+
+def test_run_cycle_reuses_candidates_within_cooldown(monkeypatch):
+    """run_cycle 在冷却窗口内复用候选快照, force_scan=True 才强制重扫。"""
+    import wyckoff.datasource as ds
+    df = _mk([10.0, 10.1, 10.2])
+    monkeypatch.setattr(ds, "fetch_kline", lambda *a, **k: df.copy())
+    monkeypatch.setattr("wyckoff.indicators.add_indicators", lambda df, **k: df)
+    picked = {"n": 0}
+
+    def fake_pick(**k):
+        picked["n"] += 1
+        return [_candidate(type_="Spring", conf=95)]
+
+    monkeypatch.setattr(paper, "pick_candidates", fake_pick, raising=True)
+    paper.run_cycle()
+    assert picked["n"] == 1
+    paper.run_cycle()
+    assert picked["n"] == 1               # 冷却窗口内复用, 不重扫
+    paper.run_cycle(force_scan=True)
+    assert picked["n"] == 2               # force_scan 强制重扫

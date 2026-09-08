@@ -290,19 +290,40 @@ def log_rebalance(symbol, name, qty, price, old_qty, new_qty):
 def log_account_snapshot(equity_value, cash, positions_count, closed_count):
     """记录账户快照 (每天一次)。
 
+    连续写入且净值/现金/持仓/平仓数均未变化的重复快照自动去重: 无头引擎每周期
+    run_cycle 都调用一次, 高频周期下会在日志留下大量逐条噪音, 仅在有实质变化时落盘。
+
     Args:
         equity_value: 总资产
         cash: 现金
         positions_count: 持仓数量
         closed_count: 已平仓数量
     """
+    if not _ENABLED:
+        return
     detail = {
         "equity": round(equity_value, 2),
         "cash": round(cash, 2),
         "positions_count": positions_count,
         "closed_count": closed_count,
     }
-    _add_event("account", detail)
+    try:
+        with _LOCK:
+            today = _today_str()
+            data = _load_day(today)
+            events = data.get("events", [])
+            for ev in reversed(events):
+                if ev.get("type") != "account":
+                    continue
+                if ev.get("detail") == detail:
+                    # 与最近一条账户快照内容相同 → 跳过 (仅当日内连续重复去重)
+                    return
+                break
+            events.append({"ts": _now_str(), "type": "account", "detail": detail})
+            _update_summary(data)
+            _save_day(data, today)
+    except Exception:
+        pass
 
 
 # ── 日志查询接口 ─────────────────────────────────────────
@@ -428,6 +449,19 @@ def format_daily_report(date_str=None):
             )
 
     return "\n".join(lines)
+
+
+def clear_today():
+    """清空当日日志 (账户重置时同步清理, 防止概览残留旧快照)。"""
+    try:
+        with _LOCK:
+            today = _today_str()
+            data = _load_day(today)
+            data["events"] = []
+            data["summary"] = {}
+            _save_day(data, today)
+    except Exception:
+        pass
 
 
 def cleanup_old_logs(keep_days=_MAX_LOG_DAYS):

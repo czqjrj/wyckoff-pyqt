@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import statistics
@@ -40,6 +41,14 @@ from .paths import PAPER_FILE
 from .settings_keys import S
 
 _LOCK = threading.RLock()
+
+# 条件单 cid 递增序号: 时间戳微秒在同一轮回/并发下会重复 (曾出现 trailing 与
+# stop_loss 紧邻创建同 cid 的撞车), 追加序号保证全进程内唯一。
+_CID_SEQ = itertools.count(1)
+
+# 全市场重扫的冷却窗口 (分钟): run_cycle 在多周期场景下复用候选, 避免每 30 分钟
+# 前一次全市场扫描的候选被下一次周期无条件重扫覆盖 (与 run_scan 的 next_scan_time 一致)。
+_SCAN_COOLDOWN_MIN = 30
 
 # 策略管理器单例占位 (延迟实例化, 见 _strategy_manager)
 _SMGR = None
@@ -370,6 +379,21 @@ def load_state():
             st.setdefault("pending", [])     # 等待下一根开盘买入的委托
             st.setdefault("conditions", [])  # 条件单: 价格触发/止盈止损/追踪止损
             st.setdefault("meta", {})
+            # equity_hist 日期归一化 (兼容旧数据混用 "YYYY-MM-DD" 与 datetime 串),
+            # 同日期只保留当天最后一条, 保证净值曲线/回撤按交易日对齐。
+            _hist = st.get("equity_hist") or []
+            if _hist:
+                _pool = []
+                _idx = {}
+                for h in _hist:
+                    d = str(h.get("ts", ""))[:10]
+                    h["ts"] = d
+                    if d in _idx:
+                        _pool[_idx[d]] = h
+                    else:
+                        _idx[d] = len(_pool)
+                        _pool.append(h)
+                st["equity_hist"] = _pool
             return st
     except Exception:
         pass
@@ -389,6 +413,10 @@ def _new_state():
         "advanced_orders": [],  # 高级订单
         "risk_metrics": {},     # 风险指标缓存
         "meta": {},
+        "scan_count": 0,        # 今日扫描次数
+        "last_scan_time": "",   # 上次扫描时间
+        "next_scan_time": "",   # 下次扫描时间
+        "last_scan_result": "", # 最后扫描结果
     }
 
 
@@ -1199,6 +1227,43 @@ def _is_low_quality(code, price=None, name=None) -> bool:
     return False
 
 
+def _probe_workers():
+    """自动选择扫描并行度: 利用机内逻辑核, 上限 12 (网络 I/O 也受连接池/带宽约束)。
+
+    numpy/pandas 指标计算在执行时会释放 GIL, 多线程在 8 核 (兆芯/Intel/AMD)
+    上可真实并行; 网络等待更是天然并发。旧实现死锁在 6 是低估了整机算力。
+    """
+    try:
+        import os
+        n = int(os.cpu_count() or 4)
+    except Exception:
+        n = 4
+    return max(2, min(n, 12))
+
+
+def _mainboard_universe(max_codes=6000):
+    """解析全市场 universe (本地全A名单, 缺失降级东财Top-100) 并收敛到沪深主板。
+
+    与 pick_candidates 的门槛逻辑同口径 (沪 600/601/603/605 + 深 000/001/002/003),
+    供 run_scan 统计"实际扫描代码数"而非全程 6000。
+    """
+    from .utils import normalize_symbol
+    try:
+        from .fundamental import local_universe
+        universe = local_universe(max_codes)
+    except Exception:
+        universe = []
+    if not universe:
+        try:
+            from .fundamental import universe as market_universe
+            universe = market_universe(100)[0] or []
+        except Exception:
+            universe = []
+    universe = [normalize_symbol(c) for c in universe]
+    from .fundamental import is_main_board
+    return [c for c in universe if is_main_board(c)]
+
+
 def pick_candidates(universe=None, max_codes=6000, min_conf=None,
                     cancel_event=None, progress=None, skip_gates=False):
     """扫描 universe 中触发强多头事件的高 conf 标的, 返回候选单 (降序 conf)。
@@ -1223,29 +1288,18 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
         min_conf = _CUR["min_conf"]
     from .datasource import fetch_kline
     from .fundamental import fetch_sector
-    from .fundamental import universe as market_universe
     from .indicators import add_indicators
     from .utils import normalize_symbol
 
     if universe is None:
         # 全A 市场扫描: 本地全A 名单 (去 ST/退市/新股, ~5900 只) 逐股扫描;
         # 名单缺失时降级东财成交额 Top-100 / 本地抽样兜底。
-        try:
-            from .fundamental import local_universe
-            universe = local_universe(6000)
-        except Exception:
-            universe = []
-        if not universe:
-            try:
-                universe = market_universe(100)[0] or []
-            except Exception:
-                universe = []
-    universe = [normalize_symbol(c) for c in universe]
-    # 主板块范围收敛 (沪 600/601/603/605 + 深 000/001/002/003): 无论 universe 来自
-    # 本地全A/东财Top/调用方, 一律过滤到主板, 创业板/科创板/北交所等不参与模拟盘
-    # 三策略并线扫描。
-    from .fundamental import is_main_board
-    universe = [c for c in universe if is_main_board(c)]
+        universe = _mainboard_universe(max_codes)
+    else:
+        # 调用方显式传入: 同样归一化 + 主板收敛 (非主板代码忽略)
+        universe = [normalize_symbol(c) for c in universe]
+        from .fundamental import is_main_board
+        universe = [c for c in universe if is_main_board(c)]
     # 纪律门禁 ①: 大盘20日线向上 (全市场统一, 一次判定; fail-close)。
     # 不再整池短路: 左侧买点属独立赛道, 大盘弱市也可出候选; 纪律/价值吸筹
     # 在 scan_individual 按 market_ok 拦截。
@@ -1279,6 +1333,7 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             cand["code"] = code
             cand["name"] = name
             cand["last"] = round(float(df["close"].iloc[-1]), 2)
+            cand["day"] = str(df["day"].iloc[-1])
             # 低质池过滤 (北交所/ST/低价) — 各策略统一适用, 防垃圾入池
             if _is_low_quality(code, price=cand["last"], name=name):
                 return code, None, None
@@ -1328,7 +1383,7 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     _total = len(_codes)
     try:
         from ._shared import parallel_map
-        for code, cand, flow in parallel_map(_codes, _probe, workers=6,
+        for code, cand, flow in parallel_map(_codes, _probe, workers=_probe_workers(),
                                              progress=progress):
             if cand is not None:
                 out.append(cand)
@@ -1486,7 +1541,7 @@ def _cond(kind, symbol, price=None, pct=None, trigger="above", qty=0,
     """构造一条条件单记录 (status="active")。
     activation: 移动止盈专用 - 浮盈价, 收盘价≥该价才启用回落跟踪 (未激活不触发)。"""
     c = {
-        "cid": f"cond-{int(time.time() * 1_000_000)}",
+        "cid": f"cond-{int(time.time() * 1_000_000)}-{next(_CID_SEQ)}",
         "kind": kind, "symbol": symbol, "name": name,
         "price": round(float(price), 3) if price is not None else None,
         "pct": float(pct) if pct is not None else None,
@@ -1532,13 +1587,20 @@ def _apply_auto_conditions(st, cand, weak=False):
     """
     conds = st.setdefault("conditions", [])
     touched = 0
+    held = {p["symbol"] for p in st.get("positions", [])}
     # 全局预清理: 把历史遗留的重复 active buy_price 条件合流为每代码一条
-    # (曾因多轮扫描反复落盘堆积 42 个同代码重复), 先取消多余的再重建。
+    # (曾因多轮扫描反复落盘堆积 42 个同代码重复), 先取消多余的再重建;
+    # 已持标的的入场条件单一并取消 (持仓期间买入条件单无意义, 且会反复触发→取消)。
     seen = {}
     for c in conds:
         if c.get("kind") != "buy_price" or c.get("status") != "active":
             continue
         code = c["symbol"]
+        if code in held:
+            c["status"] = "cancelled"
+            c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            c["note"] = "已持仓, 取消入场条件单"
+            continue
         if code in seen:
             c["status"] = "cancelled"
             c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1554,6 +1616,10 @@ def _apply_auto_conditions(st, cand, weak=False):
             continue
         code = e["code"]
         if code in handled:
+            continue
+        if code in held:
+            # 已持有: 不再为已持标的生成/刷新入场条件单 (防止条件单永续堆积与
+            # 每次周期"触发→已持有→取消"的噪音; 该标的保护单由持仓防护回填管理)
             continue
         handled.add(code)
         reason = f"自动:{e.get('strategy','')}:{e.get('type')}({e.get('conf',0)})"
@@ -1711,13 +1777,20 @@ def _check_conditions(st, df_by_code):
                 _fire_condition(st, c, last, df, side="buy")
                 triggered += 1
         elif kind == "sell_price":
+            pos = _find_pos(st, sym)
+            if pos is None:
+                continue
+            if _t1_blocked(pos, df):
+                continue
             if _match_trigger(c["trigger"], last, c["price"]):
-                _fire_condition(st, c, last, df, side="sell")
+                _fire_condition(st, c, last, df, side="sell", pos=pos)
                 triggered += 1
         elif kind in ("take_profit", "stop_loss"):
             pos = _find_pos(st, sym)
             if pos is None:
                 continue  # 无持仓的止盈止损无意义, 保留等待
+            if _t1_blocked(pos, df):
+                continue  # A股 T+1: 当日买入禁售
             entry = float(pos["buy_px"])
             ret = last / entry - 1
             if kind == "take_profit" and ret >= c["pct"]:
@@ -1731,6 +1804,8 @@ def _check_conditions(st, df_by_code):
             if pos is None:
                 # 无持仓时追踪止损无法建立峰值, 保留但跳过
                 continue
+            if _t1_blocked(pos, df):
+                continue  # A股 T+1: 当日买入禁售
             if c.get("activation") is not None and not c.get("activated"):
                 # 移动止盈: 浮盈价未达激活价不触发 (峰值回落保护未启用)
                 if last < c["activation"]:
@@ -1754,6 +1829,23 @@ def _find_pos(st, symbol):
         if p["symbol"] == symbol:
             return p
     return None
+
+
+def _t1_blocked(pos, df):
+    """A股 T+1: 当日买入的持仓当日禁止卖出 (次一交易日方可平仓)。
+
+    仅在 fill_buy 携带了 entry_day (= 买入触发日的 K 线交易日) 时生效;
+    历史持仓 (entry_day 为空) 不受限, 兼容旧数据与不传 day 的调用方。
+    返回 True 表示当日禁售。
+    """
+    entry_day = pos.get("entry_day") or ""
+    if not entry_day:
+        return False
+    try:
+        bar_day = str(df["day"].iloc[-1])
+    except Exception:
+        bar_day = ""
+    return bool(bar_day) and bar_day == entry_day
 
 
 def _judge_condition_correct(c, last, entry=None, ret=None, peak=None,
@@ -1806,6 +1898,12 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
     entry_price = None
     condition_ret = None
     condition_peak = None
+    # 从候选快照取该标的的行业/止损位 (供买入风控门禁判定; 非候选标的全为空 → fail-soft)
+    _cond_cand_meta = {}
+    for _e in st.get("candidates", []):
+        if _e.get("code") == c["symbol"]:
+            _cond_cand_meta = _e
+            break
 
     if side == "buy":
         # 统一权益/3 等权口径: 传 st 让 _make_order 按 账户总权益/max_pos 分配,
@@ -1818,6 +1916,16 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
             c["status"] = "cancelled"
             c["note"] = "已持有该标的, 入场条件单取消"
             c["correct"] = None
+        elif _risk_blocks_entry(st, {
+                "code": c["symbol"], "name": c.get("name", ""),
+                "stop_price": _cond_cand_meta.get("stop_price"),
+                "sector": _cond_cand_meta.get("sector", "")}, last):
+            # 买入风控门禁 (与 run_cycle 直接入场路径同口径): 回撤上限/单笔风险/
+            # 行业集中度/单股集中度/资金利用率。此前条件单触发绕过全部门禁,
+            # 只查现金与同持上限, 造成"被风控拦截的标的仍可能通过条件单买入"。
+            c["status"] = "cancelled"
+            c["note"] = "风控门禁拦截, 未成交"
+            c["correct"] = None
         elif order is None or len(st["positions"]) >= (
                 _CUR["weak_max_pos"] if st.get("weak") else _CUR["max_pos"]):
             # 预算不足/同持已满: 条件单转取消, 防止永久悬挂
@@ -1825,6 +1933,7 @@ def _fire_condition(st, c, last, df, side="buy", pos=None):
             c["note"] = "资金/同持上限不足(含弱市限仓), 未成交"
             c["correct"] = None
         else:
+            order["day"] = str(df["day"].iloc[-1]) if df is not None else ""
             res, msg = fill_buy(st, order)
             if res is None:
                 # 现金不足等: 不成交, 取消条件单防止悬挂
@@ -1920,6 +2029,8 @@ def fill_buy(st, order, event_type: str = None):
         "take_pct": take_pct,
         "staged": False,
         "event_type": event_type,
+        "entry_day": order.get("day")
+        or datetime.now().strftime("%Y-%m-%d"),
     })
     st["orders"].append(order)
     _create_position_conditions(st, order["symbol"], name=order.get("name", ""),
@@ -1984,10 +2095,18 @@ def step(st, df_by_code):
             stop_px = entry * (1 - pos_stop)
         # 结构位: 用最近 10 根低点做动态支撑 (近似结构关键位)
         support = float(df["low"].iloc[-10:].min())
-        # 卖出判定 (任一触发); 每周期推进持仓 K 数 (run_cycle 末尾落盘)
-        pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
+        # 卖出判定 (任一触发); 持仓 K 数按"交易日"推进: 仅当行情 K 线交易日
+        # 发生变化才 +1, 避免同一天多周期被重复计入 (曾出现 20 周期≈10 小时即
+        # "到期"的高估)。
+        bar_day = str(df["day"].iloc[-1])
+        if bar_day and pos.get("counted_day") != bar_day:
+            pos["counted_day"] = bar_day
+            pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
         reason = None
         held = int(pos["entry_bars"])
+        if _t1_blocked(pos, df):
+            # A股 T+1: 当日买入的证券次一交易日方可卖出, 本周期跳过卖出判定
+            continue
         if not trailing_mode and ret >= pos_take:
             reason = "止盈"
         elif last <= stop_px:
@@ -2007,6 +2126,7 @@ def step(st, df_by_code):
         if df is not None and len(df):
             close = float(df["close"].iloc[-1])
             o["price"] = round(close * (1 + SLIP_BUY), 3)
+            o["day"] = str(df["day"].iloc[-1])
             if not o.get("date"):
                 o["date"] = str(df["day"].iloc[-1])
             order = dict(o)
@@ -2015,22 +2135,25 @@ def step(st, df_by_code):
 
 
 def _rebalance_portfolio(st, df_by_code):
-    """满仓时向等权目标收敛, 把权重过低的持仓补足到 总权益/max_pos。
+    """满仓时向等权目标收敛, 把权重过低的持仓补足到 总权益/有效持仓上限。
 
-    仅在 len(positions)==max_pos (已满仓) 且现金富余时触发, 避免建仓期干扰。
+    触发条件: len(positions) == 有效持仓上限 (弱市=WEAK_MAX_POS, 否则=MAX_POS)
+    且现金富余; 弱市的单仓若已超 MAX_SINGLE_CONCENTRATION 集中度上限则不再补。
     加仓直接合并进已有持仓 (摊薄成本), 不新增同标的多仓; 保留已建立的追踪 peak 与
-    entry_bars (加仓不改变止损保护起点)。返回补仓笔数。
+    entry_bars (加仓不改变止损保护起点)。本次交易日加仓的份额受 T+1 约束:
+    合并持仓的 entry_day 顺延为加仓交易日, 当日禁止卖出。返回补仓笔数。
 
     df_by_code: 需含待补仓标的当根行情 (用于现价与成交)。
     """
     if not _CUR.get("rebalance", False):
         return 0
-    if len(st.get("positions", [])) < _CUR["max_pos"]:
+    eff_max = _CUR["weak_max_pos"] if st.get("weak") else _CUR["max_pos"]
+    if len(st.get("positions", [])) < eff_max:
         return 0
     positions = st.get("positions", [])
     mv_total = sum(float(p.get("last", p["buy_px"])) * p["qty"] for p in positions)
     equity = float(st["cash"]) + mv_total
-    target = equity / max(1, _CUR["max_pos"])
+    target = equity / max(1, eff_max)
     rebalanced = 0
     for pos in positions:
         sym = pos["symbol"]
@@ -2040,6 +2163,12 @@ def _rebalance_portfolio(st, df_by_code):
         short = target * 0.75 - cur_mv
         if short <= 0:
             continue
+        if st.get("weak"):
+            # 弱市单仓集中度上限: 补仓后该股市值不得超过 总权益*max_single_conc
+            # (弱市目标=总权益/1 会过度集中, 以单股集中度兜底)
+            short = min(short, _CUR["max_single_conc"] * equity - cur_mv)
+            if short <= 0:
+                continue
         cost = last * (1 + SLIP_BUY)
         qty = int(short // (cost) // 100 * 100)  # 整手(百股)
         if qty <= 0:
@@ -2056,6 +2185,14 @@ def _rebalance_portfolio(st, df_by_code):
         pos["cost"] = round(float(pos.get("cost", 0)) + fee, 2)
         pos["last"] = round(last, 3)
         st["cash"] -= spend
+        # A股 T+1: 加仓份额当日不可卖, 合并持仓 entry_day 顺延为加仓交易日,
+        # 使整仓当日禁止卖出 (与 fill_buy 的新仓同口径)。
+        try:
+            _d = df_by_code.get(sym)
+            if _d is not None and len(_d):
+                pos["entry_day"] = str(_d["day"].iloc[-1])
+        except Exception:
+            pass
         st["orders"].append({
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "symbol": sym,
             "name": pos.get("name", ""), "strategy": pos.get("strategy", ""),
@@ -2094,11 +2231,7 @@ def close_position(st, pos, sell_price, reason, event_type=None):
         "strategy": pos.get("strategy", ""),
     })
     st["positions"] = [p for p in st["positions"] if p is not pos]
-    st["equity_hist"].append({
-        "ts": time.strftime("%Y-%m-%d"),
-        "cash": round(st["cash"], 2),
-        "equity": round(equity(st, {}), 2),
-    })
+    _record_equity(st)
     save_state(st)
     try:
         paper_log.log_sell(
@@ -2113,9 +2246,15 @@ def close_position(st, pos, sell_price, reason, event_type=None):
 
 
 def force_close_position(st, symbol: str, reason: str = "手动平仓"):
-    """按代码手动平仓 (供 UI 持仓行操作)。找不到持仓返回 None, 成功返回平仓记录。"""
+    """按代码手动平仓 (供 UI 持仓行操作)。找不到持仓返回 None, 成功返回平仓记录。
+
+    A股 T+1: 当日买入 (entry_day == 今天) 的持仓拒绝当日平仓, 返回 None。
+    """
     for pos in st["positions"]:
         if pos["symbol"] == symbol:
+            entry_day = pos.get("entry_day") or ""
+            if entry_day and entry_day == datetime.now().strftime("%Y-%m-%d"):
+                return None
             close_position(st, pos, pos.get("last", pos["buy_px"]), reason)
             return pos
     return None
@@ -2142,13 +2281,33 @@ def float_ret(buy_px, last):
 
 
 def equity(st, df_by_code):
-    """总资产 = 现金 + 持仓市值。"""
+    """总资产 = 现金 + 持仓市值 (未扣未实现卖出费/滑点, 市值口径)。"""
     mv = 0.0
     for pos in st["positions"]:
         df = df_by_code.get(pos["symbol"])
         px = float(df["close"].iloc[-1]) if df is not None and len(df) else pos.get("last", pos["buy_px"])
         mv += px * pos["qty"]
     return st["cash"] + mv
+
+
+def _record_equity(st, day=None):
+    """按交易日 upsert 一条账户净值快照到 equity_hist (同一天多次周期只保留最新)。
+
+    资金曲线与账户概览以这里记录的快照为准: 持仓开仓后每个周期都会刷新,
+    避免曲线只能看到平仓点、与现状脱节。
+    """
+    ts = (day or time.strftime("%Y-%m-%d"))[:10]
+    hist = st.get("equity_hist") or []
+    for h in hist:
+        if h.get("ts") == ts:
+            h["equity"] = round(equity(st, {}), 2)
+            h["cash"] = round(st["cash"], 2)
+            return
+    hist.append({
+        "ts": ts,
+        "cash": round(st["cash"], 2),
+        "equity": round(equity(st, {}), 2),
+    })
 
 
 # ── 收益统计 ─────────────────────────────────────────────
@@ -2432,8 +2591,11 @@ def signal_stats_text(st):
     L.append(f"- 总资产: **{s['cash']:,}** 当前持仓 {s['n_positions']} 只, "
              f"已平仓 {s['n_closed']} 笔, 订单 {s['n_orders']} 笔")
     L.append(f"- 条件单: 激活 {s['n_cond_active']} · 已触发 {s['n_cond_done']}")
-    L.append(f"- 累计收益: **{s['total_return']*100:+.2f}%**  "
-             f"最大回撤: {s['max_drawdown']*100:.2f}% if s['max_drawdown'] is not None else '-'")
+    # 修复: 原先三元表达式被字符串化 (max_drawdown 为 None 时也强制格式化),
+    # 造成 "最大回撤: ... if ... is not None else '-'" 的样式错误与崩溃。
+    dd = s["max_drawdown"]
+    dd_txt = "-" if dd is None else f"{dd*100:.2f}%"
+    L.append(f"- 累计收益: **{s['total_return']*100:+.2f}%**  最大回撤: {dd_txt}")
     if s["win_rate"] is not None:
         L.append(f"- 胜率: **{s['win_rate']*100:.1f}%**  平均每笔: "
                  f"{s['avg_ret']*100:+.2f}%  盈亏比: {s['pl_ratio']}")
@@ -2460,7 +2622,27 @@ def signal_stats_text(st):
     return "\n".join(L)
 
 
-def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
+def _reset_logs():
+    """清空模拟盘当日全部日志 (paper_logs), 供账户重置时同步清理。"""
+    try:
+        paper_log.clear_today()
+    except Exception:
+        pass
+
+
+def _scan_due(st):
+    """距上次全市场扫描是否已过冷却窗口 (next_scan_time 文本即 isoformat 比较)。"""
+    nxt = st.get("next_scan_time") or ""
+    if not nxt:
+        return True
+    try:
+        return datetime.now().isoformat() >= nxt
+    except Exception:
+        return True
+
+
+def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
+              force_scan=False):
     """无头自动运行一个周期: 筛选→下单→步进→统计。返回统计。
 
     供 cron / 调度线程 / 手动触发。每周期持仓 K 数 +1,
@@ -2468,6 +2650,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
     settings 传入界面设置 dict (S.Paper.* 键) 覆盖策略参数; min_conf 显式传入
     时优先于 settings (兼容旧调用方)。candidates 传入时直接复用 (跳过选股),
     供"扫描完成→自动买入"避免二次全市场扫描。
+    candidates 为 None 时, 若距上次扫描仍在冷却窗口内且已有候选快照, 则复用
+    st["candidates"] 而非无条件重扫全市场 (多周期调度每 30 分钟触发一次全市场
+    重扫会造成选股覆盖与节流), 用 force_scan=True 强制立即重扫。
     """
     from .datasource import fetch_kline
     from .indicators import add_indicators
@@ -2486,7 +2671,15 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
     _backfill_position_protection(st)
     # 1) 选股: candidates 传入时直接复用扫描结果 (扫描已完成选股)
     if candidates is None:
-        cand = pick_candidates(universe=universe, min_conf=min_conf)
+        reuse = (not force_scan) and st.get("candidates") and not _scan_due(st)
+        if reuse:
+            cand = st["candidates"]
+        else:
+            cand = pick_candidates(universe=universe, min_conf=min_conf)
+            _now = datetime.now()
+            st["last_scan_time"] = _now.isoformat()
+            st["next_scan_time"] = (
+                _now + timedelta(minutes=_SCAN_COOLDOWN_MIN)).isoformat()
     else:
         cand = candidates
     st["candidates"] = cand
@@ -2536,6 +2729,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
                             stop_pct=stop_pct, take_pct=take_pct)
         if order is None:
             continue
+        order["day"] = str(e.get("day") or "")
         fill_buy(st, order)
     # 3) 步进+平仓判定 (持仓 + 待撮合用最新行情)
     df_by_code = {}
@@ -2551,6 +2745,14 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None):
     # 4) 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到等权目标,
     #    消除资金利用率不足(~66%)与单仓过度集中。
     _rebalance_portfolio(st, df_by_code)
+    _day = ""
+    for _df in df_by_code.values():
+        try:
+            _day = str(_df["day"].iloc[-1])
+            break
+        except Exception:
+            continue
+    _record_equity(st, _day or None)
     save_state(st)
     try:
         paper_log.log_account_snapshot(
@@ -2586,7 +2788,13 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
 
     # 纪律扫描: 强多头事件 + conf≥min_conf + 三大硬门禁
     try:
-        cand = pick_candidates(max_codes=n_codes, min_conf=_CUR["min_conf"],
+        scanned_universe = _mainboard_universe(n_codes)
+    except Exception:
+        scanned_universe = []
+    scanned = len(scanned_universe)
+    try:
+        cand = pick_candidates(universe=scanned_universe or None,
+                               max_codes=n_codes, min_conf=_CUR["min_conf"],
                                progress=progress)
     except Exception:
         cand = []
@@ -2594,13 +2802,13 @@ def run_scan(st, scan_type='discipline', n_codes=6000, progress=None):
     st["candidates"] = cand
     try:
         paper_log.log_scan(
-            scan_count=st['scan_count'], codes_scanned=n_codes,
+            scan_count=st['scan_count'], codes_scanned=scanned,
             candidates_found=len(cand), candidates=cand)
     except Exception:
         pass
 
     label = "策略管理器扫描(纪律+左侧买点+价值吸筹)"
-    result_str = (f"{label}: 扫描{n_codes} 码, 命中 {len(cand)} 个候选"
+    result_str = (f"{label}: 扫描{scanned} 码, 命中 {len(cand)} 个候选"
                   if cand else
                   "策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁拦截, "
                   "左侧买点未现于可执行窗口, 价值吸筹未现于底部整固)")
