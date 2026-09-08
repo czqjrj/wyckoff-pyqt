@@ -14,6 +14,7 @@
 from .analysis_thread import AnalysisThread
 from .analysis_ticker_thread import AnalysisTickerThread
 from .auto_sync_thread import AutoSyncThread
+from .dashboard_thread import DashboardThread
 from .entries_scan_thread import EntriesScanThread
 from .label_ai_thread import LabelAiThread
 from .scan_market_thread import ScanMarketThread
@@ -23,6 +24,7 @@ from .watch_scan_thread import WatchScanThread
 
 __all__ = [
     "AnalysisThread",
+    "DashboardThread",
     "WatchRTThread",
     "LabelAiThread",
     "StatusTicker",

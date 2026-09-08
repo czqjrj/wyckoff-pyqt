@@ -81,6 +81,7 @@ from .settings_dialog import SettingsDialog
 from .state_manager import StateManager
 from .threads import (
     AutoSyncThread,
+    DashboardThread,
     LabelAiThread,
     ScanMarketThread,
     StatusTicker,
@@ -283,6 +284,12 @@ class MainWindow(QMainWindow):
             self._startup_scan_timer.setSingleShot(True)
             self._startup_scan_timer.timeout.connect(self._startup_ticker_scan)
             self._startup_scan_timer.start(4000)
+
+        # ── 大盘仪表盘定时刷新 (启动即开始, 每60s) ──
+        self._dash_timer = QTimer(self)
+        self._dash_timer.timeout.connect(self._refresh_dashboard)
+        self._dash_timer.start(60_000)
+        self._refresh_dashboard()  # 启动即刷一次
         # 启动默认: 优先加载上次退出前最后分析的股票 (自动记住), 否则用设置的默认股票
         last_code, last_scale, last_period = self._state_mgr.get_last_analyzed()
         default_load = str(self.settings.get(S.General.DEFAULT_LOAD, "") or "").strip()
@@ -393,7 +400,7 @@ class MainWindow(QMainWindow):
 
         # 视图: 标签页切换与界面显隐
         v = m.addMenu("视图")
-        _tab_names = ("K线图", "P&F 点数图", "技术指标", "资金透视", "相关新闻", "解读")
+        _tab_names = ("大盘仪表盘", "K线图", "P&F 点数图", "技术指标", "资金透视", "相关新闻", "解读")
         for i, t_ in enumerate(_tab_names):
             v.addAction(t_, lambda i=i: self.tabs.setCurrentIndex(i))
         v.addSeparator()
@@ -652,7 +659,7 @@ class MainWindow(QMainWindow):
         # 属性别名: 既有逻辑沿用原属性名访问各控件
         ct = v.chart_tabs
         self.tabs = ct
-        for name in ("tab_kline", "tab_pnf", "tab_ind", "tab_mkt",
+        for name in ("tab_dash", "tab_kline", "tab_pnf", "tab_ind", "tab_mkt",
                      "tab_news", "tab_interp"):
             setattr(self, name, getattr(ct, name))
         self.tab_screener = None   # 综合选股: 懒创建 Tab (菜单/自动显示时挂载)
@@ -660,6 +667,7 @@ class MainWindow(QMainWindow):
         self.pnf_widget = v.pnf_widget
         self.ind_widget = v.ind_widget
         self.ind_scroll = v.ind_scroll
+        self.dash_widget = v.dash_widget
         self.mkt_scroll = v.mkt_scroll
         self.mkt_widget = v.mkt_widget
         self.ind_header = v.ind_header
@@ -2663,6 +2671,26 @@ class MainWindow(QMainWindow):
         self._refresh_timer.start(interval * 1000)
         self._schedule_accuracy_eval()
 
+    # ── 大盘仪表盘刷新 ──
+    def _refresh_dashboard(self):
+        """后台拉取仪表盘全量数据, 完成后更新 DashboardWidget。"""
+        # 上一轮仍在跑 (慢网络/首次重算) 时跳过本轮, 避免线程堆积
+        if getattr(self, "_dash_threads", None):
+            return
+        th = DashboardThread(self)
+        th.result.connect(self._on_dashboard_data)
+        self._dash_threads = {}
+        self._dash_threads[th] = th
+        th.finished.connect(lambda _=None, t=th: self._dash_threads.pop(t, None))
+        th.start()
+
+    def _on_dashboard_data(self, data):
+        """仪表盘数据到达主线程, 渲染到 DashboardWidget。"""
+        try:
+            self.dash_widget.set_data(data)
+        except Exception as e:
+            log_exc("仪表盘渲染失败", e)
+
     def _schedule_accuracy_eval(self):
         """后台定期评估到期的准确度/信号记录 (不依赖分析动作触发)。"""
         self._cancel_accuracy_eval()
@@ -2942,17 +2970,17 @@ class MainWindow(QMainWindow):
 
     # ── 图表导出 ──
     def _export_current_fig(self):
-        idx = self.tabs.currentIndex()
-        if idx == 0:
+        cur = self.tabs.currentWidget()
+        if cur is self.tab_kline:
             self._save_kline_png(f"wyckoff_{self._current_code or 'chart'}")
             return
-        if idx == 1:
+        if cur is self.tab_pnf:
             self._save_pnf_png(f"wyckoff_{self._current_code or 'chart'}")
             return
-        elif idx == 2:
+        elif cur is self.tab_ind:
             self._save_ind_png(f"wyckoff_{self._current_code or 'chart'}")
             return
-        elif idx == 3:
+        elif cur is self.tab_mkt:
             self._save_mkt_png(f"wyckoff_{self._current_code or 'chart'}")
             return
 
@@ -3677,6 +3705,13 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         self._cancel_auto_scan()
         self._cancel_auto_sync()
         self._cancel_profile_auto_sync()
+        # 停止仪表盘定时器
+        dt = getattr(self, "_dash_timer", None)
+        if dt is not None:
+            try:
+                dt.stop()
+            except Exception:
+                pass
         try:
             if hasattr(self, "status_ticker"):
                 self.status_ticker.clear()
@@ -3732,6 +3767,9 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         if st is not None and st.isRunning():
             st.wait(8000)
         for t in list(getattr(self, "_label_ai_threads", {}) or {}):
+            if t is not None and t.isRunning():
+                t.wait(5000)
+        for t in list(getattr(self, "_dash_threads", {}) or {}):
             if t is not None and t.isRunning():
                 t.wait(5000)
         c = getattr(self, "_analysis_ctrl", None)

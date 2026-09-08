@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from . import theme
 from .components import FlowLayout, PanelHeader, SectionList
 from .constants import IND_ASPECT, MKT_ASPECT
+from .dashboard_widget import DashboardWidget
 from .ind_widget import IndScroll, IndWidget
 from .kline_widget import KlineWidget
 from .mkt_widget import MktWidget
@@ -155,6 +156,11 @@ class ChartTabs(QTabWidget):
         )
 
     def _build_tabs(self):
+        # 大盘仪表盘 (第一个 Tab)
+        self.tab_dash = QWidget()
+        self._build_dash_tab()
+        self.addTab(self.tab_dash, "大盘仪表盘")
+
         # K线图
         self.tab_kline = QWidget()
         self._build_kline_tab()
@@ -195,6 +201,16 @@ class ChartTabs(QTabWidget):
         # 固定分析 Tab 去掉关闭按钮 (动态 Tab 由 setTabsClosable 自动带关闭键)。
         for i in range(self.count()):
             self.tabBar().setTabButton(i, self.tabBar().ButtonPosition.RightSide, None)
+
+    def _build_dash_tab(self):
+        layout = QVBoxLayout(self.tab_dash)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.dash_widget = DashboardWidget(
+            font_size=self._font_size,
+            on_load=self._on_load)
+        self.dash_widget.load_code.connect(self._on_load)
+        layout.addWidget(self.dash_widget)
 
     def _build_kline_tab(self):
         layout = QVBoxLayout(self.tab_kline)
@@ -529,6 +545,10 @@ class MainView(QWidget):
         main_window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_right)
 
     # ── 便捷访问器 ────────────────────────────────────────────
+    @property
+    def dash_widget(self):
+        return self.chart_tabs.dash_widget
+
     @property
     def kline_widget(self):
         return self.chart_tabs.kline_widget
