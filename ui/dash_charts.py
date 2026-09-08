@@ -455,3 +455,54 @@ class SectorHeatmap(_ChartCard):
     def clear(self):
         self.grid.clear()
         self._repaint_theme()
+
+# ── 指数共振度 ──
+
+
+class ResonanceChart(_ChartCard):
+    """多指数每日涨跌方向一致率曲线 (0-100%)."""
+
+    def __init__(self, parent=None):
+        super().__init__("指数共振 · 120日", height=210, parent=parent)
+        self.plot = pg.PlotWidget(background=theme.C_PANEL)
+        self.plot.hideAxis("left")
+        self.plot.showGrid(x=False, y=True, alpha=0.25)
+        self.plot.getAxis("bottom").setStyle(tickFont=_mk_font(7))
+        self.plot_host.addWidget(self.plot)
+        self.plot.setYRange(0, 100)
+
+    def set_data(self, data):
+        self.clear()
+        if not data or not data.get("agree"):
+            _no_data(self.plot)
+            return
+        agree = data["agree"]
+        days = data.get("days") or []
+        x = np.arange(len(agree))
+        pen = _pen(theme.C_ACCENT, 1.4)
+        self.plot.plot(x, agree, pen=pen, fillLevel=50,
+                       brush=pg.mkBrush(QColor(theme.css_rgba(theme.C_ACCENT, 40))))
+        for lv in (33, 67):
+            self.plot.addItem(pg.InfiniteLine(
+                pos=lv, angle=0, pen=pg.mkPen(theme.C_MUTED, style=Qt.PenStyle.DashLine)))
+        if len(days) == len(x) and len(x) > 1:
+            step = max(1, (len(x) - 1) // 6)
+            ticks = [(float(i), days[i][5:]) for i in range(0, len(x), step)]
+            if ticks[-1][0] != float(len(x) - 1):
+                ticks.append((float(len(x) - 1), days[-1][5:]))
+            self.plot.getAxis("bottom").setTicks([ticks])
+        today = data.get("today_pct")
+        tone = data.get("tone", "")
+        tone_map = {"共振": theme.C_UP, "分歧": theme.C_DOWN, "分化": theme.C_AMBER}
+        if today is not None:
+            tc = tone_map.get(tone, theme.C_MUTED)
+            self.sub_lab.setText(f"今日一致率 {today:.0f}% · {tone}")
+            self.sub_lab.setStyleSheet(
+                f"color:{tc};background:transparent;" if tc else
+                "color:%s;background:transparent;" % theme.C_MUTED)
+
+    def clear(self):
+        self.plot.setBackground(theme.C_PANEL)
+        self.plot.clear()
+        self.plot.setYRange(0, 100)
+        self._repaint_theme()

@@ -139,11 +139,12 @@ class _LazyCalibContainer(QWidget):
 class ChartTabs(QTabWidget):
     """中央图表标签页容器。"""
 
-    def __init__(self, font_size, on_load=None, parent=None):
+    def __init__(self, font_size, on_load=None, settings=None, parent=None):
         super().__init__(parent)
         self.setTabsClosable(True)
         self._font_size = font_size
         self._on_load = on_load
+        self._settings = settings
         self._build_tabs()
 
     def apply_theme(self):
@@ -210,7 +211,26 @@ class ChartTabs(QTabWidget):
             font_size=self._font_size,
             on_load=self._on_load)
         self.dash_widget.load_code.connect(self._on_load)
+        self.dash_widget.ai_briefing_requested.connect(self._on_ai_briefing)
         layout.addWidget(self.dash_widget)
+
+    def _on_ai_briefing(self):
+        """点击「AI 大盘综述」: 把仪表盘全量数据喂给 AI 生成今日解读。"""
+        try:
+            from wyckoff.market_dashboard import build_market_briefing
+
+            from .ai_chat_window import AiChatDialog
+            brief = build_market_briefing() or "暂无数据"
+            ctx = ("你是资深 A股盘面分析师。基于以下开盘数据, 用 300 字以内"
+                   "给出: 今日盘面特征、威科夫视角的当前阶段判断、明日关注方向与风险。\n\n"
+                   + brief)
+            dlg = AiChatDialog(
+                self, self._settings, ctx, title="AI 大盘综述 · 今日盘面",
+                auto_ask="请基于以上数据生成今日大盘综述 (300 字以内)。")
+            dlg.exec()
+        except Exception:
+            from wyckoff._log import log_exc
+            log_exc("AI 大盘综述失败", None)
 
     def _build_kline_tab(self):
         layout = QVBoxLayout(self.tab_kline)
@@ -519,15 +539,17 @@ class MainView(QWidget):
     仅负责 UI 布局, 不包含任何业务逻辑/线程/信号连接。
     """
 
-    def __init__(self, font_size=12, on_load=None, parent=None):
+    def __init__(self, font_size=12, on_load=None, settings=None, parent=None):
         super().__init__(parent)
         self._font_size = font_size
         self._on_load = on_load
+        self._settings = settings
         self._build_ui()
 
     def _build_ui(self):
         # 中央标签页
-        self.chart_tabs = ChartTabs(self._font_size, on_load=self._on_load)
+        self.chart_tabs = ChartTabs(self._font_size, on_load=self._on_load,
+                                    settings=self._settings)
 
         # 停靠面板
         self.dock_watch = WatchDock()

@@ -608,4 +608,229 @@ def build_dashboard_data():
         "index_compare": build_index_compare() or None,
         "sector_flow": build_sector_flow_chart() or [],
         "sector_heatmap": build_sector_heatmap() or [],
+        "emotion": fetch_emotion_board() or None,
+        "amount": fetch_market_amount() or None,
+        "resonance": build_market_resonance() or None,
+        "divergence": build_phase_divergence() or None,
     }
+
+
+# ──────────────────────────── 市场情绪 ────────────────────────────
+
+def fetch_emotion_board():
+    """市场情绪面板 (缓存5min)。返回 dict or None, 见 flow_extra.fetch_emotion_data
+    另加 phase 情绪阶段判定 (冰点/修复/发酵/高潮/退潮)。"""
+    def _do():
+        try:
+            from .flow_extra import fetch_emotion_data
+            d = fetch_emotion_data()
+            if not d:
+                return None
+            d["phase"] = _judge_sentiment_phase(d)
+            return d
+        except Exception as e:
+            log_exc("仪表盘情绪面板失败", e)
+            return None
+    return _cached("dash_emotion", 300, _do)
+
+
+def _judge_sentiment_phase(emo):
+    """情绪周期判定 (冰点→修复→发酵→高潮→退潮)。
+
+    核心维度: 涨停家数 / 连板高度 / 炸板率 / 昨日涨停溢价 / 跌停家数。
+    """
+    zt = dict(emo.get("ladder") or {})
+    zt_cnt = sum(zt.values()) or 0
+    max_board = emo.get("max_board") or 0
+    zb_cnt = emo.get("zb_cnt") or 0
+    dt_cnt = emo.get("dt_cnt") or 0
+    premium = emo.get("premium")
+    zb_rate = zb_cnt / max(1, zt_cnt + zb_cnt)
+    # 高潮
+    if max_board >= 6 or (zt_cnt >= 90 and max_board >= 4) \
+            or (premium is not None and premium > 3 and zt_cnt >= 70):
+        return "高潮"
+    # 退潮: 明显退潮信号
+    if (premium is not None and premium < -1.5) or zb_rate > 0.45 \
+            or (dt_cnt >= 15 and zt_cnt < 60):
+        return "退潮"
+    # 发酵: 高度与家数同升, 赚钱效应为正
+    if zt_cnt >= 50 and max_board >= 3 and (premium is None or premium >= 0):
+        return "发酵"
+    # 修复: 涨停回升 + 溢价转正
+    if zt_cnt >= 25 and max_board >= 3:
+        return "修复"
+    # 冰点
+    return "冰点"
+
+
+# ──────────────────────────── 两市成交额 + 量能分位 ────────────────────────────
+
+_MARKET_AMOUNT_SECIDS = "1.000001,0.399106,0.399001"
+
+
+def fetch_market_amount():
+    """两市成交额 + 沪市量能 120 日分位 (缓存30s)。
+
+    返回 dict or None: {date, total_yi, sh_yi, sz_yi, vol_pct, ts}
+    vol_pct: 今日沪市成交量处于近 120 交易日的分位 (0-100), 越高越放量。
+    """
+    def _do():
+        try:
+            from .fundamental import _get  # noqa: 内部 HTTP 容器
+            h = {"User-Agent": "Mozilla/5.0",
+                 "Referer": "https://quote.eastmoney.com/"}
+            r = _get("https://push2delay.eastmoney.com/api/qt/ulist.np/get",
+                     {"fltt": "2", "invt": "2",
+                      "secids": _MARKET_AMOUNT_SECIDS, "fields": "f12,f14,f6"},
+                     h, timeout=6, retries=2, cache_fail=False)
+            if r is None:
+                return None
+            diff = ((r.json().get("data") or {}).get("diff")) or []
+            m = {d.get("f12"): float(d.get("f6") or 0) for d in diff}
+            sh = m.get("000001", 0)
+            sz = m.get("399106", 0) or m.get("399001", 0)
+            try:
+                from .datasource import fetch_kline
+                df = fetch_kline("sh000001", datalen=130)
+                vol = df["volume"].astype(float).values
+                cur = vol[-1]
+                base = sorted(vol[-121:-1])
+                import bisect
+                vol_pct = round(bisect.bisect_left(base, cur) / len(base) * 100)
+                date = str(df["day"].iloc[-1])
+            except Exception:
+                vol_pct = None
+                date = ""
+            return {
+                "date": date, "total_yi": round((sh + sz) / 1e8),
+                "sh_yi": round(sh / 1e8), "sz_yi": round(sz / 1e8),
+                "vol_pct": vol_pct, "ts": time.time(),
+            }
+        except Exception as e:
+            log_exc("仪表盘成交额失败", e)
+            return None
+    return _cached("dash_amount", 30, _do)
+
+
+# ──────────────────────────── 大盘共振度 ────────────────────────────
+
+def build_market_resonance(bars=120):
+    """多指数每日涨跌方向一致率 (缓存5min)。
+
+    返回 {
+        days: [day, ...],       同长度
+        agree: [0-100, ...],    当日一致上涨指数占比
+        today_pct: float,       今日一致率 %
+        tone: "共振"/"分歧",
+        n_indices: int
+    }
+    """
+    def _do():
+        closes = {}
+        days = None
+        for idx in DASH_INDICES:
+            try:
+                from .datasource import fetch_kline
+                df = fetch_kline(idx["code"], datalen=bars + 1)
+            except Exception:
+                continue
+            if df is None or len(df) < 5:
+                continue
+            closes[idx["code"]] = df["close"].astype(float).values
+            if days is None:
+                days = [str(d)[:10] for d in df["day"]]
+        if len(closes) < 3:
+            return None
+        min_len = min(len(v) for v in closes.values())
+        agree, out_days = [], []
+        for i in range(min_len - 1):
+            ups = sum(1 for v in closes.values()
+                      if v[-min_len + i + 1] > v[-min_len + i])
+            agree.append(round(ups / len(closes) * 100))
+            if days:
+                out_days.append(days[-min_len + i + 1])
+        today_pct = agree[-1] if agree else None
+        tone = "共振" if today_pct is not None and today_pct >= 67 \
+            else "分歧" if today_pct is not None and today_pct <= 33 else "分化"
+        return {
+            "days": out_days, "agree": agree,
+            "today_pct": today_pct, "tone": tone,
+            "n_indices": len(closes),
+        }
+    return _cached("dash_resonance", 300, _do)
+
+
+# ──────────────────────────── 大盘-板块背离 ────────────────────────────
+
+def build_phase_divergence():
+    """大盘威科夫阶段 vs 板块强度背离 (缓存5min)。
+
+    返回 {
+        phase: 大盘阶段文本, bull: bool, rows: [{name,pct,flow20_yi,tone,div,dir}]
+    } rows 为背离板块 Top10:
+      - 大盘多头阶段下仍在走弱/新弱的板块 (多头趋势内滞后)
+      - 大盘空头阶段下仍逆势走强的板块 (弱市结构性机会)
+    """
+    def _do():
+        tech = build_index_technicals() or {}
+        sse = tech.get("sh000001") or {}
+        phase = sse.get("phase", "") or ""
+        bull = any(k in phase for k in ("吸筹", "拉升", "牛市", "上升", "积累"))
+        bear = any(k in phase for k in ("派发", "下跌", "熊市", "下降"))
+        sectors = fetch_sector_ranking() or []
+        if not bull and not bear:
+            return {"phase": phase, "bull": False, "rows": []}
+        rows = []
+        for s in sectors:
+            tone = s.get("tone", "neutral")
+            pct = s.get("pct", 0)
+            if bull and tone in ("bearish", "neutral") and pct < -1:
+                rows.append({**s, "div": "落后", "dir": "弱"})
+            elif bear and tone == "bullish" and pct > 1:
+                rows.append({**s, "div": "逆势", "dir": "强"})
+        rows.sort(key=lambda x: -x.get("score", 0))
+        return {"phase": phase, "bull": bull, "rows": rows[:10]}
+    return _cached("dash_divergence", 300, _do)
+
+
+# ──────────────────────────── AI 大盘综述文案 ────────────────────────────
+
+def build_market_briefing():
+    """把仪表盘全量数据压缩成一段 AI 可读的今日盘面要点。
+
+    供「AI 大盘综述」按钮使用: 作为 AiChatDialog 的 system 上下文。
+    """
+    d = build_dashboard_data()
+    lines = []
+    indices = d.get("indices") or {}
+    for nfo in DASH_INDICES:
+        v = indices.get(nfo["code"]) or {}
+        if v.get("pct") is not None:
+            lines.append(f"{nfo['name']} {v.get('price')} ({v['pct']:+.2f}%)")
+    b = d.get("breadth") or {}
+    if b:
+        lines.append(f"涨跌家数 {b['up']}/{b['down']}"
+                     f" 涨停 {b.get('limit_up', 0)} 跌停 {b.get('limit_down', 0)}")
+    env = d.get("market_env") or {}
+    if env.get("env"):
+        lines.append(f"大盘环境 {env['env']} (tone={env.get('tone')})")
+    tech = d.get("tech") or {}
+    t = tech.get("sh000001") or {}
+    if t.get("phase"):
+        lines.append(f"上证威科夫阶段: {t['phase']}")
+    emo = d.get("emotion") or {}
+    if emo:
+        zt_cnt = sum((emo.get("ladder") or {}).values()) or len(emo.get("zt") or [])
+        lines.append(f"市场情绪: 涨停 {zt_cnt} 跌停 {emo.get('dt_cnt', 0)}"
+                     f" 炸板 {emo.get('zb_cnt', 0)} 最高 {emo.get('max_board', 0)} 连板"
+                     f" 昨日涨停溢价 {emo.get('premium', '--')}%"
+                     f" 阶段 {emo.get('phase', '--')}")
+    amt = d.get("amount") or {}
+    if amt:
+        vp = f" 沪量能分位 {amt['vol_pct']}%" if amt.get("vol_pct") is not None else ""
+        lines.append(f"两市成交额 {amt['total_yi']} 亿{vp}")
+    rz = d.get("resonance") or {}
+    if rz:
+        lines.append(f"指数共振 {rz['today_pct']}% ({rz['tone']})")
+    return "\n".join(lines)

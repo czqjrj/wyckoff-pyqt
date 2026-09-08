@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPushButton,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -25,8 +26,8 @@ from PyQt6.QtWidgets import (
 from . import theme
 from .components.card import Card
 from .components.panel_header import PanelHeader
-from .dash_charts import (IndexCompareChart, SectorFlowChart, SectorHeatmap,
-                          SseKlineChart)
+from .dash_charts import (IndexCompareChart, ResonanceChart, SectorFlowChart,
+                          SectorHeatmap, SseKlineChart)
 
 # ── 工具 ──
 
@@ -104,6 +105,15 @@ def _tint(color, alpha=38):
     return theme.css_rgba(color, alpha)
 
 
+_EMO_TONE = {
+    "冰点": "#0ea5e9",
+    "修复": theme.C_AMBER,
+    "发酵": theme.C_UP,
+    "高潮": "#c92a2a",
+    "退潮": theme.C_DOWN,
+}
+
+
 # ── 卡片构建 ──
 
 
@@ -116,33 +126,33 @@ class _IndexCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("idxCard")
-        self.setMinimumHeight(104)
+        self.setMinimumHeight(122)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._DIR = None
         self._last = None
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(14, 10, 14, 8)
+        v.setContentsMargins(14, 12, 14, 10)
         v.setSpacing(3)
 
         top = QHBoxLayout()
         top.setSpacing(6)
-        self._name = _label("--", 12, True, theme.C_TEXT)
+        self._name = _label("--", 15, True, theme.C_TEXT)
         top.addWidget(self._name)
         top.addStretch(1)
-        self._ma_pill = _pill("--", theme.C_MUTED, _tint(theme.C_MUTED, 26))
+        self._ma_pill = _pill("--", theme.C_MUTED, _tint(theme.C_MUTED, 26), pt=9)
         top.addWidget(self._ma_pill)
         v.addLayout(top)
 
-        self._price = _label("--", 22, True, theme.C_TEXT, mono=True)
+        self._price = _label("--", 26, True, theme.C_TEXT, mono=True)
         self._price.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self._price)
 
         bot = QHBoxLayout()
         bot.setSpacing(8)
         bot.addStretch(1)
-        self._chg = _label("", 11, False, "", mono=True)
-        self._pct = _label("", 12, True, "", mono=True)
+        self._chg = _label("", 12, False, "", mono=True)
+        self._pct = _label("", 13, True, "", mono=True)
         bot.addWidget(self._chg)
         bot.addWidget(self._pct)
         bot.addStretch(1)
@@ -325,6 +335,7 @@ class DashboardWidget(QWidget):
     """大盘仪表盘: 全卡片化组合, 数据由 set_data() 注入。"""
 
     load_code = pyqtSignal(str)  # 双击指数 → 加载分析
+    ai_briefing_requested = pyqtSignal()  # 点击「AI 大盘综述」→ 主窗口打开对话框
 
     def __init__(self, parent=None, on_load=None, font_size=11):
         super().__init__(parent)
@@ -355,6 +366,7 @@ class DashboardWidget(QWidget):
         self._build_kline_section()
         self._build_breadth_section()
         self._build_charts_section()
+        self._build_emotion_section()
         self._build_fundamentals_section()
         self._build_sector_section()
 
@@ -413,6 +425,53 @@ class DashboardWidget(QWidget):
         card.add_layout(two)
         self._root.addWidget(card)
 
+    # ── 市场情绪 + 成交额 + 共振 (左信息右曲线) ──
+    def _build_emotion_section(self):
+        card = self._new_card()
+        ph = PanelHeader("市场情绪 · 成交额 · 共振")
+        ai_btn = QPushButton("AI 大盘综述")
+        ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ai_btn.setFont(_font(9, bold=True))
+        ai_btn.setStyleSheet(
+            f"QPushButton{{background:{_tint(theme.C_ACCENT, 90)};color:{theme.C_TEXT};"
+            f"border:1px solid {_tint(theme.C_ACCENT, 160)};"
+            f"border-radius:{theme.radius('full')}px;padding:3px 12px;}}"
+            f"QPushButton:hover{{background:{_tint(theme.C_ACCENT, 140)};}}")
+        ai_btn.clicked.connect(self.ai_briefing_requested)
+        ph.add_action(ai_btn)
+        card.layout_.addWidget(ph)
+
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        # 阶段徽章 + 主要计数
+        d1 = QHBoxLayout()
+        d1.setSpacing(10)
+        self._emo_phase = _label("--", 14, True, theme.C_MUTED)
+        self._emo_phase.setStyleSheet(
+            f"color:{theme.C_MUTED};background:{_tint(theme.C_MUTED, 18)};"
+            f"border:1px solid {theme.C_MUTED};"
+            f"border-radius:{theme.radius('full')}px;padding:4px 14px;")
+        d1.addWidget(self._emo_phase)
+        self._emo_meta = _label("", 11, True, theme.C_TEXT, mono=True)
+        d1.addWidget(self._emo_meta)
+        d1.addStretch(1)
+        left.addLayout(d1)
+        self._emo_ladder = _label("", 10, False, theme.C_MUTED)
+        left.addWidget(self._emo_ladder)
+        self._emo_sectors = _label("", 10, False, theme.C_MUTED)
+        left.addWidget(self._emo_sectors)
+        self._emo_amount = _label("", 11, True, theme.C_TEXT, mono=True)
+        left.addWidget(self._emo_amount)
+        left.addStretch(1)
+        row.addLayout(left, 1)
+        self._resonance_chart = ResonanceChart()
+        self._resonance_chart.setMinimumWidth(300)
+        row.addWidget(self._resonance_chart, 3)
+        card.add_layout(row)
+        self._root.addWidget(card)
+
     # ── 威科夫阶段 + 资金流向 (两列卡片) ──
     def _build_fundamentals_section(self):
         two_col = QHBoxLayout()
@@ -465,6 +524,11 @@ class DashboardWidget(QWidget):
 
         self._sector_heatmap = SectorHeatmap()
         card.add_widget(self._sector_heatmap)
+
+        self._div_label = _label("", 10, True, theme.C_MUTED)
+        self._div_label.setWordWrap(True)
+        self._div_label.hide()
+        card.add_widget(self._div_label)
 
         self._sector_table = QTableWidget()
         self._sector_table.setColumnCount(4)
@@ -620,8 +684,84 @@ class DashboardWidget(QWidget):
         self._zt_detail.setText(txt)
         self._zt_detail.setStyleSheet("color:%s;background:transparent;" % theme.C_TEXT)
 
+        # 市场情绪 + 成交额 + 共振
+        self._render_emotion(data.get("emotion"), data.get("amount"))
+        self._resonance_chart.set_data(data.get("resonance"))
+        self._render_divergence(data.get("divergence"))
+
         # 板块轮动表格
         self._populate_sector_table(sectors)
+
+    def _render_emotion(self, emo, amt):
+        if not emo:
+            self._emo_phase.setText("暂无数据")
+            self._emo_phase.setStyleSheet(
+                f"color:{theme.C_MUTED};background:{_tint(theme.C_MUTED, 18)};"
+                f"border:1px solid {theme.C_MUTED};"
+                f"border-radius:{theme.radius('full')}px;padding:4px 14px;")
+            self._emo_meta.setText("")
+            self._emo_ladder.setText("")
+            self._emo_sectors.setText("")
+            self._emo_amount.setText("")
+            return
+        phase = emo.get("phase", "")
+        pc = _EMO_TONE.get(phase, theme.C_MUTED)
+        self._emo_phase.setText(f"情绪 · {phase}")
+        self._emo_phase.setStyleSheet(
+            f"color:{pc};background:{_tint(pc, 22)};"
+            f"border:1px solid {_tint(pc, 120)};"
+            f"border-radius:{theme.radius('full')}px;padding:4px 14px;")
+        zt_cnt = sum((emo.get("ladder") or {}).values()) or len(emo.get("zt") or [])
+        dt = emo.get("dt_cnt", 0)
+        zb = emo.get("zb_cnt", 0)
+        mb = emo.get("max_board", 0)
+        prem = emo.get("premium")
+        prem_txt = f"{prem:+.2f}%" if prem is not None else "--"
+        meta = (f"涨停 {zt_cnt}   跌停 {dt}   炸板 {zb}   "
+                f"最高 {mb} 板   昨日涨停溢价 {prem_txt}")
+        self._emo_meta.setText(meta)
+        self._emo_meta.setStyleSheet("color:%s;background:transparent;" % theme.C_TEXT)
+        self._emo_ladder.setText(
+            "连板梯队: " + "   ".join(
+                f"{k}板×{v}" for k, v in sorted((emo.get("ladder") or {}).items()))
+            if emo.get("ladder") else "连板梯队: --")
+        self._emo_ladder.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+        seclist = (emo.get("zt_by_sector") or [])[:5]
+        if seclist:
+            sec_txt = "涨停行业: " + "  ".join(f"{n}×{c}" for n, c in seclist)
+        else:
+            sec_txt = "涨停行业: --"
+        self._emo_sectors.setText(sec_txt)
+        self._emo_sectors.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+        # 成交额 + 量能分位
+        if amt:
+            total = amt.get("total_yi") or 0
+            vp = amt.get("vol_pct")
+            vp_txt = f"沪量能分位 {vp}%" if vp is not None else "量能分位 --"
+            seg = (f"沪深两市 {total:,} 亿   |   {vp_txt} "
+                   f"(<25% 地量 · >75% 放量)")
+            self._emo_amount.setText(seg)
+            self._emo_amount.setStyleSheet(
+                f"color:{theme.C_TEXT};background:transparent;")
+            # 量能分位着色 done via inner text only; simple and enough
+        else:
+            self._emo_amount.setText("两市成交额 --")
+
+    def _render_divergence(self, dv):
+        if not dv or not dv.get("rows"):
+            self._div_label.hide()
+            return
+        rows = dv["rows"]
+        if dv.get("bull"):
+            head = f"大盘 {dv['phase']} · 板块背离(落后/弱势) "
+        else:
+            head = f"大盘 {dv['phase']} · 板块背离(逆势/强势) "
+        names = "  ".join(f"{r.get('name')} {r.get('pct', 0):+.1f}%" for r in rows[:5])
+        self._div_label.setText(head + names)
+        self._div_label.setStyleSheet(
+            f"color:{_tint(theme.C_AMBER, 230)};background:{_tint(theme.C_AMBER, 18)};"
+            "border-radius:6px;padding:6px 10px;")
+        self._div_label.show()
 
     def _populate_sector_table(self, sectors):
         if not sectors:

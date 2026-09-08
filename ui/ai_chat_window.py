@@ -43,7 +43,8 @@ class AiChatDialog(QDialog):
         dlg.exec()
     """
 
-    def __init__(self, parent, settings, system_context, title="AI 问股"):
+    def __init__(self, parent, settings, system_context, title="AI 问股",
+                 auto_ask=None):
         super().__init__(parent)
         from wyckoff.ai_chat import ChatSession
         self.setWindowTitle(title)
@@ -51,6 +52,7 @@ class AiChatDialog(QDialog):
         self._session = ChatSession(settings, system_context)
         self._thread = None
         self._pending_q = None
+        self._auto_ask = auto_ask
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -81,6 +83,11 @@ class AiChatDialog(QDialog):
             self._append_system(hint)
             self.input.setEnabled(False)
             self.send_btn.setEnabled(False)
+        elif self._auto_ask:
+            # 自动触发首问 (如「AI 大盘综述」一键生成今日解读):
+            # 事件循环在 exec() 之后启动, 后台线程信号会正常送达, 不阻塞本构造。
+            self.input.setText(self._auto_ask)
+            self._send()
 
     # ── 渲染 ──
     def _append_msg(self, who, text):

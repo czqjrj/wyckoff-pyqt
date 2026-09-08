@@ -654,7 +654,8 @@ class MainWindow(QMainWindow):
         # 这里只做业务接线 (信号连接/右键菜单/状态恢复), 不再内联搭界面。
         from .main_view import MainView
         v = self.view = MainView(font_size=self._chart_font(),
-                                 on_load=self._load_code)
+                                 on_load=self._load_code,
+                                 settings=self.settings)
 
         # 属性别名: 既有逻辑沿用原属性名访问各控件
         ct = v.chart_tabs

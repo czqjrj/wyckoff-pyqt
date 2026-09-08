@@ -371,3 +371,114 @@ def fetch_north():
     except Exception:
         pass
     return out
+
+
+# ──────────────────────────── 市场情绪 ────────────────────────────
+
+def fetch_emotion_data():
+    """市场情绪快照 (最近交易日): 涨停/跌停/炸板池 + 连板梯队 + 涨停行业分布。
+
+    返回 dict or None:
+        date:       交易日 YYYY-MM-DD
+        zt:         涨停明细 [{code,name,pct,limit_times,open_cnt,sector,
+                             first_time,last_time,amount_yi,seal_yi}]
+        dt_cnt:     跌停家数
+        zb_cnt:     炸板家数 (今日曾涨停未封住)
+        ladder:     {连板数: 家数} 1..max
+        max_board:  最高连板
+        zt_by_sector: [(行业, 家数), ...] 涨停家数 Top8
+        prev_zt:    上一个交易日涨停家数
+        premium:    昨日涨停今日平均涨跌幅 % (赚钱效应, None=不可算)
+    """
+    ak = _ak()
+    if ak is None:
+        return None
+    today = _dt.date.today()
+    # ── 今日涨停池 (往前容错最多 4 个自然日) ──
+    zt_map = None
+    for d in range(4):
+        ds = (today - _dt.timedelta(days=d)).strftime("%Y%m%d")
+        try:
+            df = ak.stock_zt_pool_em(date=ds)
+        except Exception:
+            continue
+        if df is None or len(df) == 0:
+            continue
+        rows = []
+        for _, r in df.iterrows():
+            rows.append({
+                "code": _code6(r.get("代码")),
+                "name": str(r.get("名称") or ""),
+                "pct": _num(r.get("涨跌幅")),
+                "limit_times": int(_num(r.get("连板数")) or 1),
+                "open_cnt": int(_num(r.get("炸板次数")) or 0),
+                "sector": str(r.get("所属行业") or ""),
+                "first_time": str(r.get("首次封板时间") or ""),
+                "last_time": str(r.get("最后封板时间") or ""),
+                "amount_yi": (_num(r.get("成交额")) or 0) / 1e8,
+                "seal_yi": (_num(r.get("封板资金")) or 0) / 1e8,
+            })
+        zt_map = {"date": (today - _dt.timedelta(days=d)).strftime("%Y-%m-%d"),
+                  "rows": rows}
+        break
+    if not zt_map:
+        return None
+    date = zt_map["date"]
+    zt_rows = zt_map["rows"]
+    # ── 跌停池 / 炸板池 (同日期, fail-soft) ──
+    dt_cnt = zb_cnt = 0
+    ds = date.replace("-", "")
+    for name, fn in (("dt", "stock_zt_pool_dtgc_em"),
+                     ("zb", "stock_zt_pool_zbgc_em")):
+        try:
+            df = getattr(ak, fn)(date=ds)
+            if df is not None:
+                if name == "dt":
+                    dt_cnt = int(len(df))
+                else:
+                    zb_cnt = int(len(df))
+        except Exception:
+            pass
+    # ── 连板梯队 / 最高板 / 行业分布 ──
+    ladder = {}
+    for z in zt_rows:
+        n = z["limit_times"] or 1
+        ladder[n] = ladder.get(n, 0) + 1
+    max_board = max(ladder) if ladder else 0
+    by_sector = {}
+    for z in zt_rows:
+        s = z.get("sector") or "其他"
+        by_sector[s] = by_sector.get(s, 0) + 1
+    zt_by_sector = sorted(by_sector.items(), key=lambda kv: -kv[1])[:8]
+    # ── 昨日涨停家数 + 今日溢价 (赚钱效应) ──
+    prev_zt = None
+    premium = None
+    ddate = _dt.date.fromisoformat(date)
+    for d in range(1, 8):
+        pday = ddate - _dt.timedelta(days=d)
+        try:
+            pdf = ak.stock_zt_pool_em(date=pday.strftime("%Y%m%d"))
+        except Exception:
+            continue
+        if pdf is None or len(pdf) == 0:
+            continue
+        prev_zt = int(len(pdf))
+        codes = [_code6(r.get("代码")) for _, r in pdf.iterrows()]
+        try:
+            from .datasource import fetch_realtime
+            rt = fetch_realtime(codes) or {}
+            pcts = [e["pct"] for c in codes
+                    for e in [rt.get(c) or {}] if e.get("pct") is not None]
+            if pcts:
+                premium = round(sum(pcts) / len(pcts), 2)
+        except Exception:
+            premium = None
+        break
+    return {
+        "date": date,
+        "zt": zt_rows,
+        "dt_cnt": dt_cnt, "zb_cnt": zb_cnt,
+        "ladder": ladder, "max_board": max_board,
+        "zt_by_sector": zt_by_sector,
+        "prev_zt": prev_zt, "premium": premium,
+    }

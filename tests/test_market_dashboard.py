@@ -119,8 +119,18 @@ def test_build_dashboard_data_has_chart_keys():
     clear_cache()
     data = build_dashboard_data()
     for key in ("sse_chart", "index_compare", "sector_flow", "fund_flow",
-                "sector_heatmap"):
+                "sector_heatmap", "emotion", "amount", "resonance",
+                "divergence"):
         assert key in data
+
+
+def test_resonance_offline_none_or_structure():
+    """共振度离线为 None 或合法结构。"""
+    from wyckoff.market_dashboard import build_market_resonance, clear_cache
+    clear_cache()
+    val = build_market_resonance()
+    assert val is None or (
+        "days" in val and "agree" in val and "today_pct" in val and "tone" in val)
 
 
 def test_fetch_market_fund_flow_offline():
@@ -275,8 +285,31 @@ def test_dashboard_widget_renders_charts_with_data():
             ],
             "total_yi": -82.0,
         },
+        "emotion": {
+            "date": "2026-09-08", "phase": "发酵",
+            "ladder": {1: 55, 2: 12, 3: 3, 4: 3}, "max_board": 4,
+            "dt_cnt": 0, "zb_cnt": 37,
+            "zt_by_sector": [("农化制品", 8), ("出版", 4)],
+            "premium": 2.89,
+        },
+        "amount": {
+            "date": "2026-09-08", "total_yi": 19603,
+            "sh_yi": 9156, "sz_yi": 10448, "vol_pct": 19,
+        },
+        "resonance": {
+            "days": ["2026-09-01", "2026-09-08"],
+            "agree": [50, 33], "today_pct": 33, "tone": "分歧",
+            "n_indices": 6,
+        },
+        "divergence": {
+            "phase": "区间整理", "bull": True,
+            "rows": [{"name": "房地产", "pct": -1.9, "tone": "bearish",
+                      "score": 60, "div": "落后", "dir": "弱"}],
+        },
     }
     w = DashboardWidget(font_size=11)
     w.set_data(fake)
     w.apply_theme()
+    assert "发酵" in w._emo_phase.text()
+    assert "19,603" in w._emo_amount.text()
     w.deleteLater()
