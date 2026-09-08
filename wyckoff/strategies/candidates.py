@@ -158,7 +158,7 @@ CANDIDATE_PRODUCERS = {
 
 
 def scan_individual(code, df=None, min_conf=90, gates_ok=None,
-                    name="", event_types=None):
+                    name="", event_types=None, strategies=None):
     """对单只股票按优先序产出模拟盘候选 (纪律→价值吸筹→左侧买点)。
 
     这是模拟盘选股在管理器中的唯一实现; paper.py 不再内置任何选股逻辑。
@@ -168,6 +168,9 @@ def scan_individual(code, df=None, min_conf=90, gates_ok=None,
     event_types: 纪律口径的强多头事件集 (默认 LONG_EVENT_TYPES;
                  paper.py 可传其实证收紧后的 {Spring,ST,LPS})。
     gates_ok: 大盘门禁预判 (all_pass, reason) 或 None (默认视为通过)。
+    strategies: 可选策略 key 子集 (如 ("long_buy_left",)); None/空表示全策略
+                按 STRATEGY_ORDER 并线。用于「单策略扫描」模式, 避免优先序
+                掩盖低优先级策略的候选。
     返回: 候选 dict (含 "gated": 是否受板块/资金流门禁管束) 或 None。
     """
     # 数据源/指标模块在调用时按属性解析 (单测会 monkeypatch 模块属性),
@@ -196,7 +199,9 @@ def scan_individual(code, df=None, min_conf=90, gates_ok=None,
         "min_conf": min_conf,
         "event_types": event_types if event_types is not None else LONG_EVENT_TYPES,
     }
-    for key in STRATEGY_ORDER:
+    order = STRATEGY_ORDER if not strategies else \
+        [k for k in STRATEGY_ORDER if k in strategies]
+    for key in order:
         cand = CANDIDATE_PRODUCERS[key](ctx)
         if cand is None:
             continue
