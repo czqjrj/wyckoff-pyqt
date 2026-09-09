@@ -34,7 +34,14 @@ for _libname in ('libssl.so.3', 'libcrypto.so.3'):
 if _CACERT:
     binaries.append((_CACERT, 'certifi'))
 
-datas = []
+datas = [
+    # ui/main_window._app_icon: 打包态从 _MEIPASS 根加载应用图标
+    (os.path.join(_ROOT, 'ui', 'wyckoff.png'), '.'),
+    # paths.STOCK_NAMES_FILE: 本地股票名称表 (打包态位于 _MEIPASS 根)
+    (os.path.join(_ROOT, 'wyckoff_stock_names.json'), '.'),
+    # paths.HELP_FILE: 应用内置帮助页 (打包态位于 _MEIPASS/docs)
+    (os.path.join(_ROOT, 'docs', 'help.html'), 'docs'),
+]
 hiddenimports = ['certifi']
 hookspath = []
 hooksconfig = {}
