@@ -2092,8 +2092,15 @@ def step(st, df_by_code):
         df = df_by_code.get(pos["symbol"])
         if df is None or len(df) == 0:
             continue
-        last = float(df["close"].iloc[-1])
+        bar_day = str(df["day"].iloc[-1]) or ""
         entry = float(pos["buy_px"])
+        entry_day = str(pos.get("entry_day") or "")
+        # 开仓当日 (最新 K 线交易日 == 买入触发日): 用成交价做基准标记,
+        # 避免"买入前一日收盘价"对刚开的仓造成假浮亏; 次一交易日自动切换真实收盘价。
+        if bar_day and entry_day and bar_day[:10] == entry_day[:10]:
+            last = entry
+        else:
+            last = float(df["close"].iloc[-1])
         ret = last / entry - 1
         pos["last"] = round(last, 3)
         pos["last_ret"] = round(float_ret(entry, last), 4)
@@ -2125,7 +2132,6 @@ def step(st, df_by_code):
         # 卖出判定 (任一触发); 持仓 K 数按"交易日"推进: 仅当行情 K 线交易日
         # 发生变化才 +1, 避免同一天多周期被重复计入 (曾出现 20 周期≈10 小时即
         # "到期"的高估)。
-        bar_day = str(df["day"].iloc[-1])
         if bar_day and pos.get("counted_day") != bar_day:
             pos["counted_day"] = bar_day
             pos["entry_bars"] = int(pos.get("entry_bars", 0)) + 1
@@ -2786,12 +2792,22 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         if reuse:
             cand = st["candidates"]
         else:
+            # 与 run_scan 一致地计为一次全市场扫描 (scan_count + scan 日志),
+            # 否则"周期内嵌选股"命中的买入在日志里扫描次数恒为 0, 误导核查。
+            st["scan_count"] = st.get("scan_count", 0) + 1
             cand = pick_candidates(universe=universe, min_conf=min_conf,
                                    strategies=strategies, progress=progress)
             _now = datetime.now()
             st["last_scan_time"] = _now.isoformat()
             st["next_scan_time"] = (
                 _now + timedelta(minutes=_SCAN_COOLDOWN_MIN)).isoformat()
+            try:
+                scanned = len(_mainboard_universe(universe))
+                paper_log.log_scan(
+                    scan_count=st["scan_count"], codes_scanned=scanned,
+                    candidates_found=len(cand), candidates=cand)
+            except Exception:
+                pass
     else:
         cand = candidates
     st["candidates"] = cand
@@ -2842,7 +2858,19 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         if order is None:
             continue
         order["day"] = str(e.get("day") or "")
-        fill_buy(st, order)
+        _filled, _msg = fill_buy(st, order)
+        if _filled is not None and e.get("trigger", "above") == "above":
+            # 直接成交 = 上方 buy_price 自动条件单触发 (below 回踩单由 _check_conditions
+            # 撮合并已在那边记录 condition 事件); 这里补一条, 让当日日志"买入/条件单"
+            # 联动可查 (此前 run_cycle 内嵌选股直接成交只记 buy, 条件单计数恒为 0)。
+            try:
+                paper_log.log_condition_fired(
+                    code, e.get("name", ""), "buy_price",
+                    e.get("auto_cond_price") or float(e.get("last", 0) or 0),
+                    float(e.get("last", 0) or 0), action="买入",
+                    reason=f"自动:{e.get('strategy', '')}")
+            except Exception:
+                pass
     # 3) 步进+平仓判定 (持仓 + 待撮合用最新行情)
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
