@@ -7,7 +7,7 @@
   - 四个数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
 """
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTime, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QTableWidgetItem,
     QTabWidget,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -159,14 +160,23 @@ _SCAN_MODES = (
 
 # ── 后台线程 ──────────────────────────────────────────────
 class _CycleThread(QThread):
-    """后台执行 run_cycle (连行情筛选+下单+卖出)。"""
+    """后台执行 run_cycle (连行情筛选+下单+卖出)。
+
+    status 信号: "start" = 周期已启动 (进度条约 busy);
+                "scan"  = 正在执行全市场重扫 (progress 首次回调时触发, 仅重扫场景);
+                "done"  = 周期结束 (run 内最后一次 emit, 收尾用)。
+    progress: 全市场重扫进度 (0-100, 仅重扫时上报)。
+    """
     done = pyqtSignal(object)
+    status = pyqtSignal(str)
+    progress = pyqtSignal(int)
 
     def __init__(self, parent=None, settings=None, mode=None, candidates=None):
         super().__init__(parent)
         self._settings = settings
         self._mode = mode
         self._candidates = candidates
+        self._scanning = [False]
 
     def run(self):
         from wyckoff._log import log_exc
@@ -181,11 +191,25 @@ class _CycleThread(QThread):
             strategies = (STRATEGY_VALUE_ACC,)
         elif self._mode == "long_buy_left":
             strategies = (STRATEGY_LONG_LEFT,)
+
+        def _cb(done, total, code):
+            # progress 只在真正全市场重扫时被 pick_candidates 调用 →
+            # 首次回调即标识"正在扫描", 未重扫 (复用候选/传入候选) 不触发。
+            if not self._scanning[0]:
+                self._scanning[0] = True
+                self.status.emit("scan")
+            if total > 0:
+                pct = int(round(100.0 * min(done, total) / total))
+                self.progress.emit(min(100, max(0, pct)))
+
+        self.status.emit("start")
         try:
-            st = run_cycle(settings=settings, candidates=self._candidates, strategies=strategies)
+            st = run_cycle(settings=settings, candidates=self._candidates,
+                           strategies=strategies, progress=_cb)
         except Exception as e:
             log_exc("模拟盘周期执行失败", e)
             st = {"error": str(e)}
+        self.status.emit("done")
         self.done.emit(st)
 
 
@@ -202,7 +226,7 @@ class _ScanThread(QThread):
 
     def run(self):
         from wyckoff._log import log_exc
-        from wyckoff.paper import apply_paper_params, load_state, run_scan
+        from wyckoff.paper import PAPER_BUSY_MSG, apply_paper_params, load_state, run_scan
         apply_paper_params(dict(self._settings or {}))
         _prev = [None]
 
@@ -221,6 +245,8 @@ class _ScanThread(QThread):
             result = run_scan(st, scan_type=self._mode or "discipline",
                               n_codes=self._n_codes, progress=_cb)
             st["last_scan_result"] = result
+            if result == PAPER_BUSY_MSG:
+                st["skipped"] = True
         except Exception as e:
             log_exc("模拟盘扫描失败", e)
             st = {"error": str(e)}
@@ -447,6 +473,44 @@ class PaperWindow(QDialog):
         hb_scan.addWidget(self.lbl_scan_result)
         hb_scan.addStretch(1)
         root.addLayout(hb_scan)
+
+        # 定时任务行: 安装每日定点扫描/周期 (Windows schtasks / Linux cron), 不依赖UI常驻
+        hb_cron = QHBoxLayout()
+        hb_cron.setSpacing(8)
+        hb_cron.addWidget(_flabel("定时任务"))
+        self.time_cron = QTimeEdit()
+        self.time_cron.setDisplayFormat("HH:mm")
+        self.time_cron.setTime(QTime(8, 59))
+        self.time_cron.setToolTip(
+            "起始钟表时间 (24小时制, 默认 08:59)\n"
+            "每日任务=执行时刻; 间隔任务=当日起始时刻")
+        hb_cron.addWidget(self.time_cron)
+        self.cb_cron_freq = QComboBox()
+        self.cb_cron_freq.addItems(
+            ["每30分钟", "每15分钟", "每60分钟", "每日一次"])
+        self.cb_cron_freq.setToolTip(
+            "触发频率: 每 N 分钟重复扫描 (Windows schtasks /MINUTE, "
+            "Linux cron */N), 或每日定点一次")
+        hb_cron.addWidget(self.cb_cron_freq)
+        self.btn_cron_scan = _ghost_btn("安装定时扫描")
+        self.btn_cron_scan.setToolTip("按所选频率执行全市场扫描 (run_scan)")
+        self.btn_cron_scan.clicked.connect(lambda: self._on_cron(scan=True))
+        hb_cron.addWidget(self.btn_cron_scan)
+        self.btn_cron_cycle = _ghost_btn("安装定时周期")
+        self.btn_cron_cycle.setToolTip(
+            "按所选频率执行完整周期 (筛选+下单+卖出); 冷却已过则自动重扫")
+        self.btn_cron_cycle.clicked.connect(lambda: self._on_cron(scan=False))
+        hb_cron.addWidget(self.btn_cron_cycle)
+        self.btn_cron_remove = _ghost_btn("卸载定时任务")
+        self.btn_cron_remove.setToolTip("移除已安装的模拟盘定时任务")
+        self.btn_cron_remove.clicked.connect(self._on_cron_remove)
+        hb_cron.addWidget(self.btn_cron_remove)
+        self.lbl_cron = QLabel("未安装")
+        self.lbl_cron.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:12px;")
+        hb_cron.addWidget(self.lbl_cron)
+        hb_cron.addStretch(1)
+        root.addLayout(hb_cron)
 
         # 策略参数配置
         root.addWidget(self._build_config_group())
@@ -971,7 +1035,10 @@ class PaperWindow(QDialog):
         n = self.sp_scan_n.value()
         self.btn_scan.setEnabled(False)
         self.btn_scan.setText("扫描中 ...")
-        self.lbl_scan_result.setText("")
+        self.lbl_scan_result.setStyleSheet(
+            f"color:{theme.C_AMBER};font-size:12px;font-weight:bold;")
+        self.lbl_scan_result.setText("模拟盘正在扫描 ...")
+        self._set_scan_badge(True, "模拟盘正在扫描 ...")
         self.pb_scan.setRange(0, 0)  # 进度未知 → busy 模式
         self.pb_scan.setValue(0)
         self._scan_thread = _ScanThread(self, mode=mode, n_codes=n)
@@ -982,7 +1049,8 @@ class PaperWindow(QDialog):
     def _on_scan_progress(self, pct):
         self.pb_scan.setRange(0, 100)
         self.pb_scan.setValue(pct)
-        self.pb_scan.setFormat("%p%")
+        self.pb_scan.setFormat(f"扫描 {pct}%")
+        self.lbl_scan_result.setText(f"模拟盘正在扫描: {pct}% ...")
 
     def _on_scan_done(self, st):
         self.btn_scan.setEnabled(True)
@@ -991,11 +1059,18 @@ class PaperWindow(QDialog):
         self.pb_scan.setRange(0, 1)
         self.pb_scan.setValue(1)
         self.pb_scan.setFormat("完成")
+        self.lbl_scan_result.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:12px;")
+        self._set_scan_badge(False)
         ok = False
         if isinstance(st, dict):
             if st.get("error"):
                 self.lbl_scan_result.setText(
                     f"扫描失败: {st['error']}")
+            elif st.get("skipped"):
+                # 系统定时任务/界面另一线程正持有跨进程锁 → 本次未执行
+                self.lbl_scan_result.setText(
+                    st.get("last_scan_result", "另一实例正在执行, 已跳过"))
             else:
                 self.lbl_scan_result.setText(
                     st.get("last_scan_result", "扫描完成"))
@@ -1007,6 +1082,45 @@ class PaperWindow(QDialog):
             mode = self._current_mode()
             self._run_cycle_thread(mode,
                                    candidates=st["candidates"])
+
+    # ── 定时任务 (Windows schtasks / Linux cron) ──────────────
+    def _on_cron(self, scan=False):
+        """按面板所选频率安装扫描/周期定时任务 (跨平台), 弹窗明确告知。"""
+        from PyQt6.QtWidgets import QMessageBox
+        from wyckoff import paper_cron
+        at = self.time_cron.time().toString("HH:mm")
+        interval = {"每30分钟": 30, "每15分钟": 15, "每60分钟": 60,
+                    "每日一次": 0}.get(self.cb_cron_freq.currentText(), 30)
+        try:
+            msg = paper_cron.install_daily(at, scan=scan, interval=interval)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "安装定时任务",
+                f"安装失败: {e}\n"
+                f"(Windows 需支持 schtasks; Linux 需可写 crontab)")
+            return
+        self.lbl_cron.setText(msg)
+        self.lbl_cron.setStyleSheet(
+            f"color:{theme.C_AMBER};font-size:12px;font-weight:bold;")
+        QMessageBox.information(
+            self, "安装定时任务", f"{msg}\n\n由系统调度执行, 不依赖本程序常驻; "
+            f"卸载用下方按钮或 `python -m wyckoff.paper_cron --uninstall`。",
+            QMessageBox.StandardButton.Ok)
+
+    def _on_cron_remove(self):
+        """卸载已安装的每日定时任务。"""
+        from PyQt6.QtWidgets import QMessageBox
+        from wyckoff import paper_cron
+        try:
+            msg = paper_cron.install_daily(remove=True)
+        except Exception as e:
+            QMessageBox.warning(self, "卸载定时任务", f"卸载失败: {e}")
+            return
+        self.lbl_cron.setText("未安装")
+        self.lbl_cron.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:12px;")
+        QMessageBox.information(self, "卸载定时任务", msg,
+                                QMessageBox.StandardButton.Ok)
 
     def _update_scan_info(self, st=None):
         from wyckoff.paper import load_state
@@ -1040,18 +1154,75 @@ class PaperWindow(QDialog):
         self.btn_cycle.setText("周期执行中 ...")
         self._thread = _CycleThread(self, settings=self._settings, mode=mode,
                                     candidates=candidates)
+        self._thread.status.connect(self._on_cycle_status)
+        self._thread.progress.connect(self._on_cycle_scan_progress)
         self._thread.done.connect(self._on_cycle_done)
         self._thread.finished.connect(self._on_thread_finished)
         self._thread.start()
+
+    def _set_scan_badge(self, on, msg=""):
+        """扫描进行中时, 在主窗口"模拟盘"Tab 标签与状态栏打显眼标记, 让用户
+        无需切到该页就能看到"模拟盘正在扫描"。结束 (on=False) 时恢复原样。"""
+        try:
+            mw = self.parent()
+            tabs = getattr(mw, "tabs", None)
+            if tabs is not None:
+                for i in range(tabs.count()):
+                    if tabs.widget(i) is self:
+                        tabs.setTabText(
+                            i, "模拟盘 ● 扫描中" if on else "模拟盘")
+            bar = getattr(mw, "statusBar", None)
+            if callable(bar):
+                try:
+                    bar = bar()
+                except Exception:
+                    bar = None
+            if bar is not None:
+                bar.showMessage(msg or ("模拟盘正在扫描 ..." if on else ""))
+        except Exception:
+            pass
+
+    def _on_cycle_status(self, s):
+        """周期/扫描状态提示: 让用户明确看到"模拟盘正在扫描"。"""
+        if s == "scan":
+            self.pb_scan.setRange(0, 0)
+            self.pb_scan.setValue(0)
+            self.lbl_scan_result.setStyleSheet(
+                f"color:{theme.C_AMBER};font-size:12px;font-weight:bold;")
+            self.lbl_scan_result.setText("模拟盘正在扫描 (全市场选股进行中) ...")
+            self._set_scan_badge(True, "模拟盘正在扫描 ...")
+        elif s == "done":
+            self.pb_scan.setRange(0, 1)
+            self.pb_scan.setValue(1)
+            self.pb_scan.setFormat("周期完成")
+            self.lbl_scan_result.setStyleSheet(
+                f"color:{theme.C_MUTED};font-size:12px;")
+            self._set_scan_badge(False)
+
+    def _on_cycle_scan_progress(self, pct):
+        self.pb_scan.setRange(0, 100)
+        self.pb_scan.setValue(pct)
+        self.pb_scan.setFormat(f"扫描 {pct}%")
+        self.lbl_scan_result.setStyleSheet(
+            f"color:{theme.C_AMBER};font-size:12px;font-weight:bold;")
+        self.lbl_scan_result.setText(f"模拟盘正在扫描: {pct}% (全市场选股 3116 只) ...")
 
     def _on_thread_finished(self):
         self.btn_cycle.setEnabled(True)
         self.btn_cycle.setText("执行一个周期 (筛选+下单+卖出)")
 
     def _on_cycle_done(self, st):
+        if st is None:
+            # 跨进程锁被系统定时任务/另一线程占用 → 本次周期未执行
+            self.summary.setText(
+                "另一实例正在执行 (系统定时任务或界面), 本次周期已跳过")
+            self.lbl_scan_result.setText("另一实例正在执行, 本次周期已跳过")
+            return
         if isinstance(st, dict) and st.get("error"):
             self.summary.setText(f"周期执行失败: {st['error']}")
             return
+        self.lbl_scan_result.setStyleSheet(
+            f"color:{theme.C_MUTED};font-size:12px;")
         # 展示周期结果 (自动买入后的可见性)
         try:
             from wyckoff.paper import load_state

@@ -2675,8 +2675,81 @@ def _scan_due(st):
         return True
 
 
+PAPER_BUSY_MSG = ("另一实例 (界面或系统定时任务) 正在执行中, 本次已跳过")
+
+
+def _acquire_paper_lock():
+    """跨进程互斥锁 (Windows msvcrt / POSIX fcntl)。
+
+    UI 内的自动周期线程与系统定时任务 (schtasks/cron) 会并发触发 run_scan /
+    run_cycle, 两者争用同一份 wx_paper.json。这里保证同一时刻只允许一个执行者
+    进入; 拿不到锁 (已被占用) 返回 None。进程崩溃/被杀时 OS 自动释放锁,
+    不会残留卡死后续调度。
+    """
+    fh = None
+    try:
+        from .paths import DATA_DIR as _DD
+        lock_path = os.path.join(_DD, "wx_paper.lock")
+        os.makedirs(_DD, exist_ok=True)
+        fh = open(lock_path, "a+b")
+        fh.seek(0)
+        fh.truncate(1)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except Exception:
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:
+                pass
+        return None
+
+
+def _release_paper_lock(fh):
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    finally:
+        try:
+            fh.close()
+        except Exception:
+            pass
+
+
+def _paper_locked(fail=None):
+    """装饰器: 只在实际拿到跨进程锁时才执行 fn; 锁被占用时返回 fail。"""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            fh = _acquire_paper_lock()
+            if fh is None:
+                return fail() if callable(fail) else fail
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _release_paper_lock(fh)
+        return wrapper
+
+    return deco
+
+
+@_paper_locked(fail=None)
 def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
-              force_scan=False, strategies=None):
+              force_scan=False, strategies=None, progress=None):
     """无头自动运行一个周期: 筛选→下单→步进→统计。返回统计。
 
     供 cron / 调度线程 / 手动触发。每周期持仓 K 数 +1,
@@ -2689,6 +2762,8 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     重扫会造成选股覆盖与节流), 用 force_scan=True 强制立即重扫。
     strategies: 可选策略 key 子集 (与 run_scan 单策略模式同语义), 仅在需要
     重扫时透传给 pick_candidates; 复用候选/传入候选时过滤由调用方保证。
+    progress: 可选扫描进度回调 (done, total, code), 仅在真正执行全市场重扫时
+    上报; 复用候选/传入候选时不触发 (供 UI 区分"正在扫描"与"仅执行周期")。
     """
     from .datasource import fetch_kline
     from .indicators import add_indicators
@@ -2712,7 +2787,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
             cand = st["candidates"]
         else:
             cand = pick_candidates(universe=universe, min_conf=min_conf,
-                                   strategies=strategies)
+                                   strategies=strategies, progress=progress)
             _now = datetime.now()
             st["last_scan_time"] = _now.isoformat()
             st["next_scan_time"] = (
@@ -2801,6 +2876,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     return stats(st)
 
 
+@_paper_locked(fail=PAPER_BUSY_MSG)
 def run_scan(st, scan_type='', n_codes=6000, progress=None):
     """运行扫描并更新状态。
 
