@@ -167,17 +167,54 @@ def _write_records(path, state, key_fn):
 
 
 def _read_paper():
-    return _load_json(PAPER_FILE, None)
+    from .paper import _release_paper_lock
+    fh = _paper_lock()
+    try:
+        return _load_json(PAPER_FILE, None)
+    finally:
+        if fh is not None:
+            _release_paper_lock(fh)
 
 
 def _write_paper(v):
-    if v is None:
-        if os.path.exists(PAPER_FILE):
-            os.remove(PAPER_FILE)
-            return True
-        return False
-    atomic_write_json(PAPER_FILE, v)
-    return True
+    """整包写回 wx_paper.json, 纳入模拟盘跨进程锁, 避免覆盖进行中的周期。
+
+    返回 (changed: bool, skipped: bool)。skipped=True 表示另一实例 (界面周期
+    或系统定时任务) 正在写账户状态, 本轮同步跳过了本地写回 —— 文件保留
+    最新运行结果, 待下次同步/周期完成后再与云端对齐。
+    """
+    from .paper import _release_paper_lock
+    fh = _paper_lock()
+    if fh is None:
+        return False, True
+    try:
+        if v is None:
+            if os.path.exists(PAPER_FILE):
+                os.remove(PAPER_FILE)
+                return True, False
+            return False, False
+        atomic_write_json(PAPER_FILE, v)
+        return True, False
+    finally:
+        _release_paper_lock(fh)
+
+
+def _paper_lock(timeout=3.0):
+    """拿模拟盘跨进程锁, 最多等待 timeout 秒。返回句柄; 超时返回 None。
+
+    说明: run_cycle/run_scan 持锁期间 (尤其全市场扫描可能十几分钟) 会让
+    "账户同步"的 paper 写回短暂让位, 而不是覆盖正在保存的周期结果。
+    """
+    from .paper import _acquire_paper_lock, _release_paper_lock
+    deadline = time.time() + timeout
+    while True:
+        fh = _acquire_paper_lock()
+        if fh is not None:
+            return fh
+        remain = deadline - time.time()
+        if remain <= 0:
+            return None
+        time.sleep(min(0.1, remain))
 
 
 # type -> (read_raw, write_state, key_fn)
@@ -343,6 +380,7 @@ def apply_profile(bundle):
     if not isinstance(bundle, dict) or "types" not in bundle:
         return {"error": "无效的同步包"}
     changed = False
+    paper_skipped = False
     for tname in TYPES:
         items = (bundle.get("types", {}).get(tname, {}) or {}).get("items", {})
         _, writer, key_fn = _READERS[tname]
@@ -353,13 +391,15 @@ def apply_profile(bundle):
         elif tname == "paper":
             rec = items.get("paper")
             if rec is not None:
-                changed |= writer(rec.get("v"))
+                ch, sk = writer(rec.get("v"))
+                changed |= ch
+                paper_skipped |= sk
         else:
             st = {k: (v if isinstance(v, dict) else {"v": v, "ts": 0})
                   for k, v in items.items()}
             changed |= writer(st)
     _persist_shadow(bundle)
-    return {"changed": changed}
+    return {"changed": changed, "paper_skipped": paper_skipped}
 
 
 def _persist_shadow(bundle):

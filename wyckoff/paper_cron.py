@@ -34,7 +34,10 @@ def _sched_command(extra=""):
         cmd = f'"{sys.executable}" paper_cron'
     else:
         proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        cmd = f'cd "{proj}" && "{sys.executable}" -m wyckoff.paper_cron'
+        # Windows 计划任务默认工作目录是 System32, 跨盘必须 `cd /d`,
+        # 否则 `cd "E:\..."` 不切盘 → python 从 System32 启动, -m 找不到 wyckoff 包。
+        cd = "cd /d" if os.name == "nt" else "cd"
+        cmd = f'{cd} "{proj}" && "{sys.executable}" -m wyckoff.paper_cron'
     return (cmd + (" " + extra) if extra else cmd)
 
 
@@ -126,7 +129,8 @@ def install_cron(at=DEFAULT_AT, remove=False, scan=False, force_scan=False,
     lines = [ln for ln in _cron_existing().splitlines()
              if "wyckoff.paper_cron" not in ln]
     if not remove:
-        extra = " --scan" if scan else (" --force-scan" if force_scan else "")
+        # 默认(不带 scan/force-scan) = 周期任务, 需带 --cycle (Linux cron 同逻辑)。
+        extra = " --scan" if scan else (" --force-scan" if force_scan else " --cycle")
         if interval > 0:
             # 无法在 cron 里自定义起始分钟 (*/N 固定从整点对位), 忽略 at。
             line = f"*/{max(1, int(interval))} * * * * " \
@@ -157,10 +161,13 @@ def install_task(at=DEFAULT_AT, remove=False, scan=False, force_scan=False,
         except OSError:
             pass
         return
-    extra = " --scan" if scan else (" --force-scan" if force_scan else "")
+    # 默认(不带 scan/force-scan) = 周期任务: 必须带 --cycle,
+    # 否则计划任务启动的 `python -m wyckoff.paper_cron` 无参数只打印帮助即退出。
+    extra = " --scan" if scan else (" --force-scan" if force_scan else " --cycle")
     bat = os.path.join(DATA_DIR, "wx_paper_daily.bat")
+    log = os.path.join(DATA_DIR, "wx_paper_cron.log")
     with open(bat, "w", encoding="utf-8") as f:
-        f.write(f"@echo off\n{_sched_command(extra)}\n")
+        f.write(f"@echo off\n{_sched_command(extra)} >> \"{log}\" 2>&1\n")
     args = ["schtasks", "/Create", "/TN", TASK_NAME, "/TR", bat, "/F"]
     if interval > 0:
         args += ["/SC", "MINUTE", "/MO", str(max(1, int(interval))),

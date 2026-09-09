@@ -1513,6 +1513,19 @@ class PaperWindow(QDialog):
             if th is not None and th.isRunning():
                 th.wait(wait_ms)
 
+    def showEvent(self, ev):
+        """切回"模拟盘"页 (或从后台恢复显示) 时, 立即重读磁盘状态。
+
+        后台定时任务 (schtasks/cron) 可能在界面空闲期写入了新持仓/候选,
+        而行情静止时 qt_timer 不会自动触发刷新 → 这里保证用户一回到本页
+        就看到系统定时任务的最新结果。
+        """
+        super().showEvent(ev)
+        try:
+            QTimer.singleShot(0, self.refresh)
+        except Exception:
+            pass
+
     def refresh(self):
         from wyckoff.paper import apply_paper_params, load_state, stats
         st = load_state()
