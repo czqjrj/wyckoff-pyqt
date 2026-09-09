@@ -33,16 +33,18 @@
 
 ## 使用说明
 
-运行策略分析：
+启动桌面应用：
 ```bash
-python wyckoff_final_three_strategies.py
+python wyckoff_ui.py
 ```
 
 ## 项目结构
 
 - `wyckoff/` - 核心交易系统代码
+- `ui/` - 桌面 GUI 界面
+- `sync/` - 多机同步与云服务
+- `scripts/` - 回测与参数校准工具
 - `strategy_analysis_report.md` - 策略分析报告
-- `wyckoff_final_three_strategies.py` - 策略管理系统
 
 ## 策略管理
 
