@@ -181,7 +181,11 @@ class _CycleThread(QThread):
     def run(self):
         from wyckoff._log import log_exc
         from wyckoff.paper import run_cycle
-        from wyckoff.strategies.constants import STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT
+        from wyckoff.strategies.constants import (
+            STRATEGY_DISCIPLINE,
+            STRATEGY_LONG_LEFT,
+            STRATEGY_VALUE_ACC,
+        )
         settings = dict(self._settings or {})
         # 根据 mode 推断 strategies 子集
         strategies = None
@@ -1087,6 +1091,7 @@ class PaperWindow(QDialog):
     def _on_cron(self, scan=False):
         """按面板所选频率安装扫描/周期定时任务 (跨平台), 弹窗明确告知。"""
         from PyQt6.QtWidgets import QMessageBox
+
         from wyckoff import paper_cron
         at = self.time_cron.time().toString("HH:mm")
         interval = {"每30分钟": 30, "每15分钟": 15, "每60分钟": 60,
@@ -1110,6 +1115,7 @@ class PaperWindow(QDialog):
     def _on_cron_remove(self):
         """卸载已安装的每日定时任务。"""
         from PyQt6.QtWidgets import QMessageBox
+
         from wyckoff import paper_cron
         try:
             msg = paper_cron.install_daily(remove=True)

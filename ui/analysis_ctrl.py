@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 class AnalysisController:
     """分析控制器: 管理分析启动/完成/错误处理/缓存。
-    
+
     用法:
         ctrl = AnalysisController(main_window, settings, chart_manager)
         ctrl.start_analysis(code, force_refresh=False)

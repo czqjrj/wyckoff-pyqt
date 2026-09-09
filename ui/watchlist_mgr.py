@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 class WatchlistManager:
     """自选股管理器: 管理自选股列表的加载/显示/实时更新/右键菜单。
-    
+
     用法:
         mgr = WatchlistManager(main_window, settings)
         mgr.reload()  # 加载自选股列表

@@ -86,8 +86,8 @@ class WyckoffStrategy(bt.Strategy):
         if "day" in wdf.columns:
             wdf["day"] = pd.to_datetime(wdf["day"])
         # 重新计算指标 (与 backtest_events/backtest_vsa 行为一致)
-        from wyckoff.indicators import add_indicators, find_pivots
         from wyckoff.events import detect_all
+        from wyckoff.indicators import add_indicators, find_pivots
         wdf = add_indicators(wdf, symbol=self.p.code)
         wpivots = find_pivots(wdf, order=6)
         wevents = detect_all(wdf, wpivots)

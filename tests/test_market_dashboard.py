@@ -5,7 +5,6 @@
 """
 import pytest
 
-
 # ── 结构 ──
 
 def test_dash_indices_structure():
@@ -33,7 +32,7 @@ def test_build_dashboard_data_offline():
 
 def test_fetch_breadth_offline_none_or_dict():
     """离线时市场广度为 None 或合法结构。"""
-    from wyckoff.market_dashboard import fetch_market_breadth, clear_cache
+    from wyckoff.market_dashboard import clear_cache, fetch_market_breadth
     clear_cache()
     val = fetch_market_breadth()
     assert val is None or isinstance(val, dict)
@@ -56,7 +55,7 @@ def test_breadth_falls_back_to_legu(monkeypatch):
 
 
 def test_fetch_sector_ranking_offline_list():
-    from wyckoff.market_dashboard import fetch_sector_ranking, clear_cache
+    from wyckoff.market_dashboard import clear_cache, fetch_sector_ranking
     clear_cache()
     val = fetch_sector_ranking()
     assert isinstance(val, list)
@@ -91,21 +90,21 @@ def test_build_sector_heatmap_sorted(monkeypatch):
 
 
 def test_fetch_north_offline_list():
-    from wyckoff.market_dashboard import fetch_north_flow, clear_cache
+    from wyckoff.market_dashboard import clear_cache, fetch_north_flow
     clear_cache()
     val = fetch_north_flow()
     assert isinstance(val, list)
 
 
 def test_fetch_zt_pool_offline_list():
-    from wyckoff.market_dashboard import fetch_limit_up_pool, clear_cache
+    from wyckoff.market_dashboard import clear_cache, fetch_limit_up_pool
     clear_cache()
     val = fetch_limit_up_pool()
     assert isinstance(val, list) or val is None
 
 
 def test_clear_cache():
-    from wyckoff.market_dashboard import fetch_market_breadth, clear_cache
+    from wyckoff.market_dashboard import clear_cache, fetch_market_breadth
     clear_cache()
     fetch_market_breadth()
     assert clear_cache() is None
@@ -135,7 +134,7 @@ def test_resonance_offline_none_or_structure():
 
 def test_fetch_market_fund_flow_offline():
     """离线时主力资金为 None 或合法结构。"""
-    from wyckoff.market_dashboard import fetch_market_fund_flow, clear_cache
+    from wyckoff.market_dashboard import clear_cache, fetch_market_fund_flow
     clear_cache()
     val = fetch_market_fund_flow()
     if val is None:
@@ -172,8 +171,7 @@ def test_index_compare_structure():
 
 
 def test_sector_flow_chart_list():
-    from wyckoff.market_dashboard import (
-        build_sector_flow_chart, clear_cache)
+    from wyckoff.market_dashboard import build_sector_flow_chart, clear_cache
     clear_cache()
     rows = build_sector_flow_chart()
     assert isinstance(rows, list)
@@ -187,7 +185,7 @@ def test_dashboard_widget_builds_without_data():
     """仪表盘控件可无数据构建, set_data({}) 不抛异常。"""
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
+    _ = QApplication.instance() or QApplication([])
     from ui.dashboard_widget import DashboardWidget
     w = DashboardWidget(font_size=11)
     w.set_data({})
@@ -200,7 +198,7 @@ def test_dashboard_widget_builds_without_data():
 def test_dashboard_widget_set_empty_and_theme():
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
+    _ = QApplication.instance() or QApplication([])
     from ui.dashboard_widget import DashboardWidget
     from wyckoff.market_dashboard import build_dashboard_data, clear_cache
     clear_cache()
@@ -215,12 +213,15 @@ def test_chart_widgets_render_offline():
     """全部图表控件可离线构建+渲染 (数据为 None / {} / [] 时不抛异常)。"""
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
-    from ui.dash_charts import (IndexCompareChart, SectorFlowChart,
-                                SectorHeatmap, SseKlineChart)
+    _ = QApplication.instance() or QApplication([])
+    from ui.dash_charts import IndexCompareChart, SectorFlowChart, SectorHeatmap, SseKlineChart
     from wyckoff.market_dashboard import (
-        build_index_compare, build_sector_flow_chart, build_sector_heatmap,
-        build_sse_chart, clear_cache)
+        build_index_compare,
+        build_sector_flow_chart,
+        build_sector_heatmap,
+        build_sse_chart,
+        clear_cache,
+    )
     clear_cache()
     c1 = build_sse_chart()
     c2 = build_index_compare()
@@ -249,7 +250,7 @@ def test_chart_widgets_render_offline():
 def test_dashboard_widget_renders_charts_with_data():
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication([])
+    _ = QApplication.instance() or QApplication([])
     from ui.dashboard_widget import DashboardWidget
     # 伪造真实图表数据, 验证控件分支渲染不抛异常
     fake = {

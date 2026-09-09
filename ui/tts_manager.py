@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 class TtsManager(QObject):
     """语音播报管理器: 统一管理 K线标签 / AI解读 的 TTS 播放。
-    
+
     用法:
         tts = TtsManager(main_window, settings)
         tts.sync_btn()  # 同步按钮状态

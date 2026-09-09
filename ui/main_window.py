@@ -1311,7 +1311,7 @@ class MainWindow(QMainWindow):
             if ok:
                 # 自动执行一次账户私有数据同步
                 try:
-                    res = psync.sync_once()
+                    psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal, 可在菜单里手动触发
                 # 同步后刷新自选股 UI, 确保私有数据(自选/笔记/组合)及时展示
@@ -1329,7 +1329,7 @@ class MainWindow(QMainWindow):
             if ok:
                 # 注册成功后自动执行一次账户数据同步
                 try:
-                    res = psync.sync_once()
+                    psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal
                 dlg.accept()

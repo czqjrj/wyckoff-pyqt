@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 class AutoScheduler:
     """自动扫描调度器: 管理自选股定时扫描 / 启动即扫描。
-    
+
     用法:
         scheduler = AutoScheduler(main_window, settings)
         scheduler.schedule()  # 启动定时扫描

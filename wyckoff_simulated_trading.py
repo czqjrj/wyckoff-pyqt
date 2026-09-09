@@ -188,7 +188,7 @@ class SimulatedTradingSystem:
     def sync_to_account(self):
         """将模拟盘数据同步到当前用户账户"""
         try:
-            with open(self._account_path, "r", encoding="utf-8") as f:
+            with open(self._account_path, encoding="utf-8") as f:
                 account = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             account = {"accounts": {}, "current": None}
@@ -233,7 +233,7 @@ class SimulatedTradingSystem:
     def sync_from_account(self):
         """从当前用户账户加载模拟盘数据"""
         try:
-            with open(self._account_path, "r", encoding="utf-8") as f:
+            with open(self._account_path, encoding="utf-8") as f:
                 account = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return {"error": "账户文件不存在或格式错误"}

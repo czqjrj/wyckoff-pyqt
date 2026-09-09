@@ -9,6 +9,7 @@
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -20,14 +21,18 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
-    QAbstractItemView,
 )
 
 from . import theme
 from .components.card import Card
 from .components.panel_header import PanelHeader
-from .dash_charts import (IndexCompareChart, ResonanceChart, SectorFlowChart,
-                          SectorHeatmap, SseKlineChart)
+from .dash_charts import (
+    IndexCompareChart,
+    ResonanceChart,
+    SectorFlowChart,
+    SectorHeatmap,
+    SseKlineChart,
+)
 
 # ── 工具 ──
 
@@ -570,7 +575,6 @@ class DashboardWidget(QWidget):
         tech = data.get("tech", {})
         breadth = data.get("breadth", {})
         sectors = data.get("sectors", [])
-        north = data.get("north", [])
         zt_pool = data.get("zt_pool", [])
         market_env = data.get("market_env", {})
 
@@ -671,7 +675,7 @@ class DashboardWidget(QWidget):
             self._flow_detail.setText(
                 "暂无数据 (北向自 2024-08 起停止逐日披露)")
             self._flow_detail.setStyleSheet(
-                "color:%s;background:transparent;" % theme.C_MUTED)
+                f"color:{theme.C_MUTED};background:transparent;")
 
         # 涨停池
         if zt_pool:
@@ -682,7 +686,7 @@ class DashboardWidget(QWidget):
         else:
             txt = "暂无数据"
         self._zt_detail.setText(txt)
-        self._zt_detail.setStyleSheet("color:%s;background:transparent;" % theme.C_TEXT)
+        self._zt_detail.setStyleSheet(f"color:{theme.C_TEXT};background:transparent;")
 
         # 市场情绪 + 成交额 + 共振
         self._render_emotion(data.get("emotion"), data.get("amount"))
@@ -720,19 +724,19 @@ class DashboardWidget(QWidget):
         meta = (f"涨停 {zt_cnt}   跌停 {dt}   炸板 {zb}   "
                 f"最高 {mb} 板   昨日涨停溢价 {prem_txt}")
         self._emo_meta.setText(meta)
-        self._emo_meta.setStyleSheet("color:%s;background:transparent;" % theme.C_TEXT)
+        self._emo_meta.setStyleSheet(f"color:{theme.C_TEXT};background:transparent;")
         self._emo_ladder.setText(
             "连板梯队: " + "   ".join(
                 f"{k}板×{v}" for k, v in sorted((emo.get("ladder") or {}).items()))
             if emo.get("ladder") else "连板梯队: --")
-        self._emo_ladder.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+        self._emo_ladder.setStyleSheet(f"color:{theme.C_MUTED};background:transparent;")
         seclist = (emo.get("zt_by_sector") or [])[:5]
         if seclist:
             sec_txt = "涨停行业: " + "  ".join(f"{n}×{c}" for n, c in seclist)
         else:
             sec_txt = "涨停行业: --"
         self._emo_sectors.setText(sec_txt)
-        self._emo_sectors.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+        self._emo_sectors.setStyleSheet(f"color:{theme.C_MUTED};background:transparent;")
         # 成交额 + 量能分位
         if amt:
             total = amt.get("total_yi") or 0

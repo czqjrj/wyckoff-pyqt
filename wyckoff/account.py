@@ -20,9 +20,9 @@ import os
 import re
 import time
 
+from . import cloud_db
 from ._shared import atomic_write_json
 from .paths import DATA_DIR
-from . import cloud_db
 
 NO_NET_ENV = "WYCKOFF_NO_NET"
 
