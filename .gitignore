@@ -67,6 +67,7 @@ debian/
 # ── 运行时用户数据/状态 (勿入库) ──
 /wx_*.json
 /wx_machine_id
+/wx_paper.lock
 /wyckoff_watchlist.json
 
 # ── 回测/回放运行产物 (缓存/独立状态/行情库, 本地生成勿入库) ──

@@ -127,6 +127,7 @@ def _kline_flusher():
                 for _ in range(1023):
                     item = _KLINE_WRITE_QUEUE.get_nowait()
                     if item is _SENTINEL:
+                        _KLINE_WRITE_QUEUE.task_done()
                         break
                     batch.append(item)
             except Exception:

@@ -87,7 +87,7 @@ class WyckoffStrategyManager:
             try:
                 with open(history_file, encoding='utf-8') as f:
                     self.performance_log = deque(json.load(f), maxlen=100)
-            except:
+            except Exception:
                 pass
 
     def save_performance_history(self):
