@@ -1,0 +1,301 @@
+{
+  "date": "2026-09-09",
+  "events": [
+    {
+      "ts": "2026-09-09 11:11:06",
+      "type": "scan",
+      "detail": {
+        "scan_count": 1,
+        "codes_scanned": 3116,
+        "candidates_found": 60,
+        "candidates": [
+          {
+            "code": "sh601065",
+            "name": "江盐集团",
+            "type": "ST",
+            "conf": 100,
+            "last": 7.0,
+            "strategy": "screener_value_accumulation",
+            "sector": "化学原料"
+          },
+          {
+            "code": "sh603195",
+            "name": "公牛集团",
+            "type": "Spring",
+            "conf": 100,
+            "last": 38.65,
+            "strategy": "paper_discipline_bull",
+            "sector": "家居用品"
+          },
+          {
+            "code": "sz000901",
+            "name": "航天科技",
+            "type": "ST",
+            "conf": 100,
+            "last": 14.42,
+            "strategy": "screener_value_accumulation",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sh600167",
+            "name": "联美控股",
+            "type": "Spring",
+            "conf": 99,
+            "last": 5.87,
+            "strategy": "paper_discipline_bull",
+            "sector": "电力"
+          },
+          {
+            "code": "sh600178",
+            "name": "东安动力",
+            "type": "Spring",
+            "conf": 99,
+            "last": 10.12,
+            "strategy": "screener_value_accumulation",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sh601311",
+            "name": "骆驼股份",
+            "type": "弹簧二次测试",
+            "conf": 99,
+            "last": 7.61,
+            "strategy": "long_buy_left",
+            "sector": "电池"
+          },
+          {
+            "code": "sh603179",
+            "name": "新泉股份",
+            "type": "Spring",
+            "conf": 99,
+            "last": 39.86,
+            "strategy": "screener_value_accumulation",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sz000550",
+            "name": "江铃汽车",
+            "type": "弹簧二次测试",
+            "conf": 99,
+            "last": 17.51,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sz000759",
+            "name": "中百集团",
+            "type": "弹簧二次测试",
+            "conf": 99,
+            "last": 8.47,
+            "strategy": "long_buy_left",
+            "sector": "一般零售"
+          },
+          {
+            "code": "sz000869",
+            "name": "张  裕Ａ",
+            "type": "Spring",
+            "conf": 99,
+            "last": 16.89,
+            "strategy": "screener_value_accumulation",
+            "sector": "非白酒"
+          },
+          {
+            "code": "sz000915",
+            "name": "华特达因",
+            "type": "弹簧二次测试",
+            "conf": 99,
+            "last": 26.6,
+            "strategy": "long_buy_left",
+            "sector": "化学制药"
+          },
+          {
+            "code": "sz002061",
+            "name": "浙江交科",
+            "type": "Spring",
+            "conf": 99,
+            "last": 3.43,
+            "strategy": "screener_value_accumulation",
+            "sector": "基础建设"
+          },
+          {
+            "code": "sz003000",
+            "name": "劲仔食品",
+            "type": "弹簧二次测试",
+            "conf": 99,
+            "last": 9.84,
+            "strategy": "long_buy_left",
+            "sector": "休闲食品"
+          },
+          {
+            "code": "sh600015",
+            "name": "华夏银行",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 98,
+            "last": 6.36,
+            "strategy": "long_buy_left",
+            "sector": "银行Ⅱ"
+          },
+          {
+            "code": "sh600761",
+            "name": "安徽合力",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 98,
+            "last": 16.46,
+            "strategy": "long_buy_left",
+            "sector": "工程机械"
+          },
+          {
+            "code": "sh600861",
+            "name": "北京人力",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 98,
+            "last": 13.13,
+            "strategy": "long_buy_left",
+            "sector": "专业服务"
+          },
+          {
+            "code": "sh600894",
+            "name": "广日股份",
+            "type": "弹簧二次测试",
+            "conf": 98,
+            "last": 7.45,
+            "strategy": "long_buy_left",
+            "sector": "专用设备"
+          },
+          {
+            "code": "sh601163",
+            "name": "三角轮胎",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 98,
+            "last": 12.57,
+            "strategy": "long_buy_left",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sh603288",
+            "name": "海天味业",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 98,
+            "last": 34.36,
+            "strategy": "long_buy_left",
+            "sector": "调味发酵品Ⅱ"
+          },
+          {
+            "code": "sh603416",
+            "name": "信捷电气",
+            "type": "Spring",
+            "conf": 98,
+            "last": 47.39,
+            "strategy": "screener_value_accumulation",
+            "sector": "自动化设备"
+          }
+        ]
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:08",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh603179",
+        "name": "新泉股份",
+        "qty": 4800,
+        "price": 41.121,
+        "amount": 197380.8,
+        "conf": 100,
+        "strategy": "screener_value_accumulation",
+        "event_type": "",
+        "sector": "汽车零部件",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:08",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh600167",
+        "name": "联美控股",
+        "qty": 56900,
+        "price": 5.846,
+        "amount": 332637.4,
+        "conf": 99,
+        "strategy": "paper_discipline_bull",
+        "event_type": "",
+        "sector": "电力",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:08",
+      "type": "buy",
+      "detail": {
+        "symbol": "sh600015",
+        "name": "华夏银行",
+        "qty": 52500,
+        "price": 6.326,
+        "amount": 332115.0,
+        "conf": 98,
+        "strategy": "long_buy_left",
+        "event_type": "",
+        "sector": "银行Ⅱ",
+        "reason": "买入"
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:08",
+      "type": "condition",
+      "detail": {
+        "symbol": "sh603179",
+        "name": "新泉股份",
+        "kind": "buy_price",
+        "trigger_price": 41.162,
+        "current_price": 41.121,
+        "action": "买入",
+        "reason": "自动:screener_value_accumulation"
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:08",
+      "type": "condition",
+      "detail": {
+        "symbol": "sh600167",
+        "name": "联美控股",
+        "kind": "buy_price",
+        "trigger_price": 5.852,
+        "current_price": 5.846,
+        "action": "买入",
+        "reason": "自动:paper_discipline_bull"
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:08",
+      "type": "condition",
+      "detail": {
+        "symbol": "sh600015",
+        "name": "华夏银行",
+        "kind": "buy_price",
+        "trigger_price": 6.32,
+        "current_price": 6.326,
+        "action": "买入",
+        "reason": "自动:long_buy_left"
+      }
+    },
+    {
+      "ts": "2026-09-09 11:11:10",
+      "type": "account",
+      "detail": {
+        "equity": 995173.27,
+        "cash": 134418.27,
+        "positions_count": 3,
+        "closed_count": 0
+      }
+    }
+  ],
+  "summary": {
+    "scan_count": 1,
+    "buy_count": 3,
+    "sell_count": 0,
+    "condition_count": 3,
+    "risk_block_count": 0,
+    "rebalance_count": 0
+  }
+}
