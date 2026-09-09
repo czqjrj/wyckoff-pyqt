@@ -29,10 +29,10 @@ jobs:
             libxcb-cursor0 >/dev/null
 
       - name: Lint (ruff)
-        run: ruff check wyckoff desktop tests
+        run: ruff check wyckoff ui sync tests
 
       - name: Syntax gate (compileall)
-        run: python -m compileall -q wyckoff desktop tests
+        run: python -m compileall -q wyckoff ui sync tests
 
       - name: Run tests
         run: python -m pytest -q -p no:cacheprovider
