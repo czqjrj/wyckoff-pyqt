@@ -489,10 +489,402 @@
         "positions_count": 3,
         "closed_count": 0
       }
+    },
+    {
+      "ts": "2026-09-09 16:35:00",
+      "type": "scan",
+      "detail": {
+        "scan_count": 2,
+        "codes_scanned": 90,
+        "candidates_found": 40,
+        "candidates": [
+          {
+            "code": "sh603195",
+            "name": "公牛集团",
+            "type": "Spring",
+            "conf": 99,
+            "last": 38.79,
+            "strategy": "paper_discipline_bull",
+            "sector": "家居用品"
+          },
+          {
+            "code": "sh601218",
+            "name": "吉鑫科技",
+            "type": "弹簧二次测试",
+            "conf": 97,
+            "last": 4.56,
+            "strategy": "long_buy_left",
+            "sector": "风电设备"
+          },
+          {
+            "code": "sz000685",
+            "name": "中山公用",
+            "type": "弹簧二次测试",
+            "conf": 97,
+            "last": 11.39,
+            "strategy": "long_buy_left",
+            "sector": "环境治理"
+          },
+          {
+            "code": "sz000550",
+            "name": "江铃汽车",
+            "type": "弹簧二次测试",
+            "conf": 96,
+            "last": 17.48,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sh600167",
+            "name": "联美控股",
+            "type": "Spring",
+            "conf": 95,
+            "last": 5.9,
+            "strategy": "paper_discipline_bull",
+            "sector": "电力"
+          },
+          {
+            "code": "sh601311",
+            "name": "骆驼股份",
+            "type": "弹簧二次测试",
+            "conf": 95,
+            "last": 7.69,
+            "strategy": "long_buy_left",
+            "sector": "电池"
+          },
+          {
+            "code": "sh600894",
+            "name": "广日股份",
+            "type": "弹簧二次测试",
+            "conf": 94,
+            "last": 7.45,
+            "strategy": "long_buy_left",
+            "sector": "专用设备"
+          },
+          {
+            "code": "sz000951",
+            "name": "中国重汽",
+            "type": "弹簧二次测试",
+            "conf": 92,
+            "last": 22.47,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sz002242",
+            "name": "九阳股份",
+            "type": "弹簧二次测试",
+            "conf": 92,
+            "last": 8.5,
+            "strategy": "long_buy_left",
+            "sector": "小家电"
+          },
+          {
+            "code": "sh600435",
+            "name": "北方导航",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 11.94,
+            "strategy": "long_buy_left",
+            "sector": "地面兵装Ⅱ"
+          },
+          {
+            "code": "sz002039",
+            "name": "黔源电力",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 19.46,
+            "strategy": "long_buy_left",
+            "sector": "电力"
+          },
+          {
+            "code": "sz002261",
+            "name": "拓维信息",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 25.74,
+            "strategy": "long_buy_left",
+            "sector": "软件开发"
+          },
+          {
+            "code": "sh600612",
+            "name": "老凤祥",
+            "type": "Spring",
+            "conf": 90,
+            "last": 35.0,
+            "strategy": "screener_value_accumulation",
+            "sector": "饰品"
+          },
+          {
+            "code": "sh603416",
+            "name": "信捷电气",
+            "type": "Spring",
+            "conf": 90,
+            "last": 47.46,
+            "strategy": "screener_value_accumulation",
+            "sector": "自动化设备"
+          },
+          {
+            "code": "sz000869",
+            "name": "张  裕Ａ",
+            "type": "Spring",
+            "conf": 90,
+            "last": 16.9,
+            "strategy": "screener_value_accumulation",
+            "sector": "非白酒"
+          },
+          {
+            "code": "sz002379",
+            "name": "宏桥控股",
+            "type": "Spring",
+            "conf": 90,
+            "last": 19.68,
+            "strategy": "screener_value_accumulation",
+            "sector": "工业金属"
+          },
+          {
+            "code": "sz002588",
+            "name": "史丹利",
+            "type": "弹簧二次测试",
+            "conf": 89,
+            "last": 8.47,
+            "strategy": "long_buy_left",
+            "sector": "农化制品"
+          },
+          {
+            "code": "sz003000",
+            "name": "劲仔食品",
+            "type": "弹簧二次测试",
+            "conf": 88,
+            "last": 9.85,
+            "strategy": "long_buy_left",
+            "sector": "休闲食品"
+          },
+          {
+            "code": "sz000030",
+            "name": "富奥股份",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 87,
+            "last": 4.07,
+            "strategy": "long_buy_left",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sh600861",
+            "name": "北京人力",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 84,
+            "last": 13.13,
+            "strategy": "long_buy_left",
+            "sector": "专业服务"
+          }
+        ]
+      }
+    },
+    {
+      "ts": "2026-09-09 16:35:01",
+      "type": "account",
+      "detail": {
+        "equity": 994735.27,
+        "cash": 134418.27,
+        "positions_count": 3,
+        "closed_count": 0
+      }
+    },
+    {
+      "ts": "2026-09-09 17:51:51",
+      "type": "scan",
+      "detail": {
+        "scan_count": 3,
+        "codes_scanned": 90,
+        "candidates_found": 40,
+        "candidates": [
+          {
+            "code": "sh603195",
+            "name": "公牛集团",
+            "type": "Spring",
+            "conf": 99,
+            "last": 38.79,
+            "strategy": "paper_discipline_bull",
+            "sector": "家居用品"
+          },
+          {
+            "code": "sh601218",
+            "name": "吉鑫科技",
+            "type": "弹簧二次测试",
+            "conf": 97,
+            "last": 4.56,
+            "strategy": "long_buy_left",
+            "sector": "风电设备"
+          },
+          {
+            "code": "sz000685",
+            "name": "中山公用",
+            "type": "弹簧二次测试",
+            "conf": 97,
+            "last": 11.39,
+            "strategy": "long_buy_left",
+            "sector": "环境治理"
+          },
+          {
+            "code": "sz000550",
+            "name": "江铃汽车",
+            "type": "弹簧二次测试",
+            "conf": 96,
+            "last": 17.48,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sh600167",
+            "name": "联美控股",
+            "type": "Spring",
+            "conf": 95,
+            "last": 5.9,
+            "strategy": "paper_discipline_bull",
+            "sector": "电力"
+          },
+          {
+            "code": "sh601311",
+            "name": "骆驼股份",
+            "type": "弹簧二次测试",
+            "conf": 95,
+            "last": 7.69,
+            "strategy": "long_buy_left",
+            "sector": "电池"
+          },
+          {
+            "code": "sh600894",
+            "name": "广日股份",
+            "type": "弹簧二次测试",
+            "conf": 94,
+            "last": 7.45,
+            "strategy": "long_buy_left",
+            "sector": "专用设备"
+          },
+          {
+            "code": "sz000951",
+            "name": "中国重汽",
+            "type": "弹簧二次测试",
+            "conf": 92,
+            "last": 22.47,
+            "strategy": "long_buy_left",
+            "sector": "商用车"
+          },
+          {
+            "code": "sz002242",
+            "name": "九阳股份",
+            "type": "弹簧二次测试",
+            "conf": 92,
+            "last": 8.5,
+            "strategy": "long_buy_left",
+            "sector": "小家电"
+          },
+          {
+            "code": "sh600435",
+            "name": "北方导航",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 11.94,
+            "strategy": "long_buy_left",
+            "sector": "地面兵装Ⅱ"
+          },
+          {
+            "code": "sz002039",
+            "name": "黔源电力",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 19.46,
+            "strategy": "long_buy_left",
+            "sector": "电力"
+          },
+          {
+            "code": "sz002261",
+            "name": "拓维信息",
+            "type": "弹簧二次测试",
+            "conf": 91,
+            "last": 25.74,
+            "strategy": "long_buy_left",
+            "sector": "软件开发"
+          },
+          {
+            "code": "sh600612",
+            "name": "老凤祥",
+            "type": "Spring",
+            "conf": 90,
+            "last": 35.0,
+            "strategy": "screener_value_accumulation",
+            "sector": "饰品"
+          },
+          {
+            "code": "sh603416",
+            "name": "信捷电气",
+            "type": "Spring",
+            "conf": 90,
+            "last": 47.46,
+            "strategy": "screener_value_accumulation",
+            "sector": "自动化设备"
+          },
+          {
+            "code": "sz000869",
+            "name": "张  裕Ａ",
+            "type": "Spring",
+            "conf": 90,
+            "last": 16.9,
+            "strategy": "screener_value_accumulation",
+            "sector": "非白酒"
+          },
+          {
+            "code": "sz002379",
+            "name": "宏桥控股",
+            "type": "Spring",
+            "conf": 90,
+            "last": 19.68,
+            "strategy": "screener_value_accumulation",
+            "sector": "工业金属"
+          },
+          {
+            "code": "sz002588",
+            "name": "史丹利",
+            "type": "弹簧二次测试",
+            "conf": 89,
+            "last": 8.47,
+            "strategy": "long_buy_left",
+            "sector": "农化制品"
+          },
+          {
+            "code": "sz003000",
+            "name": "劲仔食品",
+            "type": "弹簧二次测试",
+            "conf": 88,
+            "last": 9.85,
+            "strategy": "long_buy_left",
+            "sector": "休闲食品"
+          },
+          {
+            "code": "sz000030",
+            "name": "富奥股份",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 87,
+            "last": 4.07,
+            "strategy": "long_buy_left",
+            "sector": "汽车零部件"
+          },
+          {
+            "code": "sh600861",
+            "name": "北京人力",
+            "type": "弹簧(Spring/震仓)",
+            "conf": 84,
+            "last": 13.13,
+            "strategy": "long_buy_left",
+            "sector": "专业服务"
+          }
+        ]
+      }
     }
   ],
   "summary": {
-    "scan_count": 2,
+    "scan_count": 4,
     "buy_count": 3,
     "sell_count": 0,
     "condition_count": 3,
