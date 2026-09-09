@@ -2,15 +2,15 @@
 
 架构与合并语义见 docs/plan_multiuser_sync.md。
 
-模块划分:
+模块划分 (传输层仅云端 MySQL, 无 git 依赖):
     merge      纯合并逻辑 (无 IO)
     bundle     用户数据 ↔ 同步 bundle 打包/落库
-    transport  git clone/fetch/push 传输层
-    service    setup/pull/push/sync/status 编排 + 重训集成
+    cloud      MySQL 云传输层 (单行原子 upsert)
+    service    pull/push/sync/status 编排 + 重训集成
 
 用法:
-    python -m sync setup git@github.com:<user>/<repo>.git
     python -m sync sync
+    python -m sync status
 """
 from .bundle import export_bundle, import_bundle, machine_id
 from .merge import (
@@ -21,7 +21,7 @@ from .merge import (
     merge_signals,
     signal_key,
 )
-from .service import pull, push, setup, status, sync
+from .service import pull, push, status, sync
 from .transport import SyncError
 
 __all__ = [
@@ -35,7 +35,6 @@ __all__ = [
     "merge_model",
     "signal_key",
     "feedback_key",
-    "setup",
     "pull",
     "push",
     "sync",

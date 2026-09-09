@@ -169,9 +169,11 @@ def test_apply_profile_persists_shadow_for_later_pull(tmp_path):
     assert st2["paper"]["ts"] == old_ts + 10.0
 
 
-def test_no_net_guards_git_ops():
+def test_no_net_guards_ops():
     assert ps._no_net() is True
-    assert ps._git(["status"]) == ("", 0)
+    r = ps.sync_once()
+    assert r.get("ok") is False
+    assert "离线" in r.get("error", "")
 
 
 def test_first_sync_settings_default_not_override_remote(tmp_path):

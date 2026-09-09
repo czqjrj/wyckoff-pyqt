@@ -413,18 +413,10 @@ class GeneralPage(SettingsPage):
             self._profile_sync_status.setText(f"退出异常: {e}")
 
     def _on_profile_sync_now(self):
-        """立即执行账户私有数据同步 (低频操作, 同步执行并刷新状态行)。"""
+        """立即执行账户私有数据同步 (云端 MySQL, 低频操作, 同步执行并刷新状态行)。"""
         try:
-            import wyckoff.account as acc
-            import wyckoff.cloud_db as cdb
             import wyckoff.profile_sync as psync
-            if cdb.enabled():
-                # 云端后端: sync_once 同时覆盖首次同步与增量合并
-                result = psync.sync_once()
-            elif not psync.status().get("configured"):
-                result = psync.setup("")
-            else:
-                result = psync.sync_once()
+            result = psync.sync_once()
             if result.get("ok"):
                 self._s["profile_sync"] = True
                 self.cb_profile_sync.setChecked(True)

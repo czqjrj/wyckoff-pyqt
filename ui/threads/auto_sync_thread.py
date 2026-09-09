@@ -3,7 +3,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 
 class AutoSyncThread(QThread):
-    """后台校准数据同步: pull → merge → 有新增时重训 → push (git 传输在线程内)。"""
+    """后台校准数据同步: pull → merge → 有新增时重训 → push (云端 MySQL 传输在线程内)。"""
     result = pyqtSignal(object)
 
     def __init__(self, work, parent=None):

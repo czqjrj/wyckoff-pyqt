@@ -414,7 +414,8 @@ DEFAULT_SETTINGS = {
     "theme": "light",
     # 分析结论 / AI解读 面板文字字号 (pt)
     "text_font_size": 11,
-    # 账户私有数据同步: 私有 Git 仓 URL + 开关 (见 plan_profile_sync.md)
+    # 账户私有数据同步现已全程走 MySQL 云后端 (按登录用户隔离);
+    # 以下两个旧 Git 键仅作历史兼容保留, 新版本不再写入 (见 plan_profile_sync.md)
     "profile_repo_url": "",
     # 默认开启账户私有数据自动同步 (登录后按固定间隔双向同步云端);
     # 未登录/未配置时自动跳过, 不产生网络请求。

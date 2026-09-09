@@ -67,8 +67,7 @@ from . import theme
 # 时间线列表渲染上限 (每行 3 个 QWidget, 无上限会拖垮主线程)
 _TL_MAX_ROWS = 400
 
-# 校准数据同步仓库: 固定共享私有 git 仓, 用户无需填写 URL/凭据
-CALIB_SYNC_REPO = "git@github.com:czqjrj/wyckoff-calib.git"
+# 校准数据同步: 云端 MySQL 传输 (无 git 依赖), 见 sync/ 包
 
 
 # ── 后台计算任务基类 ──
@@ -562,7 +561,7 @@ class CalibrationCenter(QWidget):
         note.setStyleSheet(f"color:{theme.C_MUTED};font-size:{theme.font_pt('mini')};")
         lay.addWidget(note)
 
-        # ── 数据同步区: 多端校准数据经云(SQLPub MySQL, 云端优先)或固定共享 git 仓汇合 ──
+        # ── 数据同步区: 多端校准数据经云(SQLPub MySQL)单行原子汇合 ──
         sync_box = QFrame()
         sync_box.setStyleSheet(f"QFrame {{ background:{theme.C_PANEL};"
                                f"border:1px solid {theme.C_BORDER};border-radius:4px; }}")
@@ -574,7 +573,7 @@ class CalibrationCenter(QWidget):
         st_title = QLabel("数据同步")
         st_title.setStyleSheet("font-weight:bold;")
         row1.addWidget(st_title)
-        self._repo_tip = QLabel(CALIB_SYNC_REPO)
+        self._repo_tip = QLabel("云端自动同步 (SQLPub MySQL · 免费)")
         self._repo_tip.setStyleSheet(f"color:{theme.C_MUTED};font-size:{theme.font_pt('mini')};")
         row1.addWidget(self._repo_tip)
         row1.addStretch(1)
@@ -604,18 +603,9 @@ class CalibrationCenter(QWidget):
         self._render_sync_status()
 
     def refresh_sync_url(self):
-        """云后端可用时提示云端自动同步; 否则回填固定共享 git 仓地址供 sync 服务读取。"""
+        """同步渠道提示 (云端 MySQL, 无 git 依赖)。"""
         try:
-            from wyckoff import cloud_db
-            from wyckoff.storage import load_settings, save_settings
-            s = load_settings()
-            if cloud_db.enabled():
-                self._repo_tip.setText("云端自动同步 (SQLPub MySQL · 免费)")
-            else:
-                self._repo_tip.setText(CALIB_SYNC_REPO + "  (Git 回退)")
-                if s.get("calib_repo_url") != CALIB_SYNC_REPO:
-                    s["calib_repo_url"] = CALIB_SYNC_REPO
-                    save_settings(s)
+            self._repo_tip.setText("云端自动同步 (SQLPub MySQL · 免费)")
         except Exception:
             pass
 
@@ -625,18 +615,8 @@ class CalibrationCenter(QWidget):
 
         rec = load_settings().get("calib_last_sync") or {}
         if not rec:
-            try:
-                from wyckoff import cloud_db
-                on_cloud = cloud_db.enabled()
-            except Exception:
-                on_cloud = False
-            if on_cloud:
-                self._sync_status.setText(
-                    "尚未同步。云端已就绪 — 点「立即同步」即可拉取/合并/回写共享校准数据。")
-            else:
-                self._sync_status.setText(
-                    "尚未同步。GitHub 建私有空仓后填入地址 → 保存 → 立即同步 "
-                    "(首推即初始全量库)。")
+            self._sync_status.setText(
+                "尚未同步。云端已就绪 — 点「立即同步」即可拉取/合并/回写共享校准数据。")
             return
         import time as _time
         parts = [f"上次同步 {_time.strftime('%Y-%m-%d %H:%M', _time.localtime(rec.get('ts', 0)))}"]
@@ -659,15 +639,6 @@ class CalibrationCenter(QWidget):
     def _on_sync_now(self):
         if self._sync_th is not None and self._sync_th.isRunning():
             return
-        # 云后端优先; 云端不可用时回退到固定共享 git 仓 (无需用户填写 URL / 凭据)
-        from wyckoff import cloud_db
-        from wyckoff.storage import load_settings, save_settings
-
-        if not cloud_db.enabled():
-            s = load_settings()
-            if s.get("calib_repo_url") != CALIB_SYNC_REPO:
-                s["calib_repo_url"] = CALIB_SYNC_REPO
-                save_settings(s)
         btn = self._sync_btn
         btn.setEnabled(False)
         btn.setText("同步中...")

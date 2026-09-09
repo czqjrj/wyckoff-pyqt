@@ -64,7 +64,7 @@ def remote_meta():
 
 
 def make_meta(contributors, n_signals, n_feedback):
-    """构建 meta.json 内容 (与 transport.make_meta 一致)。"""
+    """构建 meta.json 内容 (供 status/service 展示)。"""
     from .merge import SCHEMA_VERSION
     import time
     return {

@@ -3,8 +3,8 @@
 只同步"账户私有"数据 (UI 布局 / 主题 / 自选 / 候选 / 笔记 / 组合 / 模拟盘账户)，
 与多用户"校准数据"合并 (`plan_multiuser_sync.md`) 是两套独立通道。
 
-存储位置: 私有数据在本机 DATA_DIR 下的各自 JSON；远端镜像一个私有 Git 仓
-(`profile_repo` 工作副本) 内的 `profile.json`。
+存储位置: 私有数据在本机 DATA_DIR 下的各自 JSON；远端为 MySQL 云后端
+(`cloud_db.profile_items` 表按用户隔离)，无 git 依赖。
 
 合并语义: 逐条目 LWW (last-write-wins) + 删除(tombstone)支持。
 - 每个同步条目带 `{v, ts}`；删除同样用 `{v: None, ts}` 表达(tombstone)。
@@ -18,8 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import subprocess
 import time
 import uuid
 
@@ -36,9 +34,7 @@ PORTFOLIO_FILE = P.PORTFOLIO_FILE
 CANDIDATES_FILE = P.CANDIDATES_FILE
 PAPER_FILE = P.PAPER_FILE
 
-PROFILE_REPO_DIR = os.path.join(DATA_DIR, "profile_repo")
 PROFILE_SHADOW_FILE = os.path.join(DATA_DIR, "profile_shadow.json")
-REPO_BUNDLE_FILE = "profile.json"
 SCHEMA = 1
 NO_NET_ENV = "WYCKOFF_NO_NET"
 
@@ -387,7 +383,7 @@ def _persist_shadow(bundle):
     _save_shadow(shadow)
 
 
-# ── git 传输 ────────────────────────────────────────────────
+# ── 云端传输 ────────────────────────────────────────────────
 def _no_net():
     return os.environ.get(NO_NET_ENV, "").strip() in ("1", "true", "TRUE")
 
@@ -405,8 +401,7 @@ def _cloud_enabled():
 def _cloud_sync_once():
     """用 MySQL 作为远端存储执行一次 LWW 合并同步 (读取远端→合并→写本机→回写)。
 
-    与 git 版 `sync_once` 同一合并语义, 仅传输层不同: 远端为
-    profile_items 表中该用户名下的各类型条目。
+    同一合并语义, 仅传输层为 profile_items 表中该用户名下的各类型条目。
     """
     user = account.current_user()
     local = collect_profile()
@@ -465,148 +460,26 @@ def _cloud_push():
     return {"ok": True}
 
 
-def _active_repo_url(explicit=""):
-    """解析当前生效的私有仓 URL:
-    优先显式入参, 其次 settings 里的 profile_repo_url。"""
-    if explicit and explicit.strip():
-        return explicit.strip()
-    try:
-        return str(storage.load_settings().get(SK.Runtime.PROFILE_REPO_URL) or "").strip()
-    except Exception:
-        return ""
+def setup(url=""):
+    """执行一次云端同步 (首同步/增量合并同路径)。
 
-
-def _git(args, cwd=None, check=True):
-    if _no_net():
-        return ("", 0)
-    cmd = ["git"] + args
-    try:
-        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=120)
-        if check and p.returncode != 0:
-            raise RuntimeError(
-                f"git {' '.join(args)} 失败: {(p.stderr or '').strip()}")
-        return (p.stdout or "") + (p.stderr or ""), p.returncode
-    except FileNotFoundError:
-        raise RuntimeError("未找到 git 可执行文件")
-
-
-def _ensure_repo_push():
-    """在已初始化的本地 profile_repo 上: 提交本机当前数据并推送到 origin main。
-    空仓库 clone 后本地落在 master, 统一改名 main 再推送。
-    """
-    _git(["branch", "-M", "main"], cwd=PROFILE_REPO_DIR, check=False)
-    _commit_bundle(collect_profile(), "init")
-    _git(["push", "-u", "origin", "main"], cwd=PROFILE_REPO_DIR)
-
-
-def setup(url):
-    """首次设置: clone 私有仓; 远端为空则本地初始化并首推。
-
-    git clone 一个空仓库也会成功(exit 0), 因此 clone 后需检查远端是否有数据:
-      - 有数据 → 应用远端私有数据到本机 (第二/第 N 台设备)
-      - 无数据 → 说明是首次/空仓, 提交本机数据并推送 (第一台设备)
+    兼容旧签名保留 url 参数; 云端传输无需 clone 私有仓库。
     """
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
-    if _cloud_enabled():
-        # 云后端无需 clone 私有仓: 直接按当前用户做一次 LWW 合并同步。
-        return _cloud_sync_once()
-    url = _active_repo_url(url)
-    if not url:
-        return {"ok": False, "error": "缺少仓库 URL (请先登录账户或在设置中填写)"}
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if os.path.exists(PROFILE_REPO_DIR):
-        shutil.rmtree(PROFILE_REPO_DIR, ignore_errors=True)
-    cloned = False
-    try:
-        _git(["clone", url, PROFILE_REPO_DIR])
-        cloned = True
-    except RuntimeError:
-        pass
-    try:
-        if cloned:
-            # 空仓库默认 HEAD 是 master, 数据在 main → clone 后统一切到 origin/main
-            _git(["checkout", "-B", "main", "origin/main"],
-                 cwd=PROFILE_REPO_DIR, check=False)
-            _git(["branch", "-M", "main"], cwd=PROFILE_REPO_DIR, check=False)
-            remote = _read_repo_bundle() or {}
-            has_data = any((remote.get("types", {}).get(t, {}) or {}).get("items")
-                           for t in TYPES)
-            if has_data:
-                apply_profile(remote)
-                return {"ok": True, "action": "cloned-applied"}
-            # 空远端: 当作首次设备
-            os.makedirs(PROFILE_REPO_DIR, exist_ok=True)
-            _ensure_repo_push()
-            return {"ok": True, "action": "init-and-push"}
-        # clone 失败(网络/错误) → 本地初始化再推送
-        os.makedirs(PROFILE_REPO_DIR, exist_ok=True)
-        _git(["init"], cwd=PROFILE_REPO_DIR)
-        _git(["remote", "add", "origin", url], cwd=PROFILE_REPO_DIR)
-        _git(["branch", "-M", "main"], cwd=PROFILE_REPO_DIR)
-        _ensure_repo_push()
-        return {"ok": True, "action": "init-and-push"}
-    except RuntimeError as e2:
-        return {"ok": False, "error": str(e2)}
-
-
-
-def _commit_bundle(bundle, msg="profile sync"):
-    p = os.path.join(PROFILE_REPO_DIR, REPO_BUNDLE_FILE)
-    atomic_write_json(p, bundle)
-    _git(["add", "-A"], cwd=PROFILE_REPO_DIR)
-    _git(["commit", "-m", msg], cwd=PROFILE_REPO_DIR, check=False)
-
-
-def _read_repo_bundle():
-    p = os.path.join(PROFILE_REPO_DIR, REPO_BUNDLE_FILE)
-    return _load_json(p, {}) or {} if os.path.exists(p) else {}
-
-
-def _ensure_repo():
-    if not os.path.isdir(os.path.join(PROFILE_REPO_DIR, ".git")):
-        raise RuntimeError("未初始化, 先 profile-setup <url>")
-
-
-def _ensure_remote_url():
-    """把工作副本 origin 对齐到账户绑定的仓库地址。
-
-    历史 bug: profile_repo 曾用拼错的仓库地址 clone/pull, 导致「从云下载」
-    一直在拉错误的仓库而拿不到云端数据。这里在每轮 pull/push 前按
-    账户当前绑定仓库动态重设 origin, 避免再次漂移。
-    """
-    url = _active_repo_url()
-    if not url:
-        return
-    _git(["remote", "set-url", "origin", url], cwd=PROFILE_REPO_DIR, check=False)
+    if not _cloud_enabled():
+        return {"ok": False, "error": "云端 (MySQL) 不可用, 请先登录并联网"}
+    return _cloud_sync_once()
 
 
 def sync_once():
-    """拉取远端 → 与本机合并 → 写本机 → 提交推送。
-
-    云后端可用时走 MySQL (按当前登录用户隔离), 否则走 Git。
-    """
+    """拉取远端 → 与本机合并 → 写本机 → 回写 (云端单行原子 upsert)。"""
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
-    if _cloud_enabled():
-        return _cloud_sync_once()
+    if not _cloud_enabled():
+        return {"ok": False, "error": "云端 (MySQL) 不可用, 请先登录并联网"}
     try:
-        _ensure_repo()
-        _ensure_remote_url()
-        _git(["pull", "--no-rebase"], cwd=PROFILE_REPO_DIR, check=False)
-        remote = _read_repo_bundle()
-        local = collect_profile()
-        types = {}
-        for tname in TYPES:
-            lt = (local.get("types", {}).get(tname, {}) or {}).get("items", {})
-            rt = (remote.get("types", {}).get(tname, {}) or {}).get("items", {})
-            types[tname] = {"items": _merge_items(lt, rt)}
-        merged = {"schema": SCHEMA, "machine": _machine_id(),
-                  "exported_ts": time.time(), "types": types}
-        apply_profile(merged)
-        _commit_bundle(merged, "profile sync")
-        _git(["push"], cwd=PROFILE_REPO_DIR, check=False)
-        return {"ok": True}
+        return _cloud_sync_once()
     except RuntimeError as e:
         return {"ok": False, "error": str(e)}
 
@@ -614,30 +487,12 @@ def sync_once():
 def pull_or_push(mode):
     if _no_net():
         return {"ok": False, "error": "离线模式(no-net), 跳过"}
-    if _cloud_enabled():
+    if not _cloud_enabled():
+        return {"ok": False, "error": "云端 (MySQL) 不可用, 请先登录并联网"}
+    try:
         if mode == "pull":
             return _cloud_pull()
         return _cloud_push()
-    try:
-        _ensure_repo()
-        _ensure_remote_url()
-        if mode == "pull":
-            _git(["pull", "--no-rebase"], cwd=PROFILE_REPO_DIR, check=False)
-            remote = _read_repo_bundle()
-            # 不能盲目用远端覆盖本地: 先按影子收集本地变更(含删除 tombstone),
-            # 与远端做 LWW 合并, 使本地已删除的条目不被云端旧数据复活。
-            local = collect_profile()
-            types = {}
-            for tname in TYPES:
-                lt = (local.get("types", {}).get(tname, {}) or {}).get("items", {})
-                rt = (remote.get("types", {}).get(tname, {}) or {}).get("items", {})
-                types[tname] = {"items": _merge_items(lt, rt)}
-            apply_profile({"schema": SCHEMA, "machine": _machine_id(),
-                           "exported_ts": time.time(), "types": types})
-        else:
-            _commit_bundle(collect_profile(), "profile push")
-            _git(["push"], cwd=PROFILE_REPO_DIR, check=False)
-        return {"ok": True}
     except RuntimeError as e:
         return {"ok": False, "error": str(e)}
 
@@ -649,11 +504,10 @@ def status():
     except Exception:
         pass
     return {
-        "dir": PROFILE_REPO_DIR,
-        "configured": os.path.isdir(os.path.join(PROFILE_REPO_DIR, ".git")),
-        "url": _active_repo_url(),
+        "configured": _cloud_enabled(),
         "no_net": _no_net(),
         "account": acc_status,
+        "note": "云端 (MySQL) 传输, 无 git 依赖",
     }
 
 
@@ -662,7 +516,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd")
     p = sub.add_parser("setup")
     p.add_argument("url", nargs="?", default="",
-                   help="仓库 URL; 省略则用当前登录账户绑定的仓库")
+                   help="兼容旧参; 云端传输自动同步, 无需仓库 URL")
     sub.add_parser("pull")
     sub.add_parser("push")
     sub.add_parser("sync")
@@ -672,7 +526,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     cmd = args.cmd
     if cmd == "setup":
-        out = setup(args.url or _active_repo_url())
+        out = setup(args.url or "")
     elif cmd in ("pull", "push"):
         out = pull_or_push(cmd)
     elif cmd == "sync":

@@ -1304,15 +1304,14 @@ class MainWindow(QMainWindow):
         btns.addWidget(btn_cancel)
         lay.addLayout(btns)
 
-        # 走云端后端登录/注册, 成功后执行一次同步 (云端或 Git 回退都由 sync_once 处理)
+        # 走云端后端登录/注册, 成功后执行一次账户数据同步 (云端 MySQL, 无需 git)
         def _login():
             from wyckoff import account
             ok, msg = account.login(ed_user.text().strip(), ed_pass.text())
             if ok:
-                # 自动初始化/执行账户数据同步 (git 首次需 setup, sync_once 内部回退)
+                # 自动执行一次账户私有数据同步
                 try:
-                    res = psync.setup("") if not psync.status().get("configured") \
-                        else psync.sync_once()
+                    res = psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal, 可在菜单里手动触发
                 # 同步后刷新自选股 UI, 确保私有数据(自选/笔记/组合)及时展示
@@ -1328,10 +1327,9 @@ class MainWindow(QMainWindow):
             from wyckoff import account
             ok, msg = account.register(ed_user.text().strip(), ed_pass.text())
             if ok:
-                # 注册成功后自动执行一次数据同步
+                # 注册成功后自动执行一次账户数据同步
                 try:
-                    res = psync.setup("") if not psync.status().get("configured") \
-                        else psync.sync_once()
+                    res = psync.sync_once()
                 except Exception:
                     pass  # sync init non-fatal
                 dlg.accept()
@@ -1350,13 +1348,7 @@ class MainWindow(QMainWindow):
         from .threads.auto_sync_thread import AutoSyncThread
 
         def work():
-            from wyckoff import cloud_db
-            if cloud_db.enabled():
-                # 云端后端: sync_once 已同时覆盖首次同步与增量合并
-                return psync.sync_once()
-            # Git 回退: 未配置时先 setup, 已配置则双向同步
-            if not psync.status().get("configured"):
-                return psync.setup("")
+            # 账户私有数据同步 (云端 MySQL, sync_once 同时覆盖首次同步与增量合并)
             return psync.sync_once()
 
         self._account_sync_thread = AutoSyncThread(work, self)
@@ -1376,9 +1368,7 @@ class MainWindow(QMainWindow):
 
 
     def _run_pull(self):
-        """后台执行: 从远端仓库拉取私有数据到本地。
-        仅执行 git pull + apply_profile, 不推送本地变更。
-        """
+        """后台执行: 从云端拉取私有数据到本地 (只拉取合并, 不推送本地变更)。"""
         from .threads.auto_sync_thread import AutoSyncThread
 
         def work():
@@ -2846,8 +2836,10 @@ class MainWindow(QMainWindow):
             if time.time() - sync_auto.last_change_ts() < debounce:
                 self._schedule_auto_sync()
                 return
-            if not str(self.settings.get(S.Runtime.CALIB_REPO_URL) or "").strip():
-                # 未配置仓库: 清掉待同步标记, 避免每 15s 空转 (配置后下一次变更会再触发)
+            from wyckoff import cloud_db
+            if not cloud_db.enabled():
+                # 云端 (MySQL) 不可用: 清掉待同步标记, 避免每 15s 空转
+                # (云端恢复后下一次变更会再触发)
                 sync_auto.reset()
                 self._schedule_auto_sync()
                 return
