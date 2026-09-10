@@ -586,6 +586,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                 tr=tr, profile=profile,
                 phase=phase.split(" ")[0], segs=segs, sector=sector,
                 vsa_signals=vsa_signals,
+                news_sentiment=news_sentiment,
                 symbol=symbol, scale=int(scale)))
         fig = None
     else:

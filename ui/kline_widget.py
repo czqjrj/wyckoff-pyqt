@@ -938,7 +938,10 @@ class KlineWidget(BasePlotWidget):
         """新闻情绪图层: 按发布日画竖直点线 (红=偏多/绿=偏空),
         标题文本显示在 K 线上方; 悬停显示标题+情绪分+价格验证结论。"""
         ymin, ymax = self._full_y
-        for m in markers:
+        span = ymax - ymin
+        near = 24  # 相邻标题近于此根数时上下错开, 避免水平重叠
+        placed = []  # [(idx, side)] side: +1=K线上方, -1=下方
+        for m in sorted(markers, key=lambda x: int(x.get("idx", -1))):
             ix = int(m.get("idx", -1))
             if ix < 0 or ix >= self._n:
                 continue
@@ -958,20 +961,37 @@ class KlineWidget(BasePlotWidget):
                 tip += "\n✗ 市场证伪·借利好派发嫌疑 (已降权)"
             ln.setToolTip(tip)
             self._add(plot, ln, "news")
-            # 标题文本: 放在该 K 线高点上方, 避免重叠
-            if title:
-                hi = float(self._chart_hi[ix]) if ix < len(self._chart_hi) else ymax
-                y_pos = hi + (ymax - ymin) * 0.02
-                label = f"{src} {title}" if src else title
-                # 截断过长标题
-                if len(label) > 18:
-                    label = label[:17] + "…"
+            # 标题文本: 默认放 K 线高点上方; 与邻近标题错开时改放低点下方
+            if not title:
+                continue
+            hi = float(self._chart_hi[ix]) if ix < len(self._chart_hi) else ymax
+            lo = float(self._chart_lo[ix]) if ix < len(self._chart_lo) else ymin
+            side = 1
+            if any(abs(ix - jx) <= near for jx, _s in placed):
+                prev = next((s for jx, s in reversed(placed)
+                             if abs(ix - jx) <= near), 1)
+                side = -prev
+            y_above = hi + span * 0.015
+            y_below = lo - span * 0.015
+            if side > 0 and y_above > ymax - span * 0.02:
+                side = -1
+            if side < 0 and y_below < ymin + span * 0.02:
+                side = 1
+            placed.append((ix, side))
+            label = f"{src} {title}" if src else title
+            if len(label) > 18:
+                label = label[:17] + "…"
+            if side > 0:
                 ti = pg.TextItem(label, color=col, anchor=(0.5, 0),
                                  border=_pen(col, 0.8), fill=pg.mkBrush(theme.C_PANEL))
-                ti.setFont(self._font(-3, bold=True))
-                ti.setPos(float(ix), y_pos)
-                ti.setToolTip(tip)
-                self._add(plot, ti, "news")
+                ti.setPos(float(ix), y_above)
+            else:
+                ti = pg.TextItem(label, color=col, anchor=(0.5, 1),
+                                 border=_pen(col, 0.8), fill=pg.mkBrush(theme.C_PANEL))
+                ti.setPos(float(ix), y_below)
+            ti.setFont(self._font(-3, bold=True))
+            ti.setToolTip(tip)
+            self._add(plot, ti, "news")
 
     def _draw_locks(self, plot, events, locks):
         sell_types = {"UTAD", "BC", "UT", "SOW", "LPSY"}

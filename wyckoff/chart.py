@@ -709,9 +709,76 @@ def kline_caption(df, events, sector=None):
     return _kline_cap, _cap_col
 
 
+_NEWS_SRC_LABEL = {
+    "eastmoney_ann": "公告",
+    "em_stock_news": "资讯",
+    "irm_qa": "互动易",
+    "sina_market": "市场",
+}
+
+
+def build_news_markers(df, news_sentiment, min_abs_score=0.15, max_markers=30):
+    """把 news_sentiment["items"] 映射为 K 线图可用的新闻标注点。
+
+    返回 [{idx, score, title, src, valid}], idx 为新闻发布日对齐到的 K 线序号
+    (searchsorted, 落在最后一根之后则收敛到末根)。仅保留 |score|>=min_abs_score
+    的条目, 同一天多条只留强度最高者, 再按强度取前 max_markers, 避免图面淹没。"""
+    if not news_sentiment or df is None or len(df) == 0:
+        return []
+    items = news_sentiment.get("items") or []
+    if not items:
+        return []
+    try:
+        import pandas as _pd
+        days = _pd.to_datetime(df["day"])
+    except Exception:
+        return []
+    n = len(days)
+    markers = []
+    for it in items:
+        try:
+            score = float(it.get("score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if abs(score) < min_abs_score:
+            continue
+        title = str(it.get("title", "") or "").strip()
+        if not title:
+            continue
+        try:
+            dt = _pd.Timestamp(it.get("datetime"))
+        except Exception:
+            continue
+        if _pd.isna(dt):
+            continue
+        idx = int(days.searchsorted(dt))
+        idx = max(0, min(idx, n - 1))
+        src = _NEWS_SRC_LABEL.get(it.get("source", ""), it.get("source", "") or "")
+        markers.append({
+            "idx": idx,
+            "score": round(score, 3),
+            "title": title,
+            "src": str(src),
+            "valid": it.get("validation"),
+        })
+    if not markers:
+        return []
+    best = {}
+    for m in markers:
+        k = m["idx"]
+        if k not in best or abs(m["score"]) > abs(best[k]["score"]):
+            best[k] = m
+    out = list(best.values())
+    if len(out) > max_markers:
+        out = sorted(out, key=lambda x: -abs(x["score"]))[:max_markers]
+    out.sort(key=lambda x: x["idx"])
+    return out
+
+
 def build_kline_data(df, pivots, events, title, waves=None, draw_waves=True,
                      draw_locks=True, tr=None, profile=None, phase=None,
                      segs=None, sector=None, vsa_signals=None,
+                     news_sentiment=None,
                      symbol=None, scale=240):
     """收集桌面端 pyqtgraph K 线图所需的全部绘制数据 (与 plot_chart 同口径)。
 
@@ -743,6 +810,7 @@ def build_kline_data(df, pivots, events, title, waves=None, draw_waves=True,
         "caption": kline_caption(df, events, sector),
         "symbol": symbol,
         "scale": int(scale),
+        "news_markers": build_news_markers(df, news_sentiment),
     }
 
 

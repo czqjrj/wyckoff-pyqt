@@ -6,13 +6,14 @@
 import numpy as np
 import pandas as pd
 
-from wyckoff.chart import _event_layout, build_kline_data, kline_caption
+from wyckoff.chart import _event_layout, build_kline_data, build_news_markers, kline_caption
 from wyckoff.config import EVENT_COLORS
 
 _KEYS = {
     "df", "title", "pivots", "events", "waves", "draw_waves", "locks",
     "tr", "profile", "phase", "segs", "sector", "vsa_signals",
     "wave_cum", "wave_segs", "up_mask", "caption", "symbol", "scale",
+    "news_markers",
 }
 
 
@@ -154,3 +155,64 @@ def test_kline_caption_neutral():
     text, color = kline_caption(df, [])
     assert isinstance(text, str) and text
     assert isinstance(color, str)
+
+
+def _news(items):
+    return {"score": 0.2, "items": items}
+
+
+def _item(day, score, title="利好公告", source="eastmoney_ann", valid=None):
+    it = {"datetime": pd.Timestamp(day), "score": score, "title": title,
+          "source": source}
+    if valid is not None:
+        it["validation"] = valid
+    return it
+
+
+def test_build_news_markers_alignment_and_filter():
+    """发布日对齐到 K 线序号; 低分过滤; 日期越界收敛到末根。"""
+    df = _df()
+    m = build_news_markers(df, _news([
+        _item("2024-01-11", 0.5),        # idx 10
+        _item("2024-01-21", -0.3),       # idx 20
+        _item("2024-01-05", 0.05),       # 低于阈值 → 丢弃
+        _item("2099-01-01", 0.4),        # 越界 → 末根
+    ]))
+    assert [x["idx"] for x in m] == [10, 20, len(df) - 1]
+    assert all(abs(x["score"]) >= 0.15 for x in m)
+
+
+def test_build_news_markers_dedup_same_day_and_labels():
+    """同一天多条保留强度最高; src 映射中文标签; validation 透传。"""
+    df = _df()
+    m = build_news_markers(df, _news([
+        _item("2024-01-11", 0.3, title="弱利好"),
+        _item("2024-01-11", -0.8, title="强利空", source="em_stock_news",
+              valid="rejected"),
+    ]))
+    assert len(m) == 1
+    assert m[0]["title"] == "强利空"
+    assert m[0]["score"] == -0.8
+    assert m[0]["src"] == "资讯"
+    assert m[0]["valid"] == "rejected"
+
+
+def test_build_news_markers_empty_and_missing():
+    """无新闻/无 items/无 datetime 时安全返回空。"""
+    df = _df()
+    assert build_news_markers(df, None) == []
+    assert build_news_markers(df, {}) == []
+    assert build_news_markers(df, {"items": []}) == []
+    assert build_news_markers(df, _news([{"score": 0.9, "title": "x"}])) == []
+
+
+def test_kline_data_passes_news_markers():
+    """build_kline_data 经 news_sentiment 生成 news_markers。"""
+    df = _df()
+    d = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None,
+                         news_sentiment=_news([_item("2024-01-11", 0.5)]))
+    assert len(d["news_markers"]) == 1
+    assert d["news_markers"][0]["idx"] == 10
+    assert {"idx", "score", "title", "src", "valid"} <= set(d["news_markers"][0])
+    d2 = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None)
+    assert d2["news_markers"] == []
