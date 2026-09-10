@@ -59,34 +59,31 @@ def _rolling_std(arr: np.ndarray, window: int) -> np.ndarray:
 
 
 def _ewma(arr: np.ndarray, span: int, adjust: bool = False) -> np.ndarray:
-    """向量化 EWMA: 使用累积和消除 Python for 循环, 兼容 LoongArch/MIPS64 NumPy wheels。
+    """标准前向递推 EWMA (EMA), NaN 安全。
 
-    理论展开: EMA_t = alpha * sum_{i=0}^{t} (1-alpha)^{t-i} * x_i
-    通过前缀和 + 权重归一化在纯 NumPy 上实现, 避免循环开销.
-
-    NaN 安全: 单根缺失只剔除该点对分子/分母的贡献, 不做传染
-    (cumsum 会把一根 NaN 扩散成整列 NA, 导致 MACD 面板整片空白)。
-    无 NaN 时数值与历史实现逐位一致。
-
-    `adjust` 为历史兼容参数 (等价 adjust=True)。
+    EMA[i] = alpha * x[i] + (1 - alpha) * EMA[i-1]
+    首个有效值作为种子; NaN 位置保持前值不变 (carry-forward)。
     """
     arr = np.asarray(arr, dtype=float)
     n = len(arr)
     if n == 0:
         return np.array([], dtype=float)
     alpha = 2.0 / (span + 1)
-    p = 1.0 - alpha
-    idx = np.arange(1, n + 1)      # bar 位置 j+1 (权重 p^{j+1})
-    mask = np.isfinite(arr)
-    wv = np.where(mask, arr * (p ** idx), 0.0)
-    # 后缀和: 分子只累计有限点, 分母保持原有全量归一化 (见 add_indicators 注释)
-    suf = np.cumsum(wv[::-1])[::-1]
-    norm = 1.0 - p ** (n - np.arange(n))
-    out = suf / norm
-    has_future = np.cumsum(mask[::-1])[::-1] > 0
-    out = np.where(has_future, out, np.nan)
-    if mask[0]:
-        out[0] = arr[0]  # 首值种子 (历史行为: EMA 起点贴原值)
+    beta = 1.0 - alpha
+    out = np.empty(n, dtype=float)
+    out[:] = np.nan
+    # 找第一个有效值作为种子
+    first = 0
+    while first < n and not np.isfinite(arr[first]):
+        first += 1
+    if first >= n:
+        return out
+    out[first] = arr[first]
+    for i in range(first + 1, n):
+        if np.isfinite(arr[i]):
+            out[i] = alpha * arr[i] + beta * out[i - 1]
+        else:
+            out[i] = out[i - 1]
     return out
 
 
