@@ -96,6 +96,17 @@ ENABLE_VA = True
 # 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到 总权益/max_pos,
 # 消除"先买的大、后买的小"的顺序衰减与资金闲置 (利用率仅 ~66% 的根因)。
 REBALANCE = True
+# ── 微信推送 (交易发生时通知, 渠道见 wechat_push.push_to_wechat) ─────
+PUSH_ENABLED = False
+PUSH_METHOD = "server_chan"  # "server_chan" | "wechat_work" | "wxpusher"
+PUSH_SERVER_CHAN_KEY = ""
+PUSH_WECHAT_CORP_ID = ""
+PUSH_WECHAT_CORP_SECRET = ""
+PUSH_WECHAT_AGENT_ID = ""
+PUSH_WECHAT_TO_USER = ""
+PUSH_WXPUSHER_APP_TOKEN = ""
+PUSH_WXPUSHER_TOPIC_IDS = ""  # 逗号分隔主题 ID
+PUSH_WXPUSHER_UIDS = ""       # 逗号分隔用户 UID
 # 止盈: 盈利 +15% 落袋 (结合止损的不对称盈亏比)
 TAKE_PROFIT = 0.15
 # 初始终端资金 (模拟资产)
@@ -319,6 +330,17 @@ def apply_paper_params(settings=None):
         "enable_va": bool(_get(S.Paper.ENABLE_VA, ENABLE_VA)),
         # 周期级等权再平衡
         "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
+        # 微信推送配置
+        "push_enabled": bool(_get(S.Paper.PUSH, PUSH_ENABLED)),
+        "push_method": _get(S.Paper.PUSH_METHOD, PUSH_METHOD),
+        "server_chan_key": _get(S.Paper.SERVER_CHAN_KEY, PUSH_SERVER_CHAN_KEY),
+        "wechat_corp_id": _get(S.Paper.WECHAT_CORP_ID, PUSH_WECHAT_CORP_ID),
+        "wechat_corp_secret": _get(S.Paper.WECHAT_CORP_SECRET, PUSH_WECHAT_CORP_SECRET),
+        "wechat_agent_id": _get(S.Paper.WECHAT_AGENT_ID, PUSH_WECHAT_AGENT_ID),
+        "wechat_to_user": _get(S.Paper.WECHAT_TO_USER, PUSH_WECHAT_TO_USER),
+        "wxpusher_app_token": _get(S.Paper.WXPUSHER_APP_TOKEN, PUSH_WXPUSHER_APP_TOKEN),
+        "wxpusher_topic_ids": _get(S.Paper.WXPUSHER_TOPIC_IDS, PUSH_WXPUSHER_TOPIC_IDS),
+        "wxpusher_uids": _get(S.Paper.WXPUSHER_UIDS, PUSH_WXPUSHER_UIDS),
     }
     return _CUR
 
@@ -352,6 +374,16 @@ _CUR = {
     "va_weight": VA_WEIGHT,
     "enable_va": ENABLE_VA,
     "rebalance": REBALANCE,
+    "push_enabled": PUSH_ENABLED,
+    "push_method": PUSH_METHOD,
+    "server_chan_key": PUSH_SERVER_CHAN_KEY,
+    "wechat_corp_id": PUSH_WECHAT_CORP_ID,
+    "wechat_corp_secret": PUSH_WECHAT_CORP_SECRET,
+    "wechat_agent_id": PUSH_WECHAT_AGENT_ID,
+    "wechat_to_user": PUSH_WECHAT_TO_USER,
+    "wxpusher_app_token": PUSH_WXPUSHER_APP_TOKEN,
+    "wxpusher_topic_ids": PUSH_WXPUSHER_TOPIC_IDS,
+    "wxpusher_uids": PUSH_WXPUSHER_UIDS,
 }
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (见 docs/winrate_improve_eval.md §五)
@@ -2057,6 +2089,99 @@ def _fire_condition(st, c, last, df, side="buy", pos=None,
         )
 
 
+# ── 微信推送 (交易提醒) ─────────────────────────────────────
+_STRATEGY_LABELS = {
+    STRATEGY_DISCIPLINE: "纪律",
+    STRATEGY_VALUE_ACC: "价值吸筹",
+    STRATEGY_LONG_LEFT: "左侧买点",
+}
+
+
+def _split_list(v):
+    """把"逗号/顿号分隔"的字符串拆成非空列表 (兼容中英文分隔符)。"""
+    if not v:
+        return []
+    out = []
+    for item in str(v).replace("，", ",").replace("、", ",").split(","):
+        item = item.strip()
+        if item:
+            out.append(item)
+    return out
+
+
+def _push_dispatch(method, cfg, title, content):
+    """后台线程发送微信推送; 失败静默 (不阻塞撮合引擎)。"""
+    try:
+        from .wechat_push import push_to_wechat
+
+        push_to_wechat(method, title=title, content=content, **cfg)
+    except Exception:
+        pass
+
+
+def _notify_trade(kind, **info):
+    """交易发生时推送微信消息 (buy/sell)。未启用或配置缺失时静默跳过。"""
+    if not bool(_CUR.get("push_enabled")):
+        return
+    method = str(_CUR.get("push_method") or "").lower()
+    if method not in ("server_chan", "wechat_work", "wxpusher"):
+        return
+    cfg = {
+        "server_chan": {"sckey": _CUR.get("server_chan_key", "")},
+        "wechat_work": {
+            "corp_id": _CUR.get("wechat_corp_id", ""),
+            "corp_secret": _CUR.get("wechat_corp_secret", ""),
+            "agent_id": _CUR.get("wechat_agent_id", ""),
+            "to_user": _CUR.get("wechat_to_user", "") or "",
+        },
+        "wxpusher": {
+            "app_token": _CUR.get("wxpusher_app_token", ""),
+            "topic_ids": _split_list(_CUR.get("wxpusher_topic_ids", "")),
+            "uids": _split_list(_CUR.get("wxpusher_uids", "")),
+        },
+    }[method]
+    if method == "server_chan" and not cfg["sckey"]:
+        return
+    if method == "wechat_work" and not (cfg["corp_id"] and cfg["corp_secret"]):
+        return
+    if method == "wxpusher" \
+            and not (cfg["app_token"] and (cfg["topic_ids"] or cfg["uids"])):
+        return
+    code = info.get("symbol", "")
+    name = info.get("name", "") or str(code)[-6:]
+    strat = _STRATEGY_LABELS.get(info.get("strategy", ""), info.get("strategy", ""))
+    if kind == "buy":
+        title = f"[模拟盘] 买入 {name} {code}"
+        lines = [
+            f"> **买入 {name} ({code})**",
+            f"- 策略: {strat}",
+            f"- 数量: {info.get('qty')} 股",
+            f"- 价格: {info.get('price')}",
+            f"- 金额: {info.get('amount', '')}",
+            f"- 时间: {info.get('ts', '')}",
+        ]
+    else:
+        ret = info.get("ret")
+        ret_txt = f"{ret * 100:+.2f}%" if isinstance(ret, (int, float)) else ""
+        title = f"[模拟盘] 卖出 {name} {code} {ret_txt}"
+        lines = [
+            f"> **卖出 {name} ({code})**",
+            f"- 策略: {strat}",
+            f"- 数量: {info.get('qty')} 股",
+            f"- 买价: {info.get('buy_price')} / 卖价: {info.get('sell_price')}",
+            f"- 收益率: {ret_txt}",
+            f"- 原因: {info.get('reason', '')}",
+        ]
+    content = "\n".join(lines)
+    try:
+        threading.Thread(
+            target=_push_dispatch, args=(method, cfg, title, content),
+            daemon=True,
+        ).start()
+    except Exception:
+        pass
+
+
 def fill_buy(st, order, event_type: str = None):
     """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。"""
     price = order["price"]
@@ -2103,6 +2228,10 @@ def fill_buy(st, order, event_type: str = None):
         )
     except Exception:
         pass
+    _notify_trade("buy", symbol=order["symbol"],
+                  name=order.get("name", ""), qty=qty, price=price,
+                  strategy=order.get("strategy", ""),
+                  amount=round(spend, 2), ts=order["ts"])
     return order, "成交"
 
 
@@ -2317,6 +2446,9 @@ def close_position(st, pos, sell_price, reason, event_type=None):
         )
     except Exception:
         pass
+    _notify_trade("sell", symbol=pos["symbol"], name=pos.get("name", ""),
+                  qty=pos["qty"], buy_price=pos["buy_px"], sell_price=price,
+                  ret=ret_total, reason=reason, strategy=pos.get("strategy", ""))
 
 
 def force_close_position(st, symbol: str, reason: str = "手动平仓"):

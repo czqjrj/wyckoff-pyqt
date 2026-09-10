@@ -108,6 +108,49 @@ def send_wechat_work(
         return False
 
 
+# ── WxPusher (Server酱免费替代) ─────────────────────────────
+WXPUSHER_SEND_URL = "http://wxpusher.zjiecode.com/api/send/message"
+
+
+def send_wxpusher(app_token: str, content: str, title: str = "",
+                  topic_ids: list | None = None, uids: list | None = None,
+                  summary: str | None = None) -> bool:
+    """通过 WxPusher 应用推送微信消息 (公众号模板消息中转)。
+
+    参数:
+        app_token: 应用 APP_TOKEN (wxpusher 后台创建应用后获取, 仅展示一次)
+        content: 消息正文 (纯文本, 支持 \n 换行)
+        title: 消息摘要 (会显示在消息摘要栏)
+        topic_ids: 主题 ID 列表 (主题二维码被扫码后订阅, 见后台"主题管理")
+        uids: 用户 UID 列表 (扫描应用二维码关注后, 见后台"用户管理")
+                topic_ids 与 uids 至少提供一个, 否则消息无人接收。
+
+    返回:
+        True 表示发送成功 (接口 code == 1000)
+    """
+    if not app_token:
+        return False
+    payload = {
+        "appToken": app_token,
+        "content": content,
+        "contentType": 1,
+        "summary": (summary or title or "行情提醒")[:100],
+    }
+    if topic_ids:
+        payload["topicIds"] = [
+            int(t) if str(t).isdigit() else t for t in topic_ids]
+    if uids:
+        payload["uids"] = list(uids)
+    if not payload.get("topicIds") and not payload.get("uids"):
+        return False
+    try:
+        resp = requests.post(WXPUSHER_SEND_URL, json=payload, timeout=10)
+        data = resp.json()
+        return data.get("code") == 1000
+    except Exception:
+        return False
+
+
 # ── 通用推送入口 ─────────────────────────────────────────────────────
 def push_to_wechat(method: str, **kwargs) -> bool:
     """统一的微信推送入口。
@@ -115,6 +158,7 @@ def push_to_wechat(method: str, **kwargs) -> bool:
     method:
         "server_chan"  -> 调用 send_server_chan
         "wechat_work"  -> 调用 send_wechat_work
+        "wxpusher"     -> 调用 send_wxpusher
 
     返回:
         True 表示发送成功
@@ -131,5 +175,11 @@ def push_to_wechat(method: str, **kwargs) -> bool:
             kwargs.get("to_user"),
             kwargs.get("title", ""),
             kwargs.get("content", ""),
+        )
+    if method == "wxpusher":
+        return send_wxpusher(
+            kwargs.get("app_token", ""), kwargs.get("content", ""),
+            kwargs.get("title", ""), kwargs.get("topic_ids"),
+            kwargs.get("uids"), kwargs.get("summary"),
         )
     return False

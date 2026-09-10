@@ -110,6 +110,19 @@ class Paper(_Base):
     ENABLE_VA = "paper_enable_va"
     # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
     REBALANCE = "paper_rebalance"
+    # ── 微信推送 (交易发生时通知) ─────────────────────────────
+    # 总开关; 渠道: "server_chan" (Server酱) / "wechat_work" (企业微信) / "wxpusher"
+    PUSH = "paper_push_enabled"
+    PUSH_METHOD = "paper_push_method"
+    SERVER_CHAN_KEY = "paper_server_chan_key"
+    WECHAT_CORP_ID = "paper_wechat_corp_id"
+    WECHAT_CORP_SECRET = "paper_wechat_corp_secret"
+    WECHAT_AGENT_ID = "paper_wechat_agent_id"
+    WECHAT_TO_USER = "paper_wechat_to_user"
+    # WxPusher: APP_TOKEN 仅创建时展示一次; 主题ID 与 用户UID 至少提供一个
+    WXPUSHER_APP_TOKEN = "paper_wxpusher_app_token"
+    WXPUSHER_TOPIC_IDS = "paper_wxpusher_topic_ids"
+    WXPUSHER_UIDS = "paper_wxpusher_uids"
 
 
 class Watch(_Base):
