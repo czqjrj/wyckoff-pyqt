@@ -5,11 +5,17 @@
 
   python -m wyckoff.paper_cron --scan                  # 立即全市场扫描 (run_scan)
   python -m wyckoff.paper_cron --cycle                 # 立即执行一个周期 (run_cycle)
-  python -m wyckoff.paper_cron --cycle --force-scan    # 立即强制重扫 + 周期
-  python -m wyckoff.paper_cron --install [HH:MM] [--interval N]   # 每日一次, 或每隔 N 分钟
-  python -m wyckoff.paper_cron --install-scan [HH:MM] [--interval N]
-  python -m wyckoff.paper_cron --uninstall             # 卸载定时任务
-  python -m wyckoff.paper_cron --daemon [分钟]         # 常驻: 每 N 分钟执行一次周期 (默认 30)
+python -m wyckoff.paper_cron --cycle --force-scan    # 立即强制重扫 + 周期
+   python -m wyckoff.paper_cron --install [HH:MM] [--interval N]   # 每日一次, 或每隔 N 分钟
+   python -m wyckoff.paper_cron --install-scan [HH:MM] [--interval N]
+   python -m wyckoff.paper_cron --uninstall             # 卸载定时任务
+   python -m wyckoff.paper_cron --daemon [分钟]         # 常驻: 每 N 分钟执行一次周期 (默认 30)
+   python -m wyckoff.paper_cron --cycle --anytime       # 手动绕开时段门禁 (任何时候都执行)
+
+定时执行默认受门禁约束: 仅在交易日 (周末/节假日除外) 的 A 股交易时段
+(09:30-11:30 / 13:00-15:00) 内才真正扫描, 其余时刻启动直接跳过。
+节假日判断用 akshare 交易日历 (本地缓存, 不可用或列表未覆盖当年时按工作日放行);
+传 --anytime 可绕过 (供手动补跑)。
 
 平台自适应: Windows → schtasks 计划任务 (写 bat); Linux → crontab。
 注意: 定时任务与 UI 内"自动执行周期"共用同一份 wx_paper.json, 启用定时任务时
@@ -25,6 +31,82 @@ from .paths import DATA_DIR
 
 TASK_NAME = "WyckoffPaper"
 DEFAULT_AT = "08:59"
+
+# A 股交易时段 ((起时,起分), (止时,止分)) 含边界: 上午 / 下午
+TRADING_SESSIONS = (((9, 30), (11, 30)), ((13, 0), (15, 0)))
+# 交易日历缓存 (akshare tool_trade_date_hist_sina), 每日刷新一次
+TRADE_DATES_CACHE = os.path.join(DATA_DIR, "wx_trade_dates.json")
+
+
+def in_trading_hours(now=None):
+    """当前是否处于 A 股交易时段 (含边界)。"""
+    import datetime
+
+    n = now or datetime.datetime.now()
+    hm = n.hour, n.minute
+    return any(start <= hm <= end for start, end in TRADING_SESSIONS)
+
+
+def _load_trade_dates():
+    """返回当年交易日集合 {'YYYY-MM-DD', ...}; 失败/无缓存返回 None。
+
+    每次成功抓取缓存到 w 文件, 当天不重复抓取; 离线时用缓存兜底。
+    """
+    import json
+    import time
+
+    try:
+        with open(TRADE_DATES_CACHE, encoding="utf-8") as f:
+            data = json.load(f)
+        if (isinstance(data, dict) and data.get("fetched") == time.strftime("%Y-%m-%d")
+                and isinstance(data.get("dates"), list)):
+            return set(data["dates"])
+    except Exception:
+        pass
+    try:
+        import akshare as ak
+        df = ak.tool_trade_date_hist_sina()
+        dates = {str(d).split(" ")[0] for d in df["trade_date"]}
+        with open(TRADE_DATES_CACHE, "w", encoding="utf-8") as f:
+            json.dump({"fetched": time.strftime("%Y-%m-%d"),
+                       "dates": sorted(dates)}, f, ensure_ascii=False)
+        return dates
+    except Exception:
+        return None
+
+
+def is_trading_day(now=None):
+    """是否交易日: 周末直接排除; 工作日叠加节假日日历 (失败/未覆盖当年放行)。"""
+    import datetime
+
+    n = now or datetime.datetime.now()
+    if n.weekday() >= 5:
+        return False
+    dates = _load_trade_dates()
+    if not dates:
+        return True  # 日历不可用 → 按工作日放行
+    today = n.strftime("%Y-%m-%d")
+    if today in dates:
+        return True
+    try:
+        newest = max(dates)
+    except ValueError:
+        return True
+    return newest < today  # 列表未覆盖今年 → 放行; 已覆盖且缺今天 → 确为节假日
+
+
+def _gate_reason(now=None, anytime=False):
+    """返回跳过原因 (None=允许执行)。--anytime 时强制放行。"""
+    if anytime:
+        return None
+    import datetime
+
+    n = now or datetime.datetime.now()
+    if not in_trading_hours(n):
+        return f"非交易时段 {n:%H:%M} (A股 09:30-11:30 / 13:00-15:00)"
+    if not is_trading_day(n):
+        return f"非交易日 {n:%Y-%m-%d}"
+    return None
 
 
 def _sched_command(extra=""):
@@ -178,12 +260,17 @@ def install_task(at=DEFAULT_AT, remove=False, scan=False, force_scan=False,
 
 
 def daemon_cycle(minutes=30, force_scan=False):
-    """常驻循环: 每 minutes 分钟执行一次周期 (跨平台, 可手动后台运行)。"""
+    """常驻循环: 每 minutes 分钟执行一次周期 (跨平台, 可手动后台运行)。
+
+    每个周期同样受交易日/交易时段门禁约束 (非交易时段跳过), 供定时任务兜底。
+    """
     minutes = max(5, int(minutes))
-    print(f"[paper] 常驻周期已启动, 每 {minutes} 分钟一次 (Ctrl+C 退出)", flush=True)
+    print(f"[paper] 常驻周期已启动, 每 {minutes} 分钟一次 (Ctrl+C 退出), "
+          f"非交易日/非交易时段自动跳过", flush=True)
     while True:
         try:
-            _main(["--force-scan"] if force_scan else ["--cycle"])
+            if _gate_reason() is None:
+                _main(["--force-scan"] if force_scan else ["--cycle", "--anytime"])
         except Exception as e:
             print(f"[paper] 周期异常: {e}", flush=True)
         try:
@@ -237,12 +324,20 @@ def _main(argv=None):
             interval = max(1, int(nxt))
 
     if "--scan" in args:
-        result, _n = scan_task(progress=_progress_cb())
-        print(f"[paper] {result}", flush=True)
+        reason = _gate_reason(anytime="--anytime" in args)
+        if reason:
+            print(f"[paper] 跳过全市场扫描: {reason}", flush=True)
+        else:
+            result, _n = scan_task(progress=_progress_cb())
+            print(f"[paper] {result}", flush=True)
     elif "--cycle" in args or "--force-scan" in args:
-        force = "--force-scan" in args
-        st = cycle_task(force_scan=force, progress=_progress_cb())
-        _print_cycle_result(st, force)
+        reason = _gate_reason(anytime="--anytime" in args)
+        if reason:
+            print(f"[paper] 跳过周期: {reason}", flush=True)
+        else:
+            force = "--force-scan" in args
+            st = cycle_task(force_scan=force, progress=_progress_cb())
+            _print_cycle_result(st, force)
     elif "--install-scan" in args:
         if os.name == "nt":
             install_task(at, scan=True, interval=interval)
