@@ -131,33 +131,33 @@ class _IndexCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("idxCard")
-        self.setMinimumHeight(122)
+        self.setMinimumHeight(100)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._DIR = None
         self._last = None
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(14, 12, 14, 10)
-        v.setSpacing(3)
+        v.setContentsMargins(10, 8, 10, 6)
+        v.setSpacing(2)
 
         top = QHBoxLayout()
-        top.setSpacing(6)
-        self._name = _label("--", 15, True, theme.C_TEXT)
+        top.setSpacing(4)
+        self._name = _label("--", 13, True, theme.C_TEXT)
         top.addWidget(self._name)
         top.addStretch(1)
-        self._ma_pill = _pill("--", theme.C_MUTED, _tint(theme.C_MUTED, 26), pt=9)
+        self._ma_pill = _pill("--", theme.C_MUTED, _tint(theme.C_MUTED, 26), pt=8)
         top.addWidget(self._ma_pill)
         v.addLayout(top)
 
-        self._price = _label("--", 26, True, theme.C_TEXT, mono=True)
+        self._price = _label("--", 22, True, theme.C_TEXT, mono=True)
         self._price.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self._price)
 
         bot = QHBoxLayout()
-        bot.setSpacing(8)
+        bot.setSpacing(6)
         bot.addStretch(1)
-        self._chg = _label("", 12, False, "", mono=True)
-        self._pct = _label("", 13, True, "", mono=True)
+        self._chg = _label("", 11, False, "", mono=True)
+        self._pct = _label("", 12, True, "", mono=True)
         bot.addWidget(self._chg)
         bot.addWidget(self._pct)
         bot.addStretch(1)
@@ -262,18 +262,18 @@ class _BreadthCard(Card):
     def __init__(self, parent=None):
         super().__init__(parent)
         header = PanelHeader("市场广度")
-        self._ts_label = _label("", 9, False, theme.C_MUTED)
+        self._ts_label = _label("", 8, False, theme.C_MUTED)
         header.add_action(self._ts_label)
         super().add_widget(header)
 
         nums = QHBoxLayout()
-        nums.setSpacing(18)
-        up_lab = _label("上涨", 10, True, theme.C_MUTED)
-        self._up_val = _label("--", 20, True, theme.C_UP, mono=True)
-        flat_lab = _label("平盘", 10, True, theme.C_MUTED)
-        self._flat_val = _label("--", 20, True, theme.C_MUTED, mono=True)
-        down_lab = _label("下跌", 10, True, theme.C_MUTED)
-        self._down_val = _label("--", 20, True, theme.C_DOWN, mono=True)
+        nums.setSpacing(12)
+        up_lab = _label("上涨", 9, True, theme.C_MUTED)
+        self._up_val = _label("--", 18, True, theme.C_UP, mono=True)
+        flat_lab = _label("平盘", 9, True, theme.C_MUTED)
+        self._flat_val = _label("--", 18, True, theme.C_MUTED, mono=True)
+        down_lab = _label("下跌", 9, True, theme.C_MUTED)
+        self._down_val = _label("--", 18, True, theme.C_DOWN, mono=True)
         nums.addWidget(up_lab)
         nums.addWidget(self._up_val)
         nums.addStretch(1)
@@ -288,13 +288,13 @@ class _BreadthCard(Card):
         super().add_widget(self._ratio_bar)
 
         chips = QHBoxLayout()
-        chips.setSpacing(10)
-        self._lu_pill = _pill("涨停 --", theme.C_UP, _tint(theme.C_UP, 22))
-        self._ld_pill = _pill("跌停 --", theme.C_DOWN, _tint(theme.C_DOWN, 22))
+        chips.setSpacing(8)
+        self._lu_pill = _pill("涨停 --", theme.C_UP, _tint(theme.C_UP, 22), pt=8)
+        self._ld_pill = _pill("跌停 --", theme.C_DOWN, _tint(theme.C_DOWN, 22), pt=8)
         chips.addWidget(self._lu_pill)
         chips.addWidget(self._ld_pill)
         chips.addStretch(1)
-        self._ratio_pill = _pill("涨跌比 --", theme.C_MUTED, _tint(theme.C_MUTED, 22))
+        self._ratio_pill = _pill("涨跌比 --", theme.C_MUTED, _tint(theme.C_MUTED, 22), pt=8)
         chips.addWidget(self._ratio_pill)
         super().add_layout(chips)
 
@@ -410,7 +410,7 @@ class DashboardWidget(QWidget):
         header = PanelHeader("上证指数走势 · K线")
         self._kline_toggle = QPushButton("收起 ▼")
         self._kline_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._kline_toggle.setFont(_font(9))
+        self._kline_toggle.setFont(_font(8))
         self._kline_toggle.setStyleSheet(
             f"QPushButton{{background:transparent;color:{theme.C_MUTED};border:none;padding:2px 8px;}}"
             f"QPushButton:hover{{color:{theme.C_ACCENT};}}")
@@ -455,80 +455,80 @@ class DashboardWidget(QWidget):
         ph = PanelHeader("市场情绪 · 成交额 · 共振 · 威科夫阶段 · 资金流向")
         ai_btn = QPushButton("AI 大盘综述")
         ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        ai_btn.setFont(_font(9, bold=True))
+        ai_btn.setFont(_font(8, bold=True))
         ai_btn.setStyleSheet(
             f"QPushButton{{background:{_tint(theme.C_ACCENT, 90)};color:{theme.C_TEXT};"
             f"border:1px solid {_tint(theme.C_ACCENT, 160)};"
-            f"border-radius:{theme.radius('full')}px;padding:3px 12px;}}"
+            f"border-radius:{theme.radius('full')}px;padding:2px 10px;}}"
             f"QPushButton:hover{{background:{_tint(theme.C_ACCENT, 140)};}}")
         ai_btn.clicked.connect(self.ai_briefing_requested)
         ph.add_action(ai_btn)
         card.layout_.addWidget(ph)
 
         row = QHBoxLayout()
-        row.setSpacing(18)
+        row.setSpacing(12)
 
         # 左侧: 市场情绪 + 成交额 + 共振
         left = QVBoxLayout()
-        left.setSpacing(8)
+        left.setSpacing(6)
         d1 = QHBoxLayout()
-        d1.setSpacing(10)
-        self._emo_phase = _label("--", 14, True, theme.C_MUTED)
+        d1.setSpacing(8)
+        self._emo_phase = _label("--", 12, True, theme.C_MUTED)
         self._emo_phase.setStyleSheet(
             f"color:{theme.C_MUTED};background:{_tint(theme.C_MUTED, 18)};"
             f"border:1px solid {theme.C_MUTED};"
-            f"border-radius:{theme.radius('full')}px;padding:4px 14px;")
+            f"border-radius:{theme.radius('full')}px;padding:3px 10px;")
         d1.addWidget(self._emo_phase)
-        self._emo_meta = _label("", 11, True, theme.C_TEXT, mono=True)
+        self._emo_meta = _label("", 10, True, theme.C_TEXT, mono=True)
         d1.addWidget(self._emo_meta)
         d1.addStretch(1)
         left.addLayout(d1)
-        self._emo_ladder = _label("", 10, False, theme.C_MUTED)
+        self._emo_ladder = _label("", 9, False, theme.C_MUTED)
         left.addWidget(self._emo_ladder)
-        self._emo_sectors = _label("", 10, False, theme.C_MUTED)
+        self._emo_sectors = _label("", 9, False, theme.C_MUTED)
         left.addWidget(self._emo_sectors)
-        self._emo_amount = _label("", 11, True, theme.C_TEXT, mono=True)
+        self._emo_amount = _label("", 10, True, theme.C_TEXT, mono=True)
         left.addWidget(self._emo_amount)
         left.addStretch(1)
         row.addLayout(left, 2)
 
         # 中间: 共振图表
         self._resonance_chart = ResonanceChart()
-        self._resonance_chart.setMinimumWidth(300)
+        self._resonance_chart.setMinimumWidth(280)
         row.addWidget(self._resonance_chart, 3)
 
         # 右侧: 威科夫阶段 + 资金流向
         right = QVBoxLayout()
-        right.setSpacing(10)
+        right.setSpacing(8)
 
         # 威科夫阶段
-        self._phase_badge = _label("--", 15, True, theme.C_TEXT)
+        self._phase_badge = _label("--", 13, True, theme.C_TEXT)
         self._phase_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._phase_badge.setStyleSheet(
             f"color:{theme.C_MUTED};background:{_tint(theme.C_MUTED, 18)};"
             f"border:1px solid {theme.C_MUTED};"
-            f"border-radius:{theme.radius('full')}px;padding:6px 16px;")
+            f"border-radius:{theme.radius('full')}px;padding:4px 12px;")
         right.addWidget(self._phase_badge)
-        self._phase_detail = _label("", 10, False, theme.C_MUTED, mono=True)
+        self._phase_detail = _label("", 9, False, theme.C_MUTED, mono=True)
         self._phase_detail.setWordWrap(True)
         right.addWidget(self._phase_detail)
-        self._phase_events = _label("", 10, False, theme.C_MUTED)
+        self._phase_events = _label("", 9, False, theme.C_MUTED)
         self._phase_events.setWordWrap(True)
         right.addWidget(self._phase_events)
-        right.addSpacing(12)
+        right.addSpacing(8)
 
         # 资金流向
-        self._flow_title = _label("主力资金", 10, True, theme.C_MUTED)
+        self._flow_title = _label("主力资金", 9, True, theme.C_MUTED)
         right.addWidget(self._flow_title)
-        self._flow_total = _pill("合计 --", theme.C_MUTED, _tint(theme.C_MUTED, 22))
+        self._flow_total = _pill("合计 --", theme.C_MUTED, _tint(theme.C_MUTED, 22), pt=8)
         right.addWidget(self._flow_total)
-        self._flow_detail = _label("暂无数据", 10, False, theme.C_MUTED, mono=True)
+        self._flow_detail = _label("暂无数据", 9, False, theme.C_MUTED, mono=True)
         self._flow_detail.setWordWrap(True)
         right.addWidget(self._flow_detail)
-        right.addSpacing(6)
-        self._zt_title = _label("涨停池", 10, True, theme.C_MUTED)
+        right.addSpacing(4)
+        self._zt_title = _label("涨停池", 9, True, theme.C_MUTED)
         right.addWidget(self._zt_title)
-        self._zt_detail = _label("暂无数据", 10, False, theme.C_MUTED)
+        self._zt_detail = _label("暂无数据", 9, False, theme.C_MUTED)
         self._zt_detail.setWordWrap(True)
         right.addWidget(self._zt_detail)
         right.addStretch(1)
@@ -543,7 +543,7 @@ class DashboardWidget(QWidget):
         header = PanelHeader("板块轮动")
         self._sector_table_toggle = QPushButton("展开明细表格 ▼")
         self._sector_table_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sector_table_toggle.setFont(_font(9))
+        self._sector_table_toggle.setFont(_font(8))
         self._sector_table_toggle.setStyleSheet(
             f"QPushButton{{background:transparent;color:{theme.C_MUTED};border:none;padding:2px 8px;}}"
             f"QPushButton:hover{{color:{theme.C_ACCENT};}}")
@@ -554,7 +554,7 @@ class DashboardWidget(QWidget):
         self._sector_heatmap = SectorHeatmap()
         card.add_widget(self._sector_heatmap)
 
-        self._div_label = _label("", 10, True, theme.C_MUTED)
+        self._div_label = _label("", 9, True, theme.C_MUTED)
         self._div_label.setWordWrap(True)
         self._div_label.hide()
         card.add_widget(self._div_label)
@@ -570,7 +570,7 @@ class DashboardWidget(QWidget):
         self._sector_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._sector_table.setShowGrid(True)
         self._sector_table.setAlternatingRowColors(True)
-        self._sector_table.setMaximumHeight(360)
+        self._sector_table.setMaximumHeight(320)
         self._theme_table()
         self._sector_table.hide()
         card.add_widget(self._sector_table)
@@ -590,10 +590,10 @@ class DashboardWidget(QWidget):
             f"gridline-color:{theme.C_GRID};"
             f"alternate-background-color:{theme.semantic('zebra')};"
             f"selection-background-color:{theme.semantic('sel')};}}"
-            f"QTableWidget::item{{padding:4px 6px;}}"
+            f"QTableWidget::item{{padding:3px 5px;}}"
             f"QHeaderView::section{{background:{theme.semantic('header')};color:{theme.C_TEXT};"
             f"border:none;border-right:1px solid {theme.C_BORDER};"
-            f"border-bottom:1px solid {theme.C_BORDER};padding:4px 6px;font-weight:bold;}}"
+            f"border-bottom:1px solid {theme.C_BORDER};padding:3px 5px;font-weight:bold;}}"
         )
 
     # ── 数据渲染 ──
