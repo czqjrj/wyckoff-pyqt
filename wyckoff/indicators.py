@@ -63,26 +63,30 @@ def _ewma(arr: np.ndarray, span: int, adjust: bool = False) -> np.ndarray:
 
     理论展开: EMA_t = alpha * sum_{i=0}^{t} (1-alpha)^{t-i} * x_i
     通过前缀和 + 权重归一化在纯 NumPy 上实现, 避免循环开销.
+
+    NaN 安全: 单根缺失只剔除该点对分子/分母的贡献, 不做传染
+    (cumsum 会把一根 NaN 扩散成整列 NA, 导致 MACD 面板整片空白)。
+    无 NaN 时数值与历史实现逐位一致。
+
+    `adjust` 为历史兼容参数 (等价 adjust=True)。
     """
-    alpha = 2.0 / (span + 1)
+    arr = np.asarray(arr, dtype=float)
     n = len(arr)
-    # 权重向量: w_i = alpha * (1-alpha)^{n-1-i}, i=0..n-1
-    # 经验展开可用 cumsum 实现, 避免 O(n) 循环
-    # 关键: 使用 lfilter 等价的 cumsum 方法
-    # w * x 通过 逆序累积和 + 归一化因子 实现
-    rev = arr[::-1]  # 逆序数据
-    # 累积和缩放: alpha * sum_{j=0}^{i} (1-alpha)^j * rev_{i-j}
-    # 使用等比数列求和公式的累积近似 (精确对应递推 EMA)
-    # 实现细节: 先 (1-alpha)^i 缩放, 然后 cumsum, 再除以 1-(1-alpha)^{i+1}
-    power = (1 - alpha) ** np.arange(n, 0, -1)  # (1-alpha)^n, (1-alpha)^{n-1}, ..., (1-alpha)^1
-    scaled = rev * power
-    cum = np.cumsum(scaled)  # 逆序累积和
-    norm = 1 - (1 - alpha) ** np.arange(1, n + 1)  # 归一化因子 1-(1-alpha)^k
-    out = cum / norm
-    # 恢复正序
-    out = out[::-1]
-    # 前根与原始一致
-    out[0] = arr[0]
+    if n == 0:
+        return np.array([], dtype=float)
+    alpha = 2.0 / (span + 1)
+    p = 1.0 - alpha
+    idx = np.arange(1, n + 1)      # bar 位置 j+1 (权重 p^{j+1})
+    mask = np.isfinite(arr)
+    wv = np.where(mask, arr * (p ** idx), 0.0)
+    # 后缀和: 分子只累计有限点, 分母保持原有全量归一化 (见 add_indicators 注释)
+    suf = np.cumsum(wv[::-1])[::-1]
+    norm = 1.0 - p ** (n - np.arange(n))
+    out = suf / norm
+    has_future = np.cumsum(mask[::-1])[::-1] > 0
+    out = np.where(has_future, out, np.nan)
+    if mask[0]:
+        out[0] = arr[0]  # 首值种子 (历史行为: EMA 起点贴原值)
     return out
 
 
