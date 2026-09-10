@@ -25,7 +25,7 @@ from wyckoff.strategies.evaluators import evaluate_strategy_value_accumulation
 # ── 模拟盘策略注册信息 (选股策略的单一来源) ──────────────────────
 # 优先序: 纪律 > 价值吸筹 > 左侧买点 (回测期望 4.87% / 3.21% / 2.52%,
 # 命中20 81% / 75% / 67%; 左侧不受门禁, 弱市仍可兜底入场)
-STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT)
+STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT)
 STRATEGY_CN = {
     STRATEGY_DISCIPLINE: "策略4·纪律",
     STRATEGY_VALUE_ACC: "价值吸筹",

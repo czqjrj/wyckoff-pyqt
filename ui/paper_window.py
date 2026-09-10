@@ -1,9 +1,8 @@
 """模拟盘面板 (自动筛选→自动下单→自动卖出→收益统计)。
 
-复用 wyckoff.paper 引擎 + 策略管理器三策略 (策略4·纪律 / 威科夫左侧买点 /
-价值吸筹) + extra_windows 的表格/线程模式:
+复用 wyckoff.paper 引擎 + 策略管理器双策略 (策略4·纪律 / 威科夫左侧买点) + extra_windows 的表格/线程模式:
   - 手动执行周期 (run_cycle) 与 定时自动执行周期 (30/15 分钟), 后台线程避免卡 UI。
-  - 右侧策略概览按策略管理器注册的多策略并行统计 (纪律 / 左侧买点 / 价值吸筹)。
+  - 右侧策略概览按策略管理器注册的双策略并行统计 (纪律 / 左侧买点)。
   - 四个数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
 """
 
@@ -167,9 +166,8 @@ def _strat_cn(s):
 
 # ── 扫描模式 (多策略并行) ─────────────────────────────────
 _SCAN_MODES = (
-    ("混合扫描(纪律+左侧买点+价值吸筹)", ""),  # 综合: 走 run_scan 默认, 三策略并行
+    ("混合扫描(纪律+左侧买点)", ""),  # 双策略并行: 策略4·纪律 + 威科夫左侧买点
     ("纪律扫描(强多头+硬门禁)", "discipline"),
-    ("价值吸筹扫描(底部整固)", "value_accumulation"),
     ("左侧买点扫描", "long_buy_left"),
 )
 
@@ -200,15 +198,12 @@ class _CycleThread(QThread):
         from wyckoff.strategies.constants import (
             STRATEGY_DISCIPLINE,
             STRATEGY_LONG_LEFT,
-            STRATEGY_VALUE_ACC,
         )
         settings = dict(self._settings or {})
         # 根据 mode 推断 strategies 子集
         strategies = None
         if self._mode == "discipline":
             strategies = (STRATEGY_DISCIPLINE,)
-        elif self._mode == "value_accumulation":
-            strategies = (STRATEGY_VALUE_ACC,)
         elif self._mode == "long_buy_left":
             strategies = (STRATEGY_LONG_LEFT,)
 
@@ -358,7 +353,7 @@ class PaperWindow(QDialog):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         root.addWidget(_accent_header("模拟盘 · 双策略并行 "
-                                      "(策略4·纪律 + 价值吸筹) → "
+                                      "(策略4·纪律 + 威科夫左侧买点) → "
                                       "筛选→买入→卖出→统计"))
 
         # 顶部: 账户概览 + 操作行 + 策略概览 (水平分栏)
@@ -458,9 +453,8 @@ class PaperWindow(QDialog):
         for label, _mode in _SCAN_MODES:
             self.cb_scan_mode.addItem(label)
         self.cb_scan_mode.setToolTip(
-            "混合: 三策略并行 (纪律/左侧买点/价值吸筹)\n"
+            "混合: 双策略并行 (纪律/左侧买点)\n"
             "纪律: 仅策略4·纪律 (强多头+硬门禁)\n"
-            "价值吸筹: 仅综合选股·价值吸筹 (底部整固+20根吸筹)\n"
             "左侧买点: 威科夫完整做多买点")
         hb_scan.addWidget(self.cb_scan_mode)
 
@@ -961,13 +955,13 @@ class PaperWindow(QDialog):
             float(self._settings.get(S.Paper.VA_WEIGHT, 0.6)))
         self.sp_va_weight.setSuffix(" x")
         self.sp_va_weight.setToolTip(
-            "价值吸筹单仓资金权重 (回测推荐 0.6, 其余策略=1.0)")
+            "策略4纪律单仓资金权重 (回测推荐 0.6)")
 
         self.ck_weak = QCheckBox("弱市过滤")
         self.ck_weak.setChecked(
             bool(self._settings.get(S.Paper.WEAK_FILTER, True)))
         self.ck_weak.setToolTip(
-            "上证收盘<MA20 判定弱市 → 新开仓上限 1 只且停用价值吸筹")
+            "上证收盘<MA20 判定弱市 → 新开仓上限 1 只")
 
         fields = (
             ("同持上限", self.sp_maxpos),
