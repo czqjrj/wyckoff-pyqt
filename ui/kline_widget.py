@@ -324,6 +324,9 @@ class KlineWidget(BasePlotWidget):
         self._help_item = None  # ? 快捷键帮助浮层
         self._latest_btn = None  # 右下角 "回到最新" 悬浮按钮
         self._bookmarks = {}  # 视图书签 {1-9: (x0,x1,y0,y1)}
+        self._layer_menu = None  # 图层右键菜单
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_layer_menu)
         self._build_plots()
         self.price_plot.setTitle("输入 A 股代码 (如 600104 / sh600104 / 000001), "
                                  "点击\"开始分析\"加载 K 线图。")
@@ -657,6 +660,38 @@ class KlineWidget(BasePlotWidget):
             if not on:
                 for it in self._layer_items.get(k, []):
                     it.setVisible(False)
+
+    def _show_layer_menu(self, pos):
+        """右键菜单: 图层显隐开关。"""
+        from PyQt6.QtWidgets import QMenu
+        if self._layer_menu is not None:
+            try:
+                self._layer_menu.deleteLater()
+            except (RuntimeError, TypeError):
+                pass
+        self._layer_menu = QMenu(self)
+        self._layer_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {theme.semantic('surface-1')};
+                border: 1px solid {theme.semantic('border')};
+                border-radius: {theme.radius('md')}px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 24px 6px 28px;
+                border-radius: {theme.radius('sm')}px;
+            }}
+            QMenu::item:selected {{
+                background: {theme.semantic('accent-bg')};
+                color: {theme.semantic('brand')};
+            }}
+        """)
+        for layer_key, label in LAYER_DEFS:
+            action = self._layer_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._layer_on.get(layer_key, True))
+            action.triggered.connect(lambda checked, k=layer_key: self.set_layer_visible(k, checked))
+        self._layer_menu.exec(self.mapToGlobal(pos))
 
     # ── 主图: 蜡烛 + 均线 + 波段 + 事件 + 锁 + VSA ──
     def _build_price(self, df, title, pivots, events, waves, draw_waves,

@@ -174,6 +174,9 @@ class IndWidget(HoverHighlightMixin, BasePlotWidget):
         self._focused = None
         self._crosshair_values = {}
         self._sync_x = True
+        self._layer_menu = None
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_layer_menu)
         self._build_plots()
         self._hh_start()
         self.plots["price"].setTitle(
@@ -711,6 +714,51 @@ class IndWidget(HoverHighlightMixin, BasePlotWidget):
                                     colspan=panel.colspan)
         self.ci.layout.invalidate()
         self.update()
+
+    def _show_layer_menu(self, pos):
+        """右键菜单: 面板聚焦快捷键提示。"""
+        from PyQt6.QtWidgets import QMenu
+        if self._layer_menu is not None:
+            try:
+                self._layer_menu.deleteLater()
+            except (RuntimeError, TypeError):
+                pass
+        self._layer_menu = QMenu(self)
+        self._layer_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {theme.semantic('surface-1')};
+                border: 1px solid {theme.semantic('border')};
+                border-radius: {theme.radius('md')}px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 24px 6px 28px;
+                border-radius: {theme.radius('sm')}px;
+            }}
+            QMenu::item:selected {{
+                background: {theme.semantic('accent-bg')};
+                color: {theme.semantic('brand')};
+            }}
+        """)
+        # 面板聚焦
+        for num, (key, title) in enumerate([
+            ("macd", "MACD"), ("volume", "量能"), ("price", "价格·BOLL"),
+            ("kdj", "KDJ"), ("rsi", "RSI"), ("obv", "OBV"),
+            ("vp", "量价分布"), ("rs", "相对强度")
+        ], 1):
+            action = self._layer_menu.addAction(f"{num} - 聚焦 {title}")
+            action.triggered.connect(lambda checked, k=key: self.focus_panel(k))
+        self._layer_menu.addSeparator()
+        reset_action = self._layer_menu.addAction("0 / G - 恢复网格视图")
+        reset_action.triggered.connect(self.show_grid)
+        help_action = self._layer_menu.addAction("H - 显示完整快捷键帮助")
+        help_action.triggered.connect(self._show_shortcuts_help)
+        sync_action = self._layer_menu.addAction("Ctrl+S - 切换面板联动缩放")
+        sync_action.triggered.connect(self._toggle_sync_mode)
+        self._layer_menu.addSeparator()
+        copy_action = self._layer_menu.addAction("Ctrl+C - 复制当前面板数据")
+        copy_action.triggered.connect(self._copy_panel_data)
+        self._layer_menu.exec(self.mapToGlobal(pos))
 
     # ── 视图 / 交互 ──
     def _fs(self, delta=0):

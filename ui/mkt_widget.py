@@ -126,6 +126,9 @@ class MktWidget(HoverHighlightMixin, BasePlotWidget):
         # 高度由外层 IndScroll 按 MKT_ASPECT×宽度决定 (与技术指标页一致),
         # 此处只保留最小可读下限。
         self.setMinimumSize(700, 500)
+        self._layer_menu = None
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_layer_menu)
         self._build_plots(empty=True)
         self._hh_start()
 
@@ -504,6 +507,51 @@ class MktWidget(HoverHighlightMixin, BasePlotWidget):
             self.ci.addItem(self.insights_label, 5, 0, colspan=2)
         self.ci.layout.invalidate()
         self.update()
+
+    def _show_layer_menu(self, pos):
+        """右键菜单: 面板聚焦快捷键提示。"""
+        from PyQt6.QtWidgets import QMenu
+        if self._layer_menu is not None:
+            try:
+                self._layer_menu.deleteLater()
+            except (RuntimeError, TypeError):
+                pass
+        self._layer_menu = QMenu(self)
+        self._layer_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {theme.semantic('surface-1')};
+                border: 1px solid {theme.semantic('border')};
+                border-radius: {theme.radius('md')}px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 24px 6px 28px;
+                border-radius: {theme.radius('sm')}px;
+            }}
+            QMenu::item:selected {{
+                background: {theme.semantic('accent-bg')};
+                color: {theme.semantic('brand')};
+            }}
+        """)
+        # 面板聚焦
+        for num, (key, title) in enumerate([
+            ("main_flow", "主力资金流向"), ("sub_flow", "资金分项"),
+            ("chips", "当前筹码堆积形态"), ("holders", "股东户数变化"),
+            ("sd", "供需强度")
+        ], 1):
+            action = self._layer_menu.addAction(f"{num} - 聚焦 {title}")
+            action.triggered.connect(lambda checked, k=key: self.focus_panel(k))
+        self._layer_menu.addSeparator()
+        reset_action = self._layer_menu.addAction("0 / G - 恢复完整布局")
+        reset_action.triggered.connect(self.show_grid)
+        help_action = self._layer_menu.addAction("H - 显示完整快捷键帮助")
+        help_action.triggered.connect(self._show_shortcuts_help)
+        sync_action = self._layer_menu.addAction("Ctrl+S - 切换面板联动缩放")
+        sync_action.triggered.connect(self._toggle_sync_mode)
+        self._layer_menu.addSeparator()
+        copy_action = self._layer_menu.addAction("Ctrl+C - 复制当前面板数据")
+        copy_action.triggered.connect(self._copy_panel_data)
+        self._layer_menu.exec(self.mapToGlobal(pos))
 
     def _relayout(self):
         """重建后强制重算行高 (总高 = 宽度×MKT_ASPECT, 文本按内容自适应)。"""
