@@ -368,12 +368,11 @@ class DashboardWidget(QWidget):
         self._root.setSpacing(12)
 
         self._build_index_section()
-        self._build_kline_section()
         self._build_breadth_section()
         self._build_charts_section()
-        self._build_emotion_section()
-        self._build_fundamentals_section()
+        self._build_emotion_fundamentals_section()
         self._build_sector_section()
+        self._build_kline_section()
 
         self._root.addStretch(1)
         scroll.setWidget(container)
@@ -385,7 +384,7 @@ class DashboardWidget(QWidget):
         self._cards.append(card)
         return card
 
-    # ── 主要指数 ──
+    # ── 主要指数 (响应式网格) ──
     def _build_index_section(self):
         card = self._new_card()
         header = PanelHeader("主要指数")
@@ -399,18 +398,38 @@ class DashboardWidget(QWidget):
         for i, idx_info in enumerate(DASH_INDICES):
             card_w = _IndexCard()
             card_w.mousePressEvent = lambda e, c=idx_info["code"]: self.load_code.emit(c)
-            r, c_ = divmod(i, 3)
+            r, c_ = divmod(i, 2)
             grid.addWidget(card_w, r, c_)
             self._idx_cards[idx_info["code"]] = card_w
         card.layout_.addLayout(grid)
         self._root.addWidget(card)
 
-    # ── 大盘走势图 ──
+    # ── 大盘走势图 (可折叠) ──
     def _build_kline_section(self):
         card = self._new_card()
+        header = PanelHeader("上证指数走势 · K线")
+        self._kline_toggle = QPushButton("收起 ▼")
+        self._kline_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._kline_toggle.setFont(_font(9))
+        self._kline_toggle.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{theme.C_MUTED};border:none;padding:2px 8px;}}"
+            f"QPushButton:hover{{color:{theme.C_ACCENT};}}")
+        self._kline_toggle.clicked.connect(self._toggle_kline)
+        header.add_action(self._kline_toggle)
+        card.layout_.addWidget(header)
+
         self._sse_chart = SseKlineChart()
         card.add_widget(self._sse_chart)
+        self._sse_chart.setVisible(True)
         self._root.addWidget(card)
+
+    def _toggle_kline(self):
+        if self._sse_chart.isHidden():
+            self._sse_chart.show()
+            self._kline_toggle.setText("收起 ▼")
+        else:
+            self._sse_chart.hide()
+            self._kline_toggle.setText("展开 ▲")
 
     # ── 市场广度 ──
     def _build_breadth_section(self):
@@ -430,10 +449,10 @@ class DashboardWidget(QWidget):
         card.add_layout(two)
         self._root.addWidget(card)
 
-    # ── 市场情绪 + 成交额 + 共振 (左信息右曲线) ──
-    def _build_emotion_section(self):
+    # ── 市场情绪/成交额/共振 + 威科夫阶段/资金流向 (左右两栏合并卡片) ──
+    def _build_emotion_fundamentals_section(self):
         card = self._new_card()
-        ph = PanelHeader("市场情绪 · 成交额 · 共振")
+        ph = PanelHeader("市场情绪 · 成交额 · 共振 · 威科夫阶段 · 资金流向")
         ai_btn = QPushButton("AI 大盘综述")
         ai_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         ai_btn.setFont(_font(9, bold=True))
@@ -448,9 +467,10 @@ class DashboardWidget(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(18)
+
+        # 左侧: 市场情绪 + 成交额 + 共振
         left = QVBoxLayout()
         left.setSpacing(8)
-        # 阶段徽章 + 主要计数
         d1 = QHBoxLayout()
         d1.setSpacing(10)
         self._emo_phase = _label("--", 14, True, theme.C_MUTED)
@@ -470,62 +490,66 @@ class DashboardWidget(QWidget):
         self._emo_amount = _label("", 11, True, theme.C_TEXT, mono=True)
         left.addWidget(self._emo_amount)
         left.addStretch(1)
-        row.addLayout(left, 1)
+        row.addLayout(left, 2)
+
+        # 中间: 共振图表
         self._resonance_chart = ResonanceChart()
         self._resonance_chart.setMinimumWidth(300)
         row.addWidget(self._resonance_chart, 3)
-        card.add_layout(row)
-        self._root.addWidget(card)
 
-    # ── 威科夫阶段 + 资金流向 (两列卡片) ──
-    def _build_fundamentals_section(self):
-        two_col = QHBoxLayout()
-        two_col.setSpacing(12)
+        # 右侧: 威科夫阶段 + 资金流向
+        right = QVBoxLayout()
+        right.setSpacing(10)
 
-        # 左: 威科夫阶段
-        left = self._new_card()
-        left.layout_.addWidget(PanelHeader("威科夫阶段"))
+        # 威科夫阶段
         self._phase_badge = _label("--", 15, True, theme.C_TEXT)
         self._phase_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._phase_badge.setStyleSheet(
             f"color:{theme.C_MUTED};background:{_tint(theme.C_MUTED, 18)};"
             f"border:1px solid {theme.C_MUTED};"
             f"border-radius:{theme.radius('full')}px;padding:6px 16px;")
-        left.layout_.addWidget(self._phase_badge)
+        right.addWidget(self._phase_badge)
         self._phase_detail = _label("", 10, False, theme.C_MUTED, mono=True)
         self._phase_detail.setWordWrap(True)
-        left.layout_.addWidget(self._phase_detail)
+        right.addWidget(self._phase_detail)
         self._phase_events = _label("", 10, False, theme.C_MUTED)
         self._phase_events.setWordWrap(True)
-        left.layout_.addWidget(self._phase_events)
-        left.layout_.addStretch(1)
-        two_col.addWidget(left, 1)
+        right.addWidget(self._phase_events)
+        right.addSpacing(12)
 
-        # 右: 资金流向 (主力资金 + 涨停池)
-        right = self._new_card()
-        right.layout_.addWidget(PanelHeader("资金流向"))
+        # 资金流向
         self._flow_title = _label("主力资金", 10, True, theme.C_MUTED)
-        right.layout_.addWidget(self._flow_title)
+        right.addWidget(self._flow_title)
         self._flow_total = _pill("合计 --", theme.C_MUTED, _tint(theme.C_MUTED, 22))
-        right.layout_.addWidget(self._flow_total)
+        right.addWidget(self._flow_total)
         self._flow_detail = _label("暂无数据", 10, False, theme.C_MUTED, mono=True)
         self._flow_detail.setWordWrap(True)
-        right.layout_.addWidget(self._flow_detail)
-        right.layout_.addSpacing(6)
+        right.addWidget(self._flow_detail)
+        right.addSpacing(6)
         self._zt_title = _label("涨停池", 10, True, theme.C_MUTED)
-        right.layout_.addWidget(self._zt_title)
+        right.addWidget(self._zt_title)
         self._zt_detail = _label("暂无数据", 10, False, theme.C_MUTED)
         self._zt_detail.setWordWrap(True)
-        right.layout_.addWidget(self._zt_detail)
-        right.layout_.addStretch(1)
-        two_col.addWidget(right, 1)
+        right.addWidget(self._zt_detail)
+        right.addStretch(1)
 
-        self._root.addLayout(two_col)
+        row.addLayout(right, 2)
+        card.add_layout(row)
+        self._root.addWidget(card)
 
     # ── 板块轮动 ──
     def _build_sector_section(self):
         card = self._new_card()
-        card.layout_.addWidget(PanelHeader("板块轮动"))
+        header = PanelHeader("板块轮动")
+        self._sector_table_toggle = QPushButton("展开明细表格 ▼")
+        self._sector_table_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sector_table_toggle.setFont(_font(9))
+        self._sector_table_toggle.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{theme.C_MUTED};border:none;padding:2px 8px;}}"
+            f"QPushButton:hover{{color:{theme.C_ACCENT};}}")
+        self._sector_table_toggle.clicked.connect(self._toggle_sector_table)
+        header.add_action(self._sector_table_toggle)
+        card.layout_.addWidget(header)
 
         self._sector_heatmap = SectorHeatmap()
         card.add_widget(self._sector_heatmap)
@@ -546,11 +570,19 @@ class DashboardWidget(QWidget):
         self._sector_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._sector_table.setShowGrid(True)
         self._sector_table.setAlternatingRowColors(True)
-        self._sector_table.setMinimumHeight(200)
         self._sector_table.setMaximumHeight(360)
         self._theme_table()
+        self._sector_table.hide()
         card.add_widget(self._sector_table)
         self._root.addWidget(card)
+
+    def _toggle_sector_table(self):
+        if self._sector_table.isHidden():
+            self._sector_table.show()
+            self._sector_table_toggle.setText("收起明细表格 ▲")
+        else:
+            self._sector_table.hide()
+            self._sector_table_toggle.setText("展开明细表格 ▼")
 
     def _theme_table(self):
         self._sector_table.setStyleSheet(
