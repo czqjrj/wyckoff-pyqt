@@ -936,7 +936,7 @@ class KlineWidget(BasePlotWidget):
 
     def _draw_news(self, plot, markers):
         """新闻情绪图层: 按发布日画竖直点线 (红=偏多/绿=偏空),
-        悬停显示标题+情绪分+价格验证结论; 与威科夫事件直观对齐。"""
+        标题文本显示在 K 线上方; 悬停显示标题+情绪分+价格验证结论。"""
         ymin, ymax = self._full_y
         for m in markers:
             ix = int(m.get("idx", -1))
@@ -944,10 +944,13 @@ class KlineWidget(BasePlotWidget):
                 continue
             score = float(m.get("score", 0.0) or 0.0)
             col = theme.C_UP if score > 0 else theme.C_DOWN
+            title = m.get("title", "")
+            src = m.get("src", "")
+            # 竖直点线
             ln = pg.InfiniteLine(pos=float(ix), angle=90, movable=False,
                                  pen=_pen(col, 0.7, Qt.PenStyle.DotLine))
             ln.setZValue(-10)
-            tip = f"{m.get('src', '')} {m.get('title', '')}\n情绪 {score:+.2f}"
+            tip = f"{src} {title}\n情绪 {score:+.2f}"
             v = m.get("valid")
             if v == "confirmed":
                 tip += "\n✓ 后续量价确认 (已加权)"
@@ -955,6 +958,20 @@ class KlineWidget(BasePlotWidget):
                 tip += "\n✗ 市场证伪·借利好派发嫌疑 (已降权)"
             ln.setToolTip(tip)
             self._add(plot, ln, "news")
+            # 标题文本: 放在该 K 线高点上方, 避免重叠
+            if title:
+                hi = float(self._chart_hi[ix]) if ix < len(self._chart_hi) else ymax
+                y_pos = hi + (ymax - ymin) * 0.02
+                label = f"{src} {title}" if src else title
+                # 截断过长标题
+                if len(label) > 18:
+                    label = label[:17] + "…"
+                ti = pg.TextItem(label, color=col, anchor=(0.5, 0),
+                                 border=_pen(col, 0.8), fill=pg.mkBrush(theme.C_PANEL))
+                ti.setFont(self._font(-3, bold=True))
+                ti.setPos(float(ix), y_pos)
+                ti.setToolTip(tip)
+                self._add(plot, ti, "news")
 
     def _draw_locks(self, plot, events, locks):
         sell_types = {"UTAD", "BC", "UT", "SOW", "LPSY"}
