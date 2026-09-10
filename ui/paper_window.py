@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QSpinBox,
+    QSplitter,
     QTableWidgetItem,
     QTabWidget,
     QTimeEdit,
@@ -88,6 +89,21 @@ def _fill_paper(table, cols, heads, rows, color_cols=()):
             QHeaderView.ResizeMode.Interactive)
     finally:
         table.setUpdatesEnabled(True)
+
+
+def _fit_columns(table, min_w=48, max_w=170):
+    """填充后按内容自适应列宽并限定 [min_w, max_w], 恢复可交互拖拽。
+
+    信号表行多, 全按内容可能把窗口顶爆; 限定后横向不再挤成一团。
+    """
+    hdr = table.horizontalHeader()
+    hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    table.resizeColumnsToContents()
+    for i in range(table.columnCount()):
+        w = max(min_w, min(hdr.sectionSize(i), max_w))
+        table.setColumnWidth(i, w)
+    hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    hdr.setStretchLastSection(True)
 
 
 def _cond_kind_cn(kind, trigger=None):
@@ -516,9 +532,6 @@ class PaperWindow(QDialog):
         hb_cron.addStretch(1)
         root.addLayout(hb_cron)
 
-        # 策略参数配置
-        root.addWidget(self._build_config_group())
-
         # 页签: 持仓/已平仓/候选/订单 + 条件单 + 资金曲线
         tabs = QTabWidget()
         self.tabs = tabs
@@ -537,6 +550,7 @@ class PaperWindow(QDialog):
         tabs.addTab(self._track_page, "策略跟踪")
         self._log_page = self._build_log_tab()
         tabs.addTab(self._log_page, "日志")
+        tabs.addTab(self._build_config_tab(), "策略参数")
         root.addWidget(tabs, 1)
 
         # 定时器: 自动执行周期 (默认 30 分钟)
@@ -637,21 +651,37 @@ class PaperWindow(QDialog):
         lay = QVBoxLayout(page)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(6)
-        info = QLabel(
-            "双策略绩效: 命中=信号后5/10/20根方向命中率(预测准确度) · "
-            "触点=止盈/止损/入场条件单触发正确率(执行准确性) · "
-            "平仓=已平仓净收益(盈利能力)")
+        info = QLabel("命中=预测准确度 · 触点=执行准确性 · 平仓=盈利能力")
         info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info.setStyleSheet(f"font-size:13px;color:{theme.C_MUTED};"
-                           "min-height:24px;")
+        info.setStyleSheet(f"font-size:12px;color:{theme.C_MUTED};"
+                           "min-height:20px;")
+        info.setToolTip(
+            "命中: 信号后5/10/20根方向命中率 (预测准确度)\n"
+            "触点: 止盈/止损/入场条件单触发正确率 (执行准确性)\n"
+            "平仓: 已平仓净收益 (盈利能力)")
         lay.addWidget(info)
+
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.setChildrenCollapsible(True)
         self.t_strat = _table()
-        lay.addWidget(self.t_strat, 0)
-        lab_sig = QLabel("信号明细 (5/10/20根为信号后真实收益, ✓=已执行买入)")
+        split.addWidget(self.t_strat)
+        sig_pane = QWidget()
+        sig_pane.setProperty("themedRole", "")  # 随主题
+        sl = QVBoxLayout(sig_pane)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(4)
+        lab_sig = QLabel("信号明细 (✓=已执行买入)")
         lab_sig.setStyleSheet(f"color:{theme.C_MUTED};font-size:12px;")
-        lay.addWidget(lab_sig)
+        lab_sig.setToolTip("5/10/20根为信号后真实收益, ✓=已执行买入")
+        sl.addWidget(lab_sig)
         self.t_sig = _table()
-        lay.addWidget(self.t_sig, 1)
+        sl.addWidget(self.t_sig, 1)
+        split.addWidget(sig_pane)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([170, 900])
+        self._track_splitter = split
+        lay.addWidget(split, 1)
         return page
 
     def _build_cond_tab(self):
@@ -834,6 +864,14 @@ class PaperWindow(QDialog):
                                     f"{symbol} 无 active 条件单")
 
     # ── 策略参数配置 ───────────────────────────────────────
+    def _build_config_tab(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.addWidget(self._build_config_group())
+        lay.addStretch(1)
+        return page
+
     def _build_config_group(self):
         from wyckoff.settings_keys import S
 
@@ -1418,8 +1456,11 @@ class PaperWindow(QDialog):
         sig = signal_stats()
         cond = cond_accuracy(st)
         prof = profit_summary(st)
+        from wyckoff.strategies.constants import STRATEGY_VALUE_ACC
         rows = []
         for key in _STRAT_ORDER:
+            if key == STRATEGY_VALUE_ACC:
+                continue
             a = sig.get(key, {})
             h = a.get("horizons", {})
             e = cond.get(key, {})
@@ -1458,6 +1499,8 @@ class PaperWindow(QDialog):
         except Exception:
             recs = []
         for r in recs:
+            if r.get("strategy") == STRATEGY_VALUE_ACC:
+                continue
             srows.append({
                 "date": str(r.get("date", ""))[:10],
                 "strategy": _STRAT_CN.get(r.get("strategy", ""),
@@ -1478,6 +1521,8 @@ class PaperWindow(QDialog):
                     dict(zip(_CN_SIG, _CN_SIG_HEAD)), srows,
                     color_cols=("r5", "r10", "r20"))
         self.t_sig.setSortingEnabled(False)
+        _fit_columns(self.t_strat, min_w=44, max_w=120)
+        _fit_columns(self.t_sig, min_w=66, max_w=150)
 
     def _maybe_eval_signals(self, force=False):
         """有未评估信号且距上次超过阈值 → 后台补评估 (不阻塞 UI)。"""
