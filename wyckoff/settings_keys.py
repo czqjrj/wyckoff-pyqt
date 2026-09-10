@@ -106,6 +106,8 @@ class Paper(_Base):
     WEAK_INDEX_CODE = "paper_weak_index_code"
     # 价值吸筹单仓资金权重
     VA_WEIGHT = "paper_va_weight"
+    # 价值吸筹策略总开关: False = 模拟盘完全停用该策略 (不再扫描/生成入场条件单)
+    ENABLE_VA = "paper_enable_va"
     # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
     REBALANCE = "paper_rebalance"
 
@@ -234,6 +236,7 @@ DEFAULTS = {
     Paper.SCAN_INTERVAL: 1800,
     Paper.ENABLE_CHINEXT: False,
     Paper.ENABLE_STAR: False,
+    Paper.ENABLE_VA: True,
     AI.FALSIFY_ENABLED: False,
     AI.INTERPRET_ENABLED: False,
     AI.API_KEY: "",

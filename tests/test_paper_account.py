@@ -39,6 +39,17 @@ class DiscMgr:
                 "gated": True}
 
 
+class VaMgr:
+    """只产价值吸筹候选 (gated=True) 的假管理器。"""
+
+    def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
+                        name="", event_types=None, strategies=None):
+        return {"strategy": "screener_value_accumulation", "type": "Spring",
+                "idx": 388, "conf": 85, "kind": "spring", "entry_price": 10.1,
+                "stop_price": 9.4, "target_price": 13.1, "rr": 3.0,
+                "gated": True}
+
+
 def _apply(monkeypatch, mgr, market_ok=(True, "")):
     monkeypatch.setattr(paper, "_strategy_manager", lambda: mgr)
     monkeypatch.setattr("wyckoff.datasource.fetch_kline",
@@ -117,3 +128,39 @@ def test_pick_candidates_restricts_to_main_board(monkeypatch):
     _apply(monkeypatch, LeftMgr())
     out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
     assert len(out) >= 0
+
+
+def test_pick_candidates_enable_va_off_default(monkeypatch):
+    """停用价值吸筹后: 纪律/左侧候选正常产出, 价值吸筹候选被剔除。"""
+    _apply(monkeypatch, VaMgr())
+    old = paper._CUR.get("enable_va", True)
+    paper._CUR["enable_va"] = False
+    try:
+        out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    finally:
+        if "enable_va" in paper._CUR and paper._CUR.get("enable_va", True) != old:
+            paper._CUR["enable_va"] = old
+    assert [e["strategy"] for e in out] == []
+
+
+def test_pick_candidates_enable_va_off_explicit_va_only(monkeypatch):
+    """停用价值吸筹后, 显式仅扫描价值吸筹 → 直接返回空 (不回退全策略)。"""
+    _apply(monkeypatch, VaMgr())
+    paper._CUR["enable_va"] = False
+    try:
+        out = paper.pick_candidates(universe=["sh600001"], max_codes=5,
+                                    strategies=("screener_value_accumulation",))
+    finally:
+        paper._CUR["enable_va"] = True
+    assert out == []
+
+
+def test_pick_candidates_enable_va_on_keeps_va(monkeypatch):
+    """开关默认开启时, 价值吸筹候选正常产出。"""
+    _apply(monkeypatch, VaMgr())
+    paper._CUR["enable_va"] = True
+    monkeypatch.setattr(paper, "_sector_strength_ok", lambda s: (True, ""))
+    monkeypatch.setattr(paper, "_flow_net5",
+                        lambda c: 1_000_000.0 if c == "sh600001" else None)
+    out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    assert [e["strategy"] for e in out] == ["screener_value_accumulation"]

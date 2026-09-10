@@ -90,6 +90,8 @@ WEAK_MAX_POS = 1
 WEAK_INDEX_CODE = "sh000001"
 # 价值吸筹单仓资金权重 (其余策略=1.0; 降低弱策略敞口)
 VA_WEIGHT = 0.6
+# 价值吸筹策略总开关 (实测为三策略最弱, 可整体停用仅保留纪律+左侧)
+ENABLE_VA = True
 # 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到 总权益/max_pos,
 # 消除"先买的大、后买的小"的顺序衰减与资金闲置 (利用率仅 ~66% 的根因)。
 REBALANCE = True
@@ -312,6 +314,8 @@ def apply_paper_params(settings=None):
         "weak_index_code": _get(S.Paper.WEAK_INDEX_CODE, WEAK_INDEX_CODE),
         # 价值吸筹资金降权
         "va_weight": float(_get(S.Paper.VA_WEIGHT, VA_WEIGHT)),
+        # 价值吸筹总开关 (False=彻底停用)
+        "enable_va": bool(_get(S.Paper.ENABLE_VA, ENABLE_VA)),
         # 周期级等权再平衡
         "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
     }
@@ -345,6 +349,7 @@ _CUR = {
     "weak_max_pos": WEAK_MAX_POS,
     "weak_index_code": WEAK_INDEX_CODE,
     "va_weight": VA_WEIGHT,
+    "enable_va": ENABLE_VA,
     "rebalance": REBALANCE,
 }
 
@@ -1302,6 +1307,15 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     """
     if min_conf is None:
         min_conf = _CUR["min_conf"]
+    # 价值吸筹停用时: 统一在选股源头剔除该策略 (不产生候选/条件单)。
+    if not _CUR.get("enable_va", True):
+        if strategies is None:
+            strategies = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT)
+        else:
+            strategies = tuple(s for s in strategies if s != STRATEGY_VALUE_ACC)
+        if not strategies:
+            # 显式仅指定价值吸筹 (如 UI 模式扫描) → 直接返回空, 避免回退全策略
+            return []
     from .datasource import fetch_kline
     from .fundamental import fetch_sector
     from .indicators import add_indicators
@@ -1610,10 +1624,16 @@ def _apply_auto_conditions(st, cand, weak=False):
     # (曾因多轮扫描反复落盘堆积 42 个同代码重复), 先取消多余的再重建;
     # 已持标的的入场条件单一并取消 (持仓期间买入条件单无意义, 且会反复触发→取消)。
     seen = {}
+    va_off = not _CUR.get("enable_va", True)
     for c in conds:
         if c.get("kind") != "buy_price" or c.get("status") != "active":
             continue
         code = c["symbol"]
+        if va_off and c.get("strategy") == STRATEGY_VALUE_ACC:
+            c["status"] = "cancelled"
+            c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            c["note"] = "停用价值吸筹, 取消入场条件单"
+            continue
         if code in held:
             c["status"] = "cancelled"
             c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
