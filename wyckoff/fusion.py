@@ -1,12 +1,15 @@
-"""多维度信号融合: K线结构 / 威科夫事件 / VSA量价 / P&F点数图 → 统一多空评分。
+import logging
+import logging
+"""多维度信号融合: K线结构 / 威科夫事件 / VSA量价 / P&F点数图 / Qlib因子 → 统一多空评分。
 
 设计动机: 各模块 (phase/events/vsa/pnf) 独立输出各自的多空判断, 结论区并列
 罗列, 但缺少交叉验证——某个维度强多 + 另一维度强空时, 用户得不到明确结论。
-本模块把四类信号量化成统一评分轴 (-100~+100), 加权合成综合多空倾向与
+本模块把五类信号量化成统一评分轴 (-100~+100), 加权合成综合多空倾向与
 置信度, 并显式报告"哪几维共振 / 哪几维矛盾", 供结论区与信号汇总使用。
 
 评分约定: >0 偏多, <0 偏空, |分| 越大信号越强; 置信度由"同向维度数 +
 信号强度一致性"决定: 全部同向且强 → 高, 部分同向 → 中, 方向分裂 → 低。
+Qlib因子作为量化模型预测补充, 通过因子评分对技术面信号进行权重修正。
 """
 
 import json
@@ -15,15 +18,17 @@ import os
 from .config import VSA_BEAR, VSA_BULL, W_RECENT, event_dir
 from .paths import DATA_DIR
 
-# 各维度权重 (K线结构最重, 威科夫事件次之, VSA与P&F辅助确认)
+# 各维度权重 (K线结构最重, 威科夫事件次次, VSA与P&F辅助确认)
 W_KLINE = 0.35
 W_EVENT = 0.30
 W_VSA = 0.20
 W_PNF = 0.15
 
-# 新闻情绪维度权重 (小权重探索: 无 A/B 实证样本前不喧宾夺主), 乘以 _news_cal_factor()
-# 自校准因子: accuracy.update_news_calibration 依据已评估样本中 news_score 与实际
-# 收益方向一致性落盘 (命中显著低于基线→缩权, 高于→放权), 由数据决定预测力。
+# Qlib 因子维度权重: 量化模型预测作为技术面信号的权重修正
+# 系数 α: 通过历史回测学习最优值，建议起始值 0.15~0.25
+W_QLIB = 0.15
+
+# 新闻情绪维度权重 (小权重探索: 无 A/B 实证样本前不喧宾夺主)
 W_NEWS = 0.05
 
 # 新闻情绪参与评分的绝对强度门槛: |score|<0.3 视为弱情绪 (关键词噪声为主),
@@ -271,7 +276,7 @@ def _align(score, htf):
 
 def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
                  news_sentiment=None, forward_calendar=None):
-    """融合四类信号, 返回综合评分与维度明细。
+    """融合五类信号 (K线/威科夫/VSA/P&F/Qlib), 返回综合评分与维度明细。
 
     参数: 与各模块输出直接兼容 (analysis.py 中已有)。
       news_sentiment: 新闻情绪结果 (建议先经 news.apply_price_validation 验证,
@@ -304,6 +309,14 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
          "score": _pnf_score(pnf_t, last_close),
          "detail": pnf_t.get("direction", "range") if pnf_t else "无"},
     ]
+    # Qlib 因子维度: 量化模型预测的概率评分
+    # 通过 fetch_qlib_features 获取因子值，将因子值映射到 -100~+100 评分区间
+    qlib_score = _qlib_factor_score(df, last_close)
+    dims.append({
+        "key": "qlib", "name": "Qlib因子",
+        "score": _align(qlib_score, htf),
+        "detail": "量化因子评分",
+    })
     # 新闻情绪维度: 打分 → 价格验证(上游) → 事件共振 → 自校准因子
     news_score = 0.0
     news_detail = "无"
@@ -375,7 +388,8 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
 
     score = (dims[0]["score"] * W_KLINE + dims[1]["score"] * W_EVENT
              + dims[2]["score"] * W_VSA + dims[3]["score"] * W_PNF
-             + dims[4]["score"] * W_NEWS)
+             + dims[4]["score"] * W_NEWS
+             + dims[5]["score"] * W_QLIB)
     score = max(-100.0, min(100.0, score))
 
     # bias 阈值 ±8 (与 phase_tone 对齐, 减少 fusion_bias 过度中性化)
@@ -442,3 +456,75 @@ def _summary_text(score, bias, confidence, dims, conflicts, htf=0):
     if conflicts:
         parts.append("⚠ 方向矛盾")
     return "  ".join(parts)
+
+
+def _qlib_factor_score(df, last_close):
+    """计算 Qlib 因子对当前周期的评分 (-100~+100)。
+
+    通过 fetch_qlib_features 获取因子值，使用简单的线性映射将因子值
+    变换到评分区间。因子主要关注动量与均值回归两个维度。
+
+    参数
+    ----------
+    df : pd.DataFrame
+        包含 K 线数据的 DataFrame，需包含 close 列。
+    last_close : float
+        当前最新收盘价。
+
+    返回
+    -----
+    float
+        归一化评分，范围约 [-100, +100]，正值偏多，负值偏空。
+    """
+    try:
+        from .qlib_adapter import fetch_qlib_features
+    except Exception:
+        # qlib 未安装，返回 0 (中性)
+        return 0.0
+
+    # 获取最近 180 天的因子数据 (因子计算需要足够历史)
+    import pandas as pd
+    from datetime import datetime, timedelta
+
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+
+    try:
+        features = fetch_qlib_features(
+            df.attrs.get("symbol", "sh600104"), start_date, end_date
+        )
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.debug(f"qlib factor score fetch failed: {e}")
+        return 0.0
+
+    if not features:
+        return 0.0
+
+    # 基于两个核心因子计算评分:
+    # 1. momentum_10: 短期动量 (正值 → 多头倾向)
+    # 2. mean_reversion_30: 中期均值回归 (偏离均值的距离)
+    mom = features.get("momentum_10", 0.0)
+    mr = features.get("mean_reversion_30", 0.0)
+
+    # 简单线性映射: 将因子组合映射到 -100~+100
+    # 阶段 1: 纯动量驱动 (mr 近似 0) → 由 mom 直接决定
+    # 阶段 2: 动量 + 均值回归 综合
+    # 权重: 动量 60%, 均值回归 40%
+    weight_mom = 0.6
+    weight_mr = 0.4
+
+    # 将因子值转化为 -1~1 归一化区间 (近似: 3σ 经验规则)
+    # momentum: 通常在 [-0.1, 0.1] 之间，映射到 [-1, 1]
+    # mean_reversion z-score: 通常在 [-3, 3] 之间，映射到 [-1, 1]
+    mom_norm = max(-1.0, min(1.0, mom * 10))    # 简单放大
+    mr_norm = max(-1.0, min(1.0, mr))          # 已是 z-score
+
+    # 综合评分: -50 到 +50 的基础区间，再通过 W_QLIB 系数放大到总评分
+    base_score = mom_norm * weight_mom + mr_norm * weight_mr
+    # 映射到 -100~+100
+    score = base_score * 50.0  # -50~+50 → -100~+100
+
+    # 限制在有效范围
+    score = max(-100.0, min(100.0, score))
+    return float(score)

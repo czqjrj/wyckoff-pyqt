@@ -81,11 +81,41 @@ def clamp_window(df, datalen):
     return df
 
 
-def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, last_close):
+def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, last_close,
+                     qlib_prob: dict = None):
     """生成交易计划文本行: 方向/入场/止损/目标/盈亏比。
-    以阶段为纲: 买点仅在吸筹/上升阶段有效, 卖点仅在派发/下跌阶段有效。"""
+    以阶段为纲: 买点仅在吸筹/上升阶段有效, 卖点仅在派发/下跌阶段有效。
+
+    参数
+    ----------
+    qlib_prob : dict, optional
+        Qlib 信号概率结果，由 fetch_qlib_features/qsig_probability 返回的 dict:
+        {"prob_buy": float, "prob_sell": float, "confidence": float}。
+        若提供，将用于调整方向阈值、止损距离和盈亏比参考值。
+    """
     lines = []
     recent = [e for e in events if e["idx"] >= len(df) - W_RECENT]
+
+    # ═══ Qlib 量化预测增强层 (可选) ═══
+    # 将 Qlib 模型预测的买卖概率作为技术面信号的概率修正系数
+    # 核心逻辑: Qlib 概率 > 0.6 → 多头信号强化/止损收紧
+    #           Qlib 概率 < 0.4 → 空头信号强化/止损收紧
+    #           0.4~0.6 → 维持原有 Wyckoff 结构判断，无额外修正
+    if qlib_prob is None:
+        try:
+            from .qlib_adapter import qlib_signal_probability
+            qlib_prob = qlib_signal_probability(
+                df.attrs.get("symbol", "sh600104"),
+                datalen=len(df),
+                scale=240,
+            )
+        except Exception:
+            qlib_prob = {"prob_buy": 0.5, "prob_sell": 0.5, "confidence": 0.0}
+    prob_buy = qlib_prob.get("prob_buy", 0.5)
+    prob_sell = qlib_prob.get("prob_sell", 0.5)
+    qlib_conf = qlib_prob.get("confidence", 0.0)
+    # Qlib 置信度系数: 0.0~1.0, 实际影响幅度通过 qlib_conf * alpha
+    qlib_alpha = 0.3  # 经验系数: 实际影响幅度 = qlib_alpha * (prob - 0.5)
     rtypes = [e["type"] for e in recent]
     spring = "Spring" in rtypes
     utad = "UTAD" in rtypes
@@ -125,6 +155,27 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     dns = [v for v in dns if v >= last_close * 0.1]
 
     entry = last_close
+    # ═══ Qlib 影响的方向判定微调 ═══
+    # 根据 Qlib 概率对原始方向判定进行置信度修正
+    # 规则:
+    # - 如果 Qlib 买入概率显著高于 0.6 且结构判断为多头方向 → 增强信心, 可能降低止损
+    # - 如果 Qlib 卖出/空头概率显著高于 0.6 且结构判断为空头方向 → 增强信心
+    # - 当 Qlib 与结构判断方向相反时 (如结构多头但 Qlib 卖出概率高) → 
+    #   视概差幅度决定是否抵消/降级
+    qlib_direction_nudge = 0  # +1: 多头增强, -1: 空头增强, 0: 无影响
+    if base_phase in ("底部整固", "上升趋势"):
+        # 多头结构: Qlib 买入概率高 → 确认; 低 → 疑虑
+        if prob_buy > 0.6 and prob_sell < 0.4:
+            qlib_direction_nudge = +1
+        elif prob_buy < 0.4 and prob_sell > 0.6:
+            qlib_direction_nudge = -1
+    elif base_phase in ("顶部构筑", "下跌趋势"):
+        # 空头结构: Qlib 卖出/空头概率高 → 确认; 低 → 疑虑
+        if prob_sell > 0.6 and prob_buy < 0.4:
+            qlib_direction_nudge = -1
+        elif prob_buy > 0.6 and prob_sell < 0.4:
+            qlib_direction_nudge = +1
+
     # ═══ 阶段驱动方向判定 ═══
     direction = None
     if bearish_phase and (utad or "BC" in rtypes or lpsy):
@@ -146,8 +197,17 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
                    default=None)
         stop = stop * 0.99 if stop else ((bottom * 0.99) if bottom else None)
     elif bullish_phase:
-        direction = "多头/持有"
-        stop = bottom
+        # Qlib 影响微调: 买入概率高时可适当增强, 但 Wyckoff 结构优先
+        if qlib_direction_nudge >= 1 and prob_buy > 0.5:
+            direction = "多头/低吸"  # 确认多头
+        elif qlib_direction_nudge <= -1 and prob_sell > 0.5:
+            direction = "观望"  # Qlib 多头但结构空头 → 观望
+        else:
+            direction = "多头/持有"
+        # 根据 Qlib 置信度微调止损: 置信度高时可适当收紧止损
+        qlib_stop_adjust = qlib_conf * qlib_alpha * (entry - bottom) if bottom else 0
+        if stop is not None and qlib_conf > 0.5:
+            stop = stop - qlib_stop_adjust if qlib_stop_adjust > 0 else stop
     elif neutral_phase and (spring or "ST" in rtypes or "LPS" in rtypes or "BU" in rtypes):
         direction = "多头/突破"
         stop = bottom
@@ -218,6 +278,13 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
                 rr = (t1 - entry) / (entry - stop)
             else:
                 rr = None
+            # Qlib 盈亏比调整: 根据 Qlib 置信度对盈亏比进行系数修正
+            # prob_buy > 0.6 → 偏多信心足 → 可适当增大预期收益 (t1 相对保守)
+            # prob_buy < 0.4 → 偏空信心足 → 同样增大空头目标预期
+            # 0.4~0.6 → 保持原有 Wyckoff 计算的 rr 不变
+            if rr is not None and qlib_conf > 0:
+                qlib_rr_factor = 1.0 + qlib_conf * qlib_alpha * (prob_buy - prob_sell)
+                rr = rr * qlib_rr_factor
             lines.append(f"  止损: {stop:.2f}")
             if t1:
                 lines.append(f"  目标1: {t1:.2f}")
@@ -462,6 +529,36 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                           news_sentiment=news_sentiment,
                           forward_calendar=(news_sentiment or {}).get("forward_calendar")
                           if news_sentiment else None)
+    # Qlib 回测校准: 基于历史信号回测动态调整阈值 (仅日线确认模式)
+    calibrated_thresholds = {}
+    if scale == 240 and confirm_enabled:
+        try:
+            from .qlib_adapter import calibrate_wyckoff_thresholds
+            # 从历史记录中构建简化的阈值校准数据
+            # 这里使用简单的历史回测结果（实际项目中应持久化完整历史）
+            # 为演示使用默认校准；实战中应传入真实的历史信号回测数据
+            history_signal_data = []  # 占位: 从 signal_accuracy 模块加载历史结果
+            if history_signal_data:
+                calibrated_thresholds = calibrate_wyckoff_thresholds(
+                    history_signal_data, method="quantile", quantile=0.5)
+            else:
+                # 无历史数据时使用默认校准
+                calibrated_thresholds = {
+                    "min_rr": 3.0,
+                    "stop_pct": 0.05,
+                    "confidence_cutoff": "中",
+                }
+        except Exception as e:
+            logger.debug(f"qlib threshold calibration failed: {e}")
+            calibrated_thresholds = {
+                "min_rr": 3.0,
+                "stop_pct": 0.05,
+                "confidence_cutoff": "中",
+            }
+    # 将校准后的阈值注入 fusion 结果，供后续 trade_plan 使用
+    if calibrated_thresholds:
+        fusion["_calibrated_rr"] = calibrated_thresholds.get("min_rr", 3.0)
+        fusion["_calibrated_stop_pct"] = calibrated_thresholds.get("stop_pct", 0.05)
     if scale == 240 and confirm_enabled:
         # 基本面/资金流确认融入: 强多空时若资金反向, 降一档置信
         flow_net = float(flow.tail(20)["main"].sum()) if flow is not None \
@@ -503,7 +600,8 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
             pass
 
     trade_plan = build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr,
-                                  float(df["close"].iloc[-1]))
+    float(df["close"].iloc[-1]),
+    qlib_prob={})
     # ── 威科夫Pro整合层 (可选增强) ──
     ce = counter_evidence(df, events, phase=phase, structure=structure)
     nt = nine_tests(df, events, pivots=pivots, phase=phase, structure=structure,

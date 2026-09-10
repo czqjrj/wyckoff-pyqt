@@ -30,6 +30,7 @@ lint = ["ruff>=0.6"]
 # 可选: 解读语音播报 (TTS). edge-tts=微软在线中文语音(音质最佳, 需网络);
 # pyttsx3=离线跨平台(中文音质一般, 依赖系统语音库 espeak/SAPI/NSSpeech).
 tts = ["edge-tts>=6.1", "pyttsx3>=2.90"]
+qlib = ["qlib>=1.6.0"]
 
 [tool.setuptools]
 packages = [
