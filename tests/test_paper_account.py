@@ -164,3 +164,107 @@ def test_pick_candidates_enable_va_on_keeps_va(monkeypatch):
                         lambda c: 1_000_000.0 if c == "sh600001" else None)
     out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
     assert [e["strategy"] for e in out] == ["screener_value_accumulation"]
+
+
+# ── 交易时段撮合门禁 ──────────────────────────────────────
+
+def _mk_st():
+    """最小化持仓台账, 供 step 门禁测试。"""
+    return {
+        "init_cash": 1_000_000.0, "cash": 900_000.0,
+        "positions": [
+            {"symbol": "sh600001", "name": "A", "type": "Spring", "conf": 90,
+             "qty": 1000, "buy_px": 10.0, "cost": 40.0,
+             "entry_ts": "2026-09-01 10:00:00", "entry_bars": 1,
+             "sector": "", "strategy": "paper_discipline_bull",
+             "stop_pct": None, "take_pct": None, "staged": False,
+             "event_type": None, "entry_day": "2026-09-01"},
+        ],
+        "orders": [], "closed": [], "candidates": [], "pending": [],
+        "conditions": [], "equity_hist": [], "scan_count": 0,
+    }
+
+
+def test_step_trading_true_sells_below_stop(monkeypatch):
+    """交易时段内 step: 跌破止损 → 正常平仓 (旧行为保留)。"""
+    st = _mk_st()
+    df = _mk_df()
+    df.loc[df.index[-1], "close"] = 8.0  # -20% << -4% 止损
+    df.loc[df.index[-1], "day"] = "2026-09-02"
+    paper.step(st, {"sh600001": df}, trading=True)
+    assert len(st["closed"]) == 1
+    assert st["closed"][0]["reason"] == "止损"
+
+
+def test_step_snapshot_mode_freezes_sells(monkeypatch):
+    """非交易时段 (trading=False): 只更新最新价, 不触发止损平仓。"""
+    st = _mk_st()
+    df = _mk_df()
+    df.loc[df.index[-1], "close"] = 8.0
+    df.loc[df.index[-1], "day"] = "2026-09-02"
+    paper.step(st, {"sh600001": df}, trading=False)
+    assert len(st["closed"]) == 0          # 不卖
+    assert len(st["positions"]) == 1
+    assert st["positions"][0]["last"] == 8.0  # 但 mark-to-market
+
+
+def test_run_scan_gated_off_hours(monkeypatch):
+    """非交易时段 run_scan 直接返回门禁提示, 不动状态。"""
+    monkeypatch.setattr(paper, "gate_reason", lambda anytime=False:
+                        "非交易时段 17:00 (A股 09:30-11:30 / 13:00-15:00)")
+    st = {"scan_count": 3, "candidates": []}
+    res = paper.run_scan(st, scan_type="")
+    assert res.startswith("跳过扫描")
+    assert st["scan_count"] == 3           # 未自增
+    assert st["candidates"] == []
+
+
+def test_run_scan_anytime_bypasses_gate(monkeypatch):
+    """anytime=True 强制放行扫描 (供手动补跑)。"""
+    monkeypatch.setattr(paper, "gate_reason", lambda anytime=False:
+                        None if anytime else "非交易时段")
+    monkeypatch.setattr(paper, "_mainboard_universe", lambda n: ["sh600001"])
+    monkeypatch.setattr(paper, "pick_candidates",
+                        lambda *a, **k: [{"code": "sh600001", "conf": 90}])
+    monkeypatch.setattr(paper, "_apply_auto_conditions", lambda *a, **k: 0)
+    monkeypatch.setattr(paper, "save_state", lambda s: s)
+    st = {"scan_count": 0, "candidates": [], "conditions": [], "positions": []}
+    res = paper.run_scan(st, scan_type="", anytime=True)
+    assert "命中 1 个候选" in res
+    assert st["scan_count"] == 1
+
+
+# ── 交易时段判定 (trading_time) ─────────────────────────────
+
+def test_gate_reason_hours_and_day(monkeypatch):
+    import datetime
+    from wyckoff import trading_time as tt
+    monkeypatch.setattr(tt, "is_trading_day", lambda now=None: True)
+    # 盘中放行
+    for hh, mm in ((9, 30), (10, 0), (11, 30), (13, 0), (14, 59), (15, 0)):
+        now = datetime.datetime(2026, 9, 10, hh, mm)
+        assert tt.gate_reason(now=now) is None, (hh, mm)
+    # 收盘后/午休拦截
+    for hh, mm in ((9, 29), (11, 31), (12, 0), (15, 1), (20, 0)):
+        now = datetime.datetime(2026, 9, 10, hh, mm)
+        assert tt.gate_reason(now=now) is not None, (hh, mm)
+
+
+def test_gate_reason_non_trading_day(monkeypatch):
+    import datetime
+    from wyckoff import trading_time as tt
+    # 周末: 即使盘中时间也拦截
+    now = datetime.datetime(2026, 9, 12, 10, 0)  # 周六
+    assert tt.in_trading_hours(now=now) is True
+    assert tt.is_trading_day(now=now) is False
+    assert tt.gate_reason(now=now) is not None
+    # anytime 强制放行
+    assert tt.gate_reason(now=now, anytime=True) is None
+
+
+def test_gate_reason_fallback_weekday(monkeypatch):
+    import datetime
+    from wyckoff import trading_time as tt
+    monkeypatch.setattr(tt, "_load_trade_dates", lambda: None)
+    holiday = datetime.datetime(2026, 9, 10, 10, 0)  # 周四盘中
+    assert tt.gate_reason(now=holiday) is None       # 日历不可用 → 放行

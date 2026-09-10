@@ -44,6 +44,7 @@ from .strategies.constants import (
     STRATEGY_LONG_LEFT,
     STRATEGY_VALUE_ACC,
 )
+from .trading_time import gate_reason
 
 _LOCK = threading.RLock()
 
@@ -1401,6 +1402,11 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
                 # 独立赛道左侧买点: 直接挂买点入场价, 回踩触发 (below)。
                 cand["auto_cond_price"] = round(float(cand["entry_price"]), 3)
                 cand["trigger"] = "below"
+            # 价值吸筹已停用: 候选层面兜底剔除 (管理器可能绕过 strategies 过滤,
+            # 兜底保证 任何路径都不产出 VA 候选/条件单)。
+            if not _CUR.get("enable_va", True) \
+                    and cand.get("strategy") == STRATEGY_VALUE_ACC:
+                return code, None, None
             return code, cand, flow
         except Exception:
             return code, None, None
@@ -2100,14 +2106,18 @@ def fill_buy(st, order, event_type: str = None):
     return order, "成交"
 
 
-def step(st, df_by_code):
+def step(st, df_by_code, trading=True):
     """推进一个周期: 用当前行情更新最新价 → 检查卖单条件 + 成交 in-arrow。
 
     df_by_code: {symbol: df(含 indicators)} 当前最新行情窗口 (由 UI/调度器提供)。
     不可用 (无行情) 时跳过。
+    trading=False: 收盘/节假日后的"纯快照"模式 — 只 mark-to-market 更新最新价,
+    不触发任何买卖撮合 (买/卖/止盈止损/待撮合买单全部冻结, 待下一个交易日时段内
+    恢复)。供 run_cycle 在非交易时段禁止撮合用。
     """
     # 先检查条件单: 用户自定义的价格触发/止盈/止损/追踪优先于默认止盈止损。
-    _check_conditions(st, df_by_code)
+    if trading:
+        _check_conditions(st, df_by_code)
     for pos in st["positions"]:
         df = df_by_code.get(pos["symbol"])
         if df is None or len(df) == 0:
@@ -2160,6 +2170,9 @@ def step(st, df_by_code):
         if _t1_blocked(pos, df):
             # A股 T+1: 当日买入的证券次一交易日方可卖出, 本周期跳过卖出判定
             continue
+        if not trading:
+            # 非交易时段: 只 mark-to-market (上面已更新 last), 冻结卖出判定
+            continue
         if not trailing_mode and ret >= pos_take:
             reason = "止盈"
         elif last <= stop_px:
@@ -2173,18 +2186,19 @@ def step(st, df_by_code):
             # 高估止损价。历史实现止损在 last<stop_px 时按 stop_px 成交, 低估了实际损失。
             sell_price = last * (1 - SLIP_SELL)
             close_position(st, pos, sell_price, reason, event_type=pos.get("event_type"))
-    # 处理待撮合买单
-    for o in list(st["pending"]):
-        df = df_by_code.get(o["symbol"])
-        if df is not None and len(df):
-            close = float(df["close"].iloc[-1])
-            o["price"] = round(close * (1 + SLIP_BUY), 3)
-            o["day"] = str(df["day"].iloc[-1])
-            if not o.get("date"):
-                o["date"] = str(df["day"].iloc[-1])
-            order = dict(o)
-            st["pending"].remove(o)
-            fill_buy(st, order)
+    # 处理待撮合买单 (非交易时段冻结, 待恢复后撮合)
+    if trading:
+        for o in list(st["pending"]):
+            df = df_by_code.get(o["symbol"])
+            if df is not None and len(df):
+                close = float(df["close"].iloc[-1])
+                o["price"] = round(close * (1 + SLIP_BUY), 3)
+                o["day"] = str(df["day"].iloc[-1])
+                if not o.get("date"):
+                    o["date"] = str(df["day"].iloc[-1])
+                order = dict(o)
+                st["pending"].remove(o)
+                fill_buy(st, order)
 
 
 def _rebalance_portfolio(st, df_by_code):
@@ -2775,7 +2789,7 @@ def _paper_locked(fail=None):
 
 @_paper_locked(fail=None)
 def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
-              force_scan=False, strategies=None, progress=None):
+              force_scan=False, strategies=None, progress=None, anytime=False):
     """无头自动运行一个周期: 筛选→下单→步进→统计。返回统计。
 
     供 cron / 调度线程 / 手动触发。每周期持仓 K 数 +1,
@@ -2790,6 +2804,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     重扫时透传给 pick_candidates; 复用候选/传入候选时过滤由调用方保证。
     progress: 可选扫描进度回调 (done, total, code), 仅在真正执行全市场重扫时
     上报; 复用候选/传入候选时不触发 (供 UI 区分"正在扫描"与"仅执行周期")。
+    anytime: True 时绕开交易时段门禁 (供手动补跑/测试); 默认 False — 非交易
+    时段执行时自动降级为"纯快照"模式: 只更新持仓最新价与净值, 不重扫、不生成
+    入场条件单、不撮合任何买卖 (防止收盘后按收盘价"成交"的不合理交易)。
     """
     from .datasource import fetch_kline
     from .indicators import add_indicators
@@ -2797,6 +2814,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     apply_paper_params(settings)
     if min_conf is None:
         min_conf = _CUR["min_conf"]
+
+    # 撮合门禁: 非交易时段 → 纯快照 (anytime 可强制放行, 供手动补跑有交易)。
+    trading = anytime or gate_reason() is None
 
     st = load_state()
     # 弱市过滤: 指数未站上 MA20 → 降仓上限与停用价值吸筹 (与回测移动止盈口径一致)
@@ -2807,7 +2827,12 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     #    覆盖历史遗留/非 fill_buy 路径建立的仓位, 避免"裸奔"只有 step 兜底。
     _backfill_position_protection(st)
     # 1) 选股: candidates 传入时直接复用扫描结果 (扫描已完成选股)
-    if candidates is None:
+    if not trading:
+        # 非交易时段: 只快照 — 复用现有候选, 不重扫/不更新条件单/不撮合。
+        cand = st.get("candidates") or []
+    elif candidates is not None:
+        cand = candidates
+    else:
         reuse = (not force_scan) and st.get("candidates") and not _scan_due(st)
         if reuse:
             cand = st["candidates"]
@@ -2828,69 +2853,75 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
                     candidates_found=len(cand), candidates=cand)
             except Exception:
                 pass
-    else:
-        cand = candidates
     st["candidates"] = cand
-    # 自动买入条件单: 与候选一同在最终 save_state 落盘 (不被快照覆盖)
-    _apply_auto_conditions(st, cand, weak=weak)
+    # 自动买入条件单: 与候选一同在最终 save_state 落盘 (不被快照覆盖);
+    # 非交易时段 (纯快照) 不更新, 避免收盘后挂出"触发价=收盘价*1.002"的条件单。
+    if trading:
+        _apply_auto_conditions(st, cand, weak=weak)
     # 2) 下单: 仓位未满时取候选填补 (同持上限内), 进 pending 待本周期撮合。
     #    三大硬门槛已由 pick_candidates 在候选入池时 fail-close 判定
     #    (大盘↑+板块>60分位+资金>50分位), 这里直接消费精筛后的候选。
     #    左侧买点特殊: 挂买点入场价, 价格未回踩到位 (last > entry_price) 时
     #    不直接成交, 交给下方 buy_price 条件单 (below) 等回踩。
-    for e in cand:
-        eff_max = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
-        if len(st["positions"]) >= eff_max:
-            break
-        code = e["code"]
-        if has_position(st, code) or any(o["symbol"] == code for o in st["pending"]):
-            continue
-        # 弱市停用价值吸筹 (与回测弱市过滤口径一致)
-        if weak and e.get("strategy") == STRATEGY_VALUE_ACC:
-            continue
-        px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
-        last = float(e.get("last", 0) or 0)
-        if e.get("trigger") == "below":
-            # 左侧买点: 现价高于买点入场价 → 等回踩 (条件单 below 触发)
-            if last <= 0 or last > px:
+    if trading:
+        # 冻结交割时段模式: cand 在非交易时段被截留为空/复用, 不执行任何撮合。
+        for e in cand:
+            eff_max = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
+            if len(st["positions"]) >= eff_max:
+                break
+            code = e["code"]
+            if has_position(st, code) or any(o["symbol"] == code for o in st["pending"]):
                 continue
-        if px <= 0:
-            continue
-        # 风控门禁 (此前为死代码, 现接入入场路径):
-        #   回撤上限 / 单笔风险预算 / 行业集中度 / 单股集中度 / 资金利用率
-        if _risk_blocks_entry(st, e, px):
-            continue
-        # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
-        # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
-        stop_pct = take_pct = None
-        if e.get("strategy") == STRATEGY_LONG_LEFT and px > 0:
-            stop_px = float(e.get("stop_price") or 0)
-            target_px = float(e.get("target_price") or 0)
-            if stop_px:
-                stop_pct = round((px - stop_px) / px, 4)
-            if target_px > stop_px:
-                take_pct = round((target_px - px) / px, 4)
-        order = _make_order(code, e.get("name", ""), e["type"],
-                            e.get("conf", 50), px, 0, st["cash"],
-                            sector=e.get("sector", ""),
-                            strategy=e.get("strategy", ""), st=st,
-                            stop_pct=stop_pct, take_pct=take_pct)
-        if order is None:
-            continue
-        order["day"] = str(e.get("day") or "")
-        _filled, _msg = fill_buy(st, order)
-        if _filled is not None and e.get("trigger", "above") == "above":
-            # 直接成交 = 上方 buy_price 自动条件单触发 (below 回踩单由 _check_conditions
-            # 撮合并已在那边记录 condition 事件); 这里补一条, 让当日日志"买入/条件单"
-            # 联动可查 (此前 run_cycle 内嵌选股直接成交只记 buy, 条件单计数恒为 0)。
-            try:
-                paper_log.log_condition_fired(
-                    code, e.get("name", ""), "buy_price",
-                    e.get("auto_cond_price") or float(e.get("last", 0) or 0),
-                    float(e.get("last", 0) or 0), action="买入",
-                    reason=f"自动:{e.get('strategy', '')}")
-            except Exception:
-                pass
+            # 弱市停用价值吸筹 (与回测弱市过滤口径一致)
+            if weak and e.get("strategy") == STRATEGY_VALUE_ACC:
+                continue
+            # 开关停用价值吸筹: 存量候选兜底拦截 (防止历史候选重放入场)
+            if not _CUR.get("enable_va", True) \
+                    and e.get("strategy") == STRATEGY_VALUE_ACC:
+                continue
+            px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
+            last = float(e.get("last", 0) or 0)
+            if e.get("trigger") == "below":
+                # 左侧买点: 现价高于买点入场价 → 等回踩 (条件单 below 触发)
+                if last <= 0 or last > px:
+                    continue
+            if px <= 0:
+                continue
+            # 风控门禁 (此前为死代码, 现接入入场路径):
+            #   回撤上限 / 单笔风险预算 / 行业集中度 / 单股集中度 / 资金利用率
+            if _risk_blocks_entry(st, e, px):
+                continue
+            # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
+            # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
+            stop_pct = take_pct = None
+            if e.get("strategy") == STRATEGY_LONG_LEFT and px > 0:
+                stop_px = float(e.get("stop_price") or 0)
+                target_px = float(e.get("target_price") or 0)
+                if stop_px:
+                    stop_pct = round((px - stop_px) / px, 4)
+                if target_px > stop_px:
+                    take_pct = round((target_px - px) / px, 4)
+            order = _make_order(code, e.get("name", ""), e["type"],
+                                e.get("conf", 50), px, 0, st["cash"],
+                                sector=e.get("sector", ""),
+                                strategy=e.get("strategy", ""), st=st,
+                                stop_pct=stop_pct, take_pct=take_pct)
+            if order is None:
+                continue
+            order["day"] = str(e.get("day") or "")
+            _filled, _msg = fill_buy(st, order)
+            if _filled is not None and e.get("trigger", "above") == "above":
+                # 直接成交 = 上方 buy_price 自动条件单触发 (below 回踩单由 _check_conditions
+                # 撮合并已在那边记录 condition 事件); 这里补一条, 让当日日志"买入/条件单"
+                # 联动可查 (此前 run_cycle 内嵌选股直接成交只记 buy, 条件单计数恒为 0)。
+                try:
+                    paper_log.log_condition_fired(
+                        code, e.get("name", ""), "buy_price",
+                        e.get("auto_cond_price") or float(e.get("last", 0) or 0),
+                        float(e.get("last", 0) or 0), action="买入",
+                        reason=f"自动:{e.get('strategy', '')}")
+                except Exception:
+                    pass
     # 3) 步进+平仓判定 (持仓 + 待撮合用最新行情)
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
@@ -2901,10 +2932,11 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
                 fetch_kline(code, datalen=420, scale=240), symbol=code)
         except Exception:
             pass
-    step(st, df_by_code)
+    step(st, df_by_code, trading=trading)
     # 4) 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到等权目标,
     #    消除资金利用率不足(~66%)与单仓过度集中。
-    _rebalance_portfolio(st, df_by_code)
+    if trading:
+        _rebalance_portfolio(st, df_by_code)
     _day = ""
     for _df in df_by_code.values():
         try:
@@ -2925,7 +2957,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
 
 
 @_paper_locked(fail=PAPER_BUSY_MSG)
-def run_scan(st, scan_type='', n_codes=6000, progress=None):
+def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
     """运行扫描并更新状态。
 
     三策略并线扫描 (纪律 + 威科夫左侧买点 + 价值吸筹): 强多头事件 (Spring/
@@ -2941,10 +2973,16 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None):
         n_codes: 要扫描的代码数量上限 (pick_candidates 内部会把 universe 收敛为
                  沪深主板 600/601/603/605 + 000/001/002/003, 实际扫描量以主板为准)
         progress: 可选进度回调 (done, total, code), 透传给 pick_candidates
+        anytime: True 绕开交易时段门禁 (供手动补跑/测试); 默认 False — 非交易
+                 时段直接返回门禁提示, 不执行扫描 (扫描本身不撮合, 但需避免
+                 收盘后挂出次日开盘即触发的入场条件单)。
 
     返回:
         扫描结果字符串描述
     """
+    reason = gate_reason(anytime=anytime)
+    if reason:
+        return f"跳过扫描: {reason}"
     st['scan_count'] = st.get('scan_count', 0) + 1
     now = datetime.now().isoformat()
     st['last_scan_time'] = now
