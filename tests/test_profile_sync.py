@@ -1,4 +1,4 @@
-﻿"""account 私有数据同步核心逻辑测试。"""
+"""account 私有数据同步核心逻辑测试。"""
 import json
 import os
 import sys

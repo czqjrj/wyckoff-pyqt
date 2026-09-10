@@ -71,6 +71,8 @@ _MSGPACK_OPTS = dict(use_bin_type=True, strict_types=False)
 _KLINE_WRITE_QUEUE = queue.Queue(maxsize=4096)
 _KLINE_FLUSH_LOCK = threading.Lock()
 _KLINE_FLUSH_RUNNING = [False]
+# 哨兵: 放入队列通知刷新线程退出 (仅测试用, 生产代码从不入队)
+_SENTINEL = object()
 
 
 def _flush_pending_symbol(symbol, scale):
@@ -79,11 +81,19 @@ def _flush_pending_symbol(symbol, scale):
     task_done 必须在提交之后对匹配条目调用: get_nowait 只是出队 (unfinished
     不变), 若在提交前就 task_done, 并发调用 flush_pending(block=True) 的
     join() 会看到 unfinished==0 提前返回, 造成"写后即读"读到旧数据。
+
+    注意: 后台刷新线程可能已 get() 走匹配条目但尚未 commit (此时队列短暂为空),
+    必须先 join() 等它在当前 DB 上落盘, 再扫描队列中剩余的本标的条目, 否则
+    写后即读会遗漏这批数据 → 误回退网络重拉。
     """
     if _KLINE_WRITE_QUEUE.empty():
         return
     try:
         _start_kline_flusher()
+    except Exception:
+        pass
+    try:
+        _KLINE_WRITE_QUEUE.join()
     except Exception:
         pass
     matching = []
@@ -107,12 +117,19 @@ def _kline_flusher():
     _KLINE_FLUSH_RUNNING[0] = True
     try:
         while True:
-            blob, symbol, scale, source, ts = _KLINE_WRITE_QUEUE.get()
-            batch = [(blob, symbol, scale, source, ts)]
+            first = _KLINE_WRITE_QUEUE.get()
+            if first is _SENTINEL:
+                _KLINE_WRITE_QUEUE.task_done()
+                break
+            batch = [first]
             # 尽量多取同批 (无阻塞清空队列), 但设上限防止饿死本次扫描以外积压
             try:
                 for _ in range(1023):
-                    batch.append(_KLINE_WRITE_QUEUE.get_nowait())
+                    item = _KLINE_WRITE_QUEUE.get_nowait()
+                    if item is _SENTINEL:
+                        _KLINE_WRITE_QUEUE.task_done()
+                        break
+                    batch.append(item)
             except Exception:
                 pass
             _flush_kline_batch(batch)
@@ -120,8 +137,8 @@ def _kline_flusher():
             for _ in range(len(batch) - 1):
                 _KLINE_WRITE_QUEUE.task_done()
     except Exception:
-        _KLINE_FLUSH_RUNNING[0] = False
-    except Exception:
+        pass
+    finally:
         _KLINE_FLUSH_RUNNING[0] = False
 
 
@@ -186,6 +203,43 @@ def set_db_path(path):
     global _DB_PATH, _INIT_DONE
     _DB_PATH = path
     _INIT_DONE = False
+
+
+def reset_for_tests():
+    """测试隔离用: 停止并复位异步刷新线程/队列。
+
+    后台刷新线程 (`_kline_flusher`) 是常驻单例, 跨测试存活; 若不在每次测试间
+    复位, 它会用上一测试的陈旧连接把全局队列里的待写条目写到**旧 DB**, 造成
+    新测试"写后即读"读到空库 → 误触发网络重拉 (间歇性测试失败)。
+
+    做法: 通知刷新线程退出、排空队列 (丢弃未落盘条目)、复位运行标记, 保证
+    下一次 `flush_pending`/`kline_load` 用新 DB 重建连接。
+    """
+    global _INIT_DONE
+    # 通知刷新线程退出 (队列阻塞在 get() 时, 哨兵能唤醒并终止它)
+    try:
+        _KLINE_WRITE_QUEUE.put_nowait(_SENTINEL)
+    except Exception:
+        pass
+    # 排空残留条目并各自 task_done, 避免后续 join() 卡死; 未落盘数据直接丢弃
+    drained = 0
+    try:
+        while True:
+            item = _KLINE_WRITE_QUEUE.get_nowait()
+            if item is not _SENTINEL:
+                drained += 1
+            _KLINE_WRITE_QUEUE.task_done()
+    except Exception:
+        pass
+    _KLINE_FLUSH_RUNNING[0] = False
+    try:
+        _local.conn.close()
+    except Exception:
+        pass
+    _local.conn = None
+    _local.path = None
+    _INIT_DONE = False
+    return drained
 
 
 def _new_conn():

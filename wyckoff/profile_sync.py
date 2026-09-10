@@ -205,7 +205,7 @@ def _paper_lock(timeout=3.0):
     说明: run_cycle/run_scan 持锁期间 (尤其全市场扫描可能十几分钟) 会让
     "账户同步"的 paper 写回短暂让位, 而不是覆盖正在保存的周期结果。
     """
-    from .paper import _acquire_paper_lock, _release_paper_lock
+    from .paper import _acquire_paper_lock
     deadline = time.time() + timeout
     while True:
         fh = _acquire_paper_lock()

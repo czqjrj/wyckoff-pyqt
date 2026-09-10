@@ -65,8 +65,9 @@ def remote_meta():
 
 def make_meta(contributors, n_signals, n_feedback):
     """构建 meta.json 内容 (供 status/service 展示)。"""
-    from .merge import SCHEMA_VERSION
     import time
+
+    from .merge import SCHEMA_VERSION
     return {
         "schema": SCHEMA_VERSION,
         "updated_ts": time.time(),

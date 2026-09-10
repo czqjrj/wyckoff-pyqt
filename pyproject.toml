@@ -20,14 +20,26 @@ dependencies = [
     "pypinyin>=0.50",
     "openai>=1.30",
     "msgpack>=1.0",
+    # MySQL 云存储后端 (登录 + 私有数据多机同步 + 校准数据同步)
+    "PyMySQL>=1.1",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
 lint = ["ruff>=0.6"]
+# 可选: 解读语音播报 (TTS). edge-tts=微软在线中文语音(音质最佳, 需网络);
+# pyttsx3=离线跨平台(中文音质一般, 依赖系统语音库 espeak/SAPI/NSSpeech).
+tts = ["edge-tts>=6.1", "pyttsx3>=2.90"]
 
 [tool.setuptools]
-packages = ["wyckoff", "desktop"]
+packages = [
+    "wyckoff",
+    "ui",
+    "ui.components",
+    "ui.renderers",
+    "ui.threads",
+    "sync",
+]
 
 [tool.ruff]
 line-length = 100

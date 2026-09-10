@@ -11,16 +11,13 @@ Features
 """
 
 from collections import defaultdict
-from datetime import datetime
 
 import backtrader as bt
 import numpy as np
 import pandas as pd
 
-from wyckoff.datasource import fetch_kline, fetch_name
-from wyckoff.events import detect_all
+from wyckoff.datasource import fetch_kline
 from wyckoff.indicators import add_indicators
-from wyckoff.fundamental import is_restricted_board
 from wyckoff.utils import normalize_symbol
 
 
@@ -89,8 +86,8 @@ class WyckoffStrategy(bt.Strategy):
         if "day" in wdf.columns:
             wdf["day"] = pd.to_datetime(wdf["day"])
         # 重新计算指标 (与 backtest_events/backtest_vsa 行为一致)
-        from wyckoff.indicators import add_indicators, find_pivots
         from wyckoff.events import detect_all
+        from wyckoff.indicators import add_indicators, find_pivots
         wdf = add_indicators(wdf, symbol=self.p.code)
         wpivots = find_pivots(wdf, order=6)
         wevents = detect_all(wdf, wpivots)
@@ -229,12 +226,6 @@ def cerebro_run(
         return {"by_type": {}, "benchmark": bench_ret, "cost": cost, "note": "无信号产生"}
 
     arr = np.asarray(all_returns)
-    wins = arr[arr > 0]
-    losses = arr[arr <= 0]
-    win_rate = float((arr > 0).mean() * 100) if n else 0.0
-    avg_ret = float(arr.mean() * 100)
-    # 总收益 (复利)
-    total_ret = float((np.prod(1 + arr / 100) - 1) * 100) if n else 0.0
     # 夏普比率 (年化, 假设252 trading days)
     sharpe = float(np.mean(arr) / np.std(arr) * np.sqrt(252)) if np.std(arr) != 0 else 0.0
     # 最大回撤

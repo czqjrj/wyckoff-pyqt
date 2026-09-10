@@ -11,8 +11,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFontMetrics, QPainter
-from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QToolTip, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolTip, QVBoxLayout, QWidget
 from pyqtgraph.Qt import QtGui
 
 from . import theme
@@ -54,15 +53,15 @@ class _ChartCard(QWidget):
             strip = QFrame()
             strip.setFixedSize(4, 14)
             strip.setObjectName("chartAccent")
-            strip.setStyleSheet("background:%s;border-radius:2px;" % theme.C_ACCENT)
+            strip.setStyleSheet(f"background:{theme.C_ACCENT};border-radius:2px;")
             top.addWidget(strip)
             self.title_lab = QLabel(title)
             self.title_lab.setFont(_mk_font(11, bold=True))
-            self.title_lab.setStyleSheet("color:%s;background:transparent;" % theme.C_TEXT)
+            self.title_lab.setStyleSheet(f"color:{theme.C_TEXT};background:transparent;")
             top.addWidget(self.title_lab)
             self.sub_lab = QLabel("")
             self.sub_lab.setFont(_mk_font(9))
-            self.sub_lab.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+            self.sub_lab.setStyleSheet(f"color:{theme.C_MUTED};background:transparent;")
             top.addWidget(self.sub_lab)
             top.addStretch(1)
             v.addLayout(top)
@@ -78,8 +77,8 @@ class _ChartCard(QWidget):
             return
         if self.sub_lab is not None:
             self.sub_lab.setStyleSheet(
-                "color:%s;background:transparent;" % theme.C_MUTED)
-        self.title_lab.setStyleSheet("color:%s;background:transparent;" % theme.C_TEXT)
+                f"color:{theme.C_MUTED};background:transparent;")
+        self.title_lab.setStyleSheet(f"color:{theme.C_TEXT};background:transparent;")
 
 
 def _no_data(plot, text="暂无数据"):
@@ -160,9 +159,9 @@ class SseKlineChart(_ChartCard):
             ec = theme.TONE_COLOR.get(tone, theme.C_MUTED)
             subtxt += f" · 大盘 {env}"
             self.sub_lab.setStyleSheet(
-                "color:%s;background:transparent;" % ec)
+                f"color:{ec};background:transparent;")
         else:
-            self.sub_lab.setStyleSheet("color:%s;background:transparent;" % theme.C_MUTED)
+            self.sub_lab.setStyleSheet(f"color:{theme.C_MUTED};background:transparent;")
         self.sub_lab.setText(subtxt)
         self.price.setXRange(x[0], x[-1], padding=0.02)
         # 底部日期刻度 (采样 ~6 个)
@@ -450,7 +449,7 @@ class SectorHeatmap(_ChartCard):
         total = sum(c.amount_yi for c in cells)
         self.sub_lab.setText(f"Top {len(rows)} · 合计 {total:,.0f} 亿")
         self.sub_lab.setStyleSheet(
-            "color:%s;background:transparent;" % theme.C_MUTED)
+            f"color:{theme.C_MUTED};background:transparent;")
 
     def clear(self):
         self.grid.clear()
@@ -499,7 +498,7 @@ class ResonanceChart(_ChartCard):
             self.sub_lab.setText(f"今日一致率 {today:.0f}% · {tone}")
             self.sub_lab.setStyleSheet(
                 f"color:{tc};background:transparent;" if tc else
-                "color:%s;background:transparent;" % theme.C_MUTED)
+                f"color:{theme.C_MUTED};background:transparent;")
 
     def clear(self):
         self.plot.setBackground(theme.C_PANEL)

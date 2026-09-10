@@ -26,7 +26,14 @@ import wyckoff.sqldb as sqldb
 
 @pytest.fixture(autouse=True)
 def isolated_cache(tmp_path):
-    """每个测试用独立的临时 db 文件, 且清空内存缓存。"""
+    """每个测试用独立的临时 db 文件, 且清空内存缓存。
+
+    顺序很关键: 先把上一测试遗留的待写条目落盘到**它自己的 DB**, 再停止后台
+    刷新线程并复位全局队列, 最后才切换 DB 路径 —— 防止旧测试的数据被常驻
+    刷新线程写进新测试的 DB (写后即读读到串库数据 → 间歇性测试失败)。
+    """
+    sqldb.flush_pending(block=True)
+    sqldb.reset_for_tests()
     sqldb.set_db_path(str(tmp_path / "test_cache.db"))
     datasource._KLINE_CACHE.clear()
     datasource._FACTOR_CACHE.clear()

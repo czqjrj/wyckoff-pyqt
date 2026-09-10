@@ -1,7 +1,6 @@
 """模拟盘候选选股 (pick_candidates) 门禁/排序/降级 测试。"""
 import numpy as np
 import pandas as pd
-import pytest
 
 import wyckoff.paper as paper
 

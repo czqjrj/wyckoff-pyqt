@@ -38,7 +38,6 @@ import pandas as pd  # noqa: E402
 from wyckoff.datasource import fetch_kline  # noqa: E402
 from wyckoff.events import detect_all  # noqa: E402
 from wyckoff.indicators import add_indicators, find_pivots  # noqa: E402
-from wyckoff.strategies.candidates import left_buy_candidate, is_low_quality  # noqa: E402
 from wyckoff.strategies.evaluators import evaluate_strategy_value_accumulation  # noqa: E402
 
 # 纪律口径与模拟盘收紧事件集一致 (paper.LONG_EVENT_TYPES = {Spring, ST, LPS})
@@ -57,9 +56,6 @@ DEFAULT_CODES = (
 
 # ── 数据与信号生成 ─────────────────────────────────────────
 def load_stock(code, datalen):
-    from wyckoff.datasource import fetch_kline
-    from wyckoff.events import detect_all
-    from wyckoff.indicators import add_indicators, find_pivots
     df = add_indicators(fetch_kline(code, datalen=datalen, scale=240), symbol=code)
     if df is None or len(df) < 120:
         return None
@@ -392,7 +388,7 @@ def main():
 
 def _write_report(path, args, rows, detail, stocks, include_order):
     L = ["# 三策略回测分析报告", "",
-         f"- 生成时间: 2026-09-06 自动回测",
+         "- 生成时间: 2026-09-06 自动回测",
          f"- 股票池: {len(stocks)} 只 · datalen={args.datalen} · "
          f"纪律 min_conf={args.min_conf} · 窗口={args.window}根",
          f"- 出场纪律: 纪律/价值=止损{args.stop*100:.0f}%/止盈{args.tp*100:.0f}% + 成本{args.cost} 持≤{args.horizon}根; "
@@ -400,12 +396,16 @@ def _write_report(path, args, rows, detail, stocks, include_order):
          "",
          "| 策略 | 信号数 | 命中5 | 命中10 | 命中20 | 均值20 | 回测胜率 | 平均 | 累计 | 盈亏比 | 期望 | 持有根数 |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    def _pct(v):
+        return f"{v*100:.0f}%" if v is not None else "-"
+
+    def _pct_signed(v):
+        return f"{v*100:+.2f}%" if v is not None else "-"
+
     for r in rows:
-        f0 = lambda v: f"{v*100:.0f}%" if v is not None else "-"
-        f1 = lambda v: f"{v*100:+.2f}%" if v is not None else "-"
-        L.append(f"| {r['strategy']} | {r['n']} | {f0(r['hit5'])} | {f0(r['hit10'])} | "
-                 f"{f0(r['hit20'])} | {f1(r['avg20'])} | {f0(r['win_rate'])} | "
-                 f"{f1(r['avg_ret'])} | {f1(r['cum_ret'])} | {r['pl_ratio']} | "
+        L.append(f"| {r['strategy']} | {r['n']} | {_pct(r['hit5'])} | {_pct(r['hit10'])} | "
+                 f"{_pct(r['hit20'])} | {_pct_signed(r['avg20'])} | {_pct(r['win_rate'])} | "
+                 f"{_pct_signed(r['avg_ret'])} | {_pct_signed(r['cum_ret'])} | {r['pl_ratio']} | "
                  f"{r['expectancy']} | {r['avg_bars']} |")
     L += ["", "> 命中=信号后 N 根方向化命中 (多头 ret>0); 回测=固定止盈止损+成本规则平仓。", ""]
     L.append("## 事件/类目细分")
@@ -418,8 +418,8 @@ def _write_report(path, args, rows, detail, stocks, include_order):
             wr = round(sum(1 for v in r if v > 0) / len(r), 3) if r else None
             avg = round(statistics.mean(r), 4) if r else None
             hit = round(sum(1 for v in hs if v > 0) / len(hs), 3) if hs else None
-            f0 = lambda v: f"{v*100:.0f}%" if v is not None else "-"
-            f1 = lambda v: f"{v*100:+.2f}%" if v is not None else "-"
+            f0 = _pct
+            f1 = _pct_signed
             L.append(f"| {s} | {k} | {len(r)} | {f0(hit)} | {f0(wr)} | {f1(avg)} |")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(L) + "\n")

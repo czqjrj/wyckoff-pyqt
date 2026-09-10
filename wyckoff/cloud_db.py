@@ -18,8 +18,6 @@ import json
 import os
 import threading
 
-from ._log import log_exc
-
 try:
     import pymysql
 except Exception:  # pragma: no cover

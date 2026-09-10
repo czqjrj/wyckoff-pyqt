@@ -89,9 +89,10 @@ def sync(retrain=True):
         }
         final_model = state or None
     else:
+        import os
+
         from wyckoff.online_model import _load_state
         from wyckoff.paths import ONLINE_MODEL_FILE
-        import os
         if os.path.exists(ONLINE_MODEL_FILE):
             final_model = _load_state()
         else:

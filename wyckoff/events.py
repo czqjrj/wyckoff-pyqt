@@ -565,7 +565,7 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
         d = dirs[j]
         # 使用动态窗口: 根据事件类型确定最佳确认期
         dyn_window = DYNAMIC_WINDOW.get(t, DYNAMIC_WINDOW["default"])
-        
+
         # 动态调整窗口: 根据波动率微调确认期
         # 高波动: 缩短窗口 (市场确认快)
         # 低波动: 延长窗口 (给市场更多时间确认)
@@ -575,14 +575,14 @@ def confirm_events(df: pd.DataFrame, events, window: int = 3):
         except (KeyError, IndexError, TypeError):
             # 如果列不存在或索引错误, 保持默认窗口
             vr = 1.0  # 中性值, 不调整窗口
-        
+
         # 根据波动率调整窗口 (保持在 3-10 根 K 线之间)
         if vr > 1.5:  # 高波动: 确认快, 缩短窗口
             dyn_window = max(3, dyn_window - 1)
         elif vr < 1.0:  # 低波动: 确认慢, 延长窗口
             dyn_window = min(10, dyn_window + 1)
         # 否则保持默认窗口不变
-        
+
         # 中立事件类型 (SC/BC/AR) 默认确认窗口返回 None
         if _is_neutral_event(e["type"]) or d == 0 or not (0 <= i < n) or i + dyn_window >= n:
             ne["confirmed"] = None
@@ -823,9 +823,9 @@ def event_confidence(ctx: _EventContext, events):
             # 顶部反转类型在下降趋势中变弱
             if e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
                 score -= 15  # 明确惩罚: 这些类型应在上升趋势中出现
-        
+
         # 确保分数不会低于 0
         score = max(0, score)
-        
+
         e["conf"] = int(round(min(100, max(0, score))))
     return ev_list

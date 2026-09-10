@@ -13,17 +13,15 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
 import pandas as pd
 
 from ._log import log_exc
-from .datasource import fetch_kline, fetch_realtime, fetch_name
-from .indicators import add_indicators, find_pivots
+from .datasource import fetch_kline, fetch_realtime
 from .events import detect_all
-from .phases import judge_phase
-from .market import fetch_market_env
 from .fundamental import fetch_all_board_stats
-from .config import EVENT_CN
+from .indicators import add_indicators, find_pivots
+from .market import fetch_market_env
+from .phases import judge_phase
 
 # ── 缓存基础设施 ──
 _lock = threading.Lock()
@@ -116,7 +114,7 @@ def _breadth_from_em():
     主频道 push2 一次全量拉取; 若被限流 (RemoteDisconnected), 自动切
     push2delay 延迟频道按页 (100/页) 并发聚合, 保证广度在任一主机可达时可用。
     """
-    from .fundamental import _get  # noqa: 内部 HTTP 容器
+    from .fundamental import _get  # noqa: F401  # 内部 HTTP 容器
     headers = {"User-Agent": "Mozilla/5.0",
                "Referer": "https://quote.eastmoney.com/"}
     base = {"po": "1", "np": "1", "fltt": "2", "invt": "2",
@@ -146,7 +144,7 @@ def _breadth_from_em():
         except (TypeError, ValueError):
             total_n = 0
         pages = max(1, (total_n + 99) // 100)
-        diff = list((dd.get("diff") or []))
+        diff = list(dd.get("diff") or [])
         with ThreadPoolExecutor(max_workers=6) as ex:
             futs = [ex.submit(_get,
                               "https://push2delay.eastmoney.com/api/qt/clist/get",
@@ -172,8 +170,9 @@ def _breadth_from_legu():
     接口仅在收盘后更新当日数据, 计数按「乐咕口径」(沪深A股, 剔除停牌/北交)。
     """
     try:
-        import akshare as ak  # noqa: PLC0415
         import datetime as _dt
+
+        import akshare as ak  # noqa: PLC0415
         df = ak.stock_market_activity_legu()
         if df is None or df.empty:
             return None
@@ -387,7 +386,7 @@ def fetch_market_fund_flow():
     """
     def _do():
         try:
-            from .fundamental import _get  # noqa: 内部 HTTP 容器
+            from .fundamental import _get  # noqa: F401  # 内部 HTTP 容器
             secids = ",".join(s for s, _ in _MAIN_FLOW_INDICES)
             r = _get(
                 "https://push2.eastmoney.com/api/qt/ulist.np/get",
@@ -677,7 +676,7 @@ def fetch_market_amount():
     """
     def _do():
         try:
-            from .fundamental import _get  # noqa: 内部 HTTP 容器
+            from .fundamental import _get  # noqa: F401  # 内部 HTTP 容器
             h = {"User-Agent": "Mozilla/5.0",
                  "Referer": "https://quote.eastmoney.com/"}
             r = _get("https://push2delay.eastmoney.com/api/qt/ulist.np/get",
