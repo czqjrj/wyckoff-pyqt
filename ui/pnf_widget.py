@@ -179,9 +179,13 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
         self._hud = None            # 右上角视野范围指示
         self._latest_btn = None     # 右下角 "回到最新列" 按钮
         self._help_item = None      # ? 快捷键帮助浮层
+        self._layer_menu = None     # 图层右键菜单
+        self._vap_splitter_drag = False  # VAP 面板拖拽状态
 
         self.setBackground(pg.mkColor(theme.C_PANEL))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_layer_menu)
         self._build_plot()
         self.plot.setTitle("输入 A 股代码 (如 600104 / sh600104 / 000001), "
                            "点击\"开始分析\"加载点数图。")
@@ -353,6 +357,47 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
                     it.setVisible(vis)
                 except (RuntimeError, TypeError):
                     pass
+
+    def _show_layer_menu(self, pos):
+        """右键菜单: 图层显隐开关 + VAP 面板宽度重置。"""
+        from PyQt6.QtWidgets import QMenu
+        if self._layer_menu is not None:
+            try:
+                self._layer_menu.deleteLater()
+            except (RuntimeError, TypeError):
+                pass
+        self._layer_menu = QMenu(self)
+        self._layer_menu.setStyleSheet(f"""
+            QMenu {{
+                background: {theme.semantic('surface-1')};
+                border: 1px solid {theme.semantic('border')};
+                border-radius: {theme.radius('md')}px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 24px 6px 28px;
+                border-radius: {theme.radius('sm')}px;
+            }}
+            QMenu::item:selected {{
+                background: {theme.semantic('accent-bg')};
+                color: {theme.semantic('brand')};
+            }}
+        """)
+        for layer_key, label in self.LAYER_LABELS.items():
+            action = self._layer_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._layer_visible.get(layer_key, True))
+            action.triggered.connect(lambda checked, k=layer_key: self.set_layer_visible(k, checked))
+        self._layer_menu.addSeparator()
+        reset_action = self._layer_menu.addAction("重置 VAP 面板宽度")
+        reset_action.triggered.connect(self._reset_vap_width)
+        self._layer_menu.exec(self.mapToGlobal(pos))
+
+    def _reset_vap_width(self):
+        """重置 VAP 面板列宽比例为默认 3/51。"""
+        gl = self.ci.layout
+        gl.setColumnStretchFactor(0, 48)
+        gl.setColumnStretchFactor(1, 3)
 
     # ── 导出 ──
     def export_csv(self, path):
@@ -1487,6 +1532,49 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
             self.nav_hist(1)
         else:
             super().keyPressEvent(ev)
+
+    # ── VAP 面板宽度拖拽 ──
+    def mousePressEvent(self, ev):
+        """左键在列分隔线附近按下 → 开始拖拽 VAP 面板宽度。"""
+        if ev.button() == Qt.MouseButton.LeftButton:
+            gl = self.ci.layout
+            # 计算主图右边缘在 widget 坐标系中的位置
+            main_plot_rect = self.plot.mapRectToParent(self.plot.boundingRect())
+            main_right = main_plot_rect.right()
+            # 分隔线约在 main_right 附近，给 6px 容差
+            if abs(ev.position().x() - main_right) <= 6:
+                self._vap_splitter_drag = True
+                self._drag_start_x = ev.position().x()
+                self._drag_start_stretch = gl.columnStretchFactor(0)
+                ev.accept()
+                return
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        """拖拽中：根据水平位移调整列宽比例。"""
+        if self._vap_splitter_drag:
+            gl = self.ci.layout
+            dx = ev.position().x() - self._drag_start_x
+            w = self.width()
+            if w <= 0:
+                return
+            # 将像素位移转换为 stretch factor 变化
+            # 总 stretch = 48 + 3 = 51, 主图占比 48/51
+            delta_ratio = dx / w
+            new_main = max(30, min(50, self._drag_start_stretch + delta_ratio * 51))
+            gl.setColumnStretchFactor(0, int(round(new_main)))
+            gl.setColumnStretchFactor(1, 51 - int(round(new_main)))
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        """结束拖拽。"""
+        if ev.button() == Qt.MouseButton.LeftButton and self._vap_splitter_drag:
+            self._vap_splitter_drag = False
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
 
     def grab_pixmap(self):
         """整图快照 (供导出 PNG)。"""
