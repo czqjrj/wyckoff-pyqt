@@ -32,7 +32,7 @@ def test_send_wxpusher_ok(monkeypatch):
     assert captured["payload"]["content"] == "测试正文"
     assert captured["payload"]["summary"] == "标题"
     assert captured["payload"]["topicIds"] == [123, 456]
-    assert captured["payload"]["contentType"] == 1
+    assert captured["payload"]["contentType"] == 3
 
 
 def test_send_wxpusher_no_token_no_receiver():

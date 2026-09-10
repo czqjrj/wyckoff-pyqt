@@ -1576,6 +1576,7 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
                             strategy=strategy, st=st)
         if order is None:
             return None, "金额不足一手"
+        order["reason"] = "手动买入"
         if execute:
             return fill_buy(st, order)
         st["pending"].append(order)
@@ -2031,7 +2032,8 @@ def _fire_condition(st, c, last, df, side="buy", pos=None,
             c["correct"] = None
         else:
             order["day"] = str(df["day"].iloc[-1]) if df is not None else ""
-            res, msg = fill_buy(st, order)
+            order["reason"] = "价格条件单触发"
+            res, msg = fill_buy(st, order, event_type=c.get("kind") or "条件单")
             if res is None:
                 # 现金不足等: 不成交, 取消条件单防止悬挂
                 c["status"] = "cancelled"
@@ -2155,6 +2157,7 @@ def _notify_trade(kind, **info):
         lines = [
             f"> **买入 {name} ({code})**",
             f"- 策略: {strat}",
+            f"- 理由: {info.get('reason', '买入')}",
             f"- 数量: {info.get('qty')} 股",
             f"- 价格: {info.get('price')}",
             f"- 金额: {info.get('amount', '')}",
@@ -2167,10 +2170,11 @@ def _notify_trade(kind, **info):
         lines = [
             f"> **卖出 {name} ({code})**",
             f"- 策略: {strat}",
+            f"- 理由: {info.get('reason', '')}",
             f"- 数量: {info.get('qty')} 股",
             f"- 买价: {info.get('buy_price')} / 卖价: {info.get('sell_price')}",
             f"- 收益率: {ret_txt}",
-            f"- 原因: {info.get('reason', '')}",
+            f"- 持仓: {info.get('bars', '')} 根K线",
         ]
     content = "\n".join(lines)
     try:
@@ -2231,6 +2235,8 @@ def fill_buy(st, order, event_type: str = None):
     _notify_trade("buy", symbol=order["symbol"],
                   name=order.get("name", ""), qty=qty, price=price,
                   strategy=order.get("strategy", ""),
+                  reason=order.get("reason", "买入"),
+                  event_type=event_type or "",
                   amount=round(spend, 2), ts=order["ts"])
     return order, "成交"
 
@@ -2448,7 +2454,9 @@ def close_position(st, pos, sell_price, reason, event_type=None):
         pass
     _notify_trade("sell", symbol=pos["symbol"], name=pos.get("name", ""),
                   qty=pos["qty"], buy_price=pos["buy_px"], sell_price=price,
-                  ret=ret_total, reason=reason, strategy=pos.get("strategy", ""))
+                  ret=ret_total, reason=reason,
+                  bars=int(pos.get("entry_bars", 0)),
+                  strategy=pos.get("strategy", ""))
 
 
 def force_close_position(st, symbol: str, reason: str = "手动平仓"):
@@ -3041,6 +3049,8 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
             if order is None:
                 continue
             order["day"] = str(e.get("day") or "")
+            order["reason"] = ("回踩买入" if e.get("trigger") == "below"
+                               else "上破买入")
             _filled, _msg = fill_buy(st, order)
             if _filled is not None and e.get("trigger", "above") == "above":
                 # 直接成交 = 上方 buy_price 自动条件单触发 (below 回踩单由 _check_conditions

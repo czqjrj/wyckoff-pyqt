@@ -292,13 +292,13 @@ def test_notify_trade_server_chan(monkeypatch):
                         lambda *a, **k: calls.append((a, k)))
     paper._notify_trade("buy", symbol="sh600001", name="新泉股份", qty=4800,
                         price=41.121, strategy=paper.STRATEGY_LONG_LEFT,
-                        amount=197400, ts="2026-09-10 10:00")
+                        reason="回踩买入", amount=197400, ts="2026-09-10 10:00")
     assert len(calls) == 1
     method, cfg, title, content = calls[0][0]
     assert method == "server_chan"
     assert cfg == {"sckey": "SCKEY123"}
     assert "买入 新泉股份 sh600001" in title
-    assert "左侧买点" in content and "41.121" in content
+    assert "回踩买入" in content and "41.121" in content
 
 
 def test_notify_trade_wechat_work_missing_secret_skips(monkeypatch):
@@ -331,7 +331,7 @@ def test_fill_buy_triggers_push(monkeypatch):
     assert len(calls) == 1
     method, cfg, title, content = calls[0][0]
     assert "买入 新泉股份 sh600001" in title
-    assert "纪律" in content
+    assert "纪律" in content and "买入" in content
 
 
 def test_notify_trade_wxpusher(monkeypatch):
@@ -347,7 +347,7 @@ def test_notify_trade_wxpusher(monkeypatch):
                         lambda *a, **k: calls.append((a, k)))
     paper._notify_trade("sell", symbol="sz002937", name="兴瑞科技", qty=200,
                         buy_price=20.0, sell_price=19.2, ret=-0.04,
-                        reason="止损", strategy=paper.STRATEGY_DISCIPLINE)
+                        reason="止损", bars=8, strategy=paper.STRATEGY_DISCIPLINE)
     assert len(calls) == 1
     method, cfg, title, content = calls[0][0]
     assert method == "wxpusher"
@@ -355,6 +355,7 @@ def test_notify_trade_wxpusher(monkeypatch):
     assert cfg["topic_ids"] == ["123", "456", "789"]
     assert "卖出 兴瑞科技 sz002937" in title
     assert "-4.00%" in content
+    assert "止损" in content and "8 根K线" in content
 
 
 def test_notify_trade_wxpusher_missing_receiver_skips(monkeypatch):

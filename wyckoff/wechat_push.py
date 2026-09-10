@@ -114,16 +114,18 @@ WXPUSHER_SEND_URL = "http://wxpusher.zjiecode.com/api/send/message"
 
 def send_wxpusher(app_token: str, content: str, title: str = "",
                   topic_ids: list | None = None, uids: list | None = None,
-                  summary: str | None = None) -> bool:
-    """通过 WxPusher 应用推送微信消息 (公众号模板消息中转)。
+                  summary: str | None = None,
+                  content_type: int = 3) -> bool:
+    """通过 WxPusher 应用推送微信消息 (公众号模板消息/图文中转)。
 
     参数:
         app_token: 应用 APP_TOKEN (wxpusher 后台创建应用后获取, 仅展示一次)
-        content: 消息正文 (纯文本, 支持 \n 换行)
+        content: 消息正文 (content_type=3 markdown 时支持标题/列表/加粗)
         title: 消息摘要 (会显示在消息摘要栏)
         topic_ids: 主题 ID 列表 (主题二维码被扫码后订阅, 见后台"主题管理")
         uids: 用户 UID 列表 (扫描应用二维码关注后, 见后台"用户管理")
                 topic_ids 与 uids 至少提供一个, 否则消息无人接收。
+        content_type: 1=纯文本, 2=html, 3=markdown (默认, 正文支持 md 语法显示)
 
     返回:
         True 表示发送成功 (接口 code == 1000)
@@ -133,7 +135,7 @@ def send_wxpusher(app_token: str, content: str, title: str = "",
     payload = {
         "appToken": app_token,
         "content": content,
-        "contentType": 1,
+        "contentType": content_type,
         "summary": (summary or title or "行情提醒")[:100],
     }
     if topic_ids:
