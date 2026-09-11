@@ -183,6 +183,185 @@ def fetch_qlib_features(
     return features
 
 
+def load_train_pool() -> list[str]:
+    """加载训练股票池。
+
+    优先从 ``data/train_pool.txt`` 读取 (每行一个 sh/sz 代码), 该文件由
+    ``scripts/refresh_train_pool.py`` 生成 (东财成交额 Top 流动性样本)。
+    文件不存在或为空时回退到内置的 40 只蓝筹池。
+    """
+    pool_file = os.path.join(paths.DATA_DIR, "train_pool.txt")
+    if not os.path.isfile(pool_file):
+        pool_file = os.path.join(paths.DATA_DIR, "data", "train_pool.txt")
+    if os.path.isfile(pool_file):
+        try:
+            lines = [
+                l.strip().lower()
+                for l in open(pool_file, encoding="utf-8")
+                if l.strip() and not l.strip().startswith("#")
+            ]
+            if lines:
+                return lines
+            logger.warning("train_pool.txt 为空, 使用内置池")
+        except Exception as e:
+            logger.warning(f"读取 train_pool.txt 失败: {e}")
+    return [
+        "sh600036", "sh601398", "sh601988", "sh601328", "sh600000",
+        "sh601318", "sh601628", "sh600030", "sh601211", "sz300059",
+        "sh600519", "sz000858", "sz000333", "sz000651", "sh601888",
+        "sz002415", "sh600690", "sh600276", "sz300760", "sh603259",
+        "sz000538", "sz002594", "sh601012", "sz300750", "sh600104",
+        "sz002466", "sh600438", "sh688981", "sh603986", "sz002371",
+        "sh600745", "sz300308", "sh601857", "sh600900", "sh601899",
+        "sh601088", "sh600028", "sh601006", "sz000001", "sh600018",
+    ]
+
+
+# 威科夫看多事件 (供需逻辑: SC/PSY/AR 恐慌抛售+自动反弹, ST/Spring 震仓,
+# SOS/JOC/LPS/BU 上行结构) vs 看空事件 (BC 买入高潮, UT/UTAD 上冲回落,
+# LPSY/SOW 派发/弱势下攻)。
+_BULL_EVENTS = frozenset(
+    {"SC", "PSY", "AR", "ST", "Spring", "SOS", "JOC", "LPS", "BU", "Shakeout"})
+_BEAR_EVENTS = frozenset({"BC", "UTAD", "UT", "LPSY", "SOW"})
+
+_DOMAIN_FEATURES = (
+    # VSA 量价变换 (与 vsa_classify 的 features 同定义, 按每根 K 线稠密化)
+    "wy_vr", "wy_rw", "wy_cpos", "wy_trend", "wy_dir",
+    "wy_cpos_trend", "wy_vr_cpos", "wy_vr_trend",
+    # K 线外沿 (供给/需求余量)
+    "wy_up_wick", "wy_dn_wick",
+    # 技术指标 (Alpha158 未覆盖的合成段)
+    "wy_rsi6", "wy_macd_hist", "wy_kdj_k", "wy_kdj_d", "wy_kdj_j",
+    "wy_atr_rel", "wy_boll_pct", "wy_bw", "wy_obv_rel",
+    # 事件上下文 (滚动窗口内威科夫事件计数)
+    "wy_ev_bull20", "wy_ev_bear20", "wy_ev_net20",
+    "wy_ev_bull60", "wy_ev_bear60", "wy_ev_net60",
+    "wy_ev_conf20",
+)
+
+
+def compute_domain_features(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    events_window: tuple[int, ...] = (20, 60),
+) -> tuple:
+    """计算威科夫领域特征 (每根 K 线稠密化), 按交易日对齐 qlib 日历。
+
+    对 symbol 从 qlib 本地数据读 OHLCV, 依次跑 add_indicators →
+    find_pivots → detect_all, 提取:
+
+    - VSA 量价特征: vr/rw/cpos/trend/dir + 交叉项 (与 vsa_classify.features 同定义)
+    - K 线外沿: 上/下影线占整根振幅比例
+    - 技术指标: RSI6/MACD 柱/KDJ/ATR(相对)/布林带位置与宽度/OBV 相对强度
+    - 事件上下文: 滚动窗口内看多/看空事件计数、净方向、最大置信度
+
+    返回 (DataFrame, feature_names); DataFrame index 为交易日, 与
+    ``fetch_alpha158_features`` 的 index 对齐可直接 join。qlib 无该股数据或
+    指标阶段失败时返回 (None, [])。
+    """
+    import numpy as np
+    import pandas as pd
+
+    try:
+        from .indicators import add_indicators, find_pivots
+        raw = _fetch_df(
+            symbol, start_date, end_date,
+            ["$open", "$high", "$low", "$close", "$volume"])
+    except Exception as e:
+        logger.debug(f"domain fetch failed for {symbol}: {e}")
+        return None, []
+    if raw is None or raw.empty:
+        return None, []
+
+    try:
+        pdf = _as_single(raw)
+        dts = list(pdf.index)
+        d0 = pdf.reset_index(drop=True)
+        d0["day"] = dts
+        for c in ("open", "high", "low", "close", "volume"):
+            d0[c] = d0[c].astype(float)
+
+        ind = add_indicators(d0, symbol=symbol)
+        pivots = find_pivots(ind, order=6)
+        from .events import detect_all
+        events = detect_all(ind, pivots)
+
+        df = ind.copy()
+        eps = 1e-9
+        cl = df["close"].astype(float)
+        hi = df["high"].astype(float)
+        lo = df["low"].astype(float)
+        vol = df["volume"].astype(float)
+        rng = (hi - lo).clip(lower=eps)
+
+        vy: dict[str, np.ndarray] = {}
+        vr = (vol / df["vol_ma20"].replace(0, np.nan)).fillna(1.0)
+        vy["wy_vr"] = vr
+        vy["wy_rw"] = rng / (rng.rolling(20).mean().replace(0, np.nan)).fillna(rng)
+        vy["wy_cpos"] = (cl - lo) / rng
+        ma20 = df["price_ma20"]
+        vy["wy_trend"] = (cl > ma20).astype(float)
+        vy["wy_dir"] = df["direction"].astype(float)
+        tr = 2 * vy["wy_trend"] - 1
+        vy["wy_cpos_trend"] = vy["wy_cpos"] * tr
+        vy["wy_vr_cpos"] = vy["wy_vr"] * vy["wy_cpos"]
+        vy["wy_vr_trend"] = vy["wy_vr"] * tr
+        vy["wy_up_wick"] = df["upper_wick"] / rng
+        vy["wy_dn_wick"] = df["lower_wick"] / rng
+        vy["wy_rsi6"] = df["rsi_6"]
+        vy["wy_macd_hist"] = df["macd_hist"]
+        vy["wy_kdj_k"] = df["kdj_k"]
+        vy["wy_kdj_d"] = df["kdj_d"]
+        vy["wy_kdj_j"] = df["kdj_j"]
+        vy["wy_atr_rel"] = df["atr"] / cl
+        bbw = (df["boll_up"] - df["boll_dn"]).replace(0, np.nan)
+        vy["wy_boll_pct"] = (cl - df["boll_dn"]) / bbw
+        vy["wy_bw"] = bbw / df["boll_mid"].replace(0, np.nan)
+        obv = df["obv"].astype(float)
+        vy["wy_obv_rel"] = (obv - obv.rolling(20).mean()) / (
+            obv.rolling(20).std().replace(0, np.nan)).fillna(1.0)
+
+        n_bars = len(df)
+        ev_idx = np.array([e["idx"] for e in events], dtype=int)
+        ev_bull = np.array([1 if e["type"] in _BULL_EVENTS else 0 for e in events])
+        ev_bear = np.array([1 if e["type"] in _BEAR_EVENTS else 0 for e in events])
+        ev_conf = np.array([float(e.get("conf", 0) or 0) for e in events])
+
+        for w in events_window:
+            key = str(w)
+            bull = np.zeros(n_bars)
+            bear = np.zeros(n_bars)
+            net = np.zeros(n_bars)
+            maxconf = np.zeros(n_bars)
+            for i in range(n_bars):
+                lo_idx = np.searchsorted(ev_idx, i - w + 1, side="left")
+                hi_idx = np.searchsorted(ev_idx, i, side="right")
+                if hi_idx > lo_idx:
+                    sl = slice(lo_idx, hi_idx)
+                    b = int(ev_bull[sl].sum())
+                    s = int(ev_bear[sl].sum())
+                    bull[i] = b
+                    bear[i] = s
+                    net[i] = (b - s) / (b + s + 1.0)
+                    maxconf[i] = ev_conf[sl].max()
+            vy[f"wy_ev_bull{key}"] = bull
+            vy[f"wy_ev_bear{key}"] = bear
+            vy[f"wy_ev_net{key}"] = net
+            if w == min(events_window):
+                vy["wy_ev_conf20"] = maxconf
+
+        feat = pd.DataFrame(
+            {k: (v.to_numpy() if isinstance(v, pd.Series) else v) for k, v in vy.items()})
+        feat.index = pd.DatetimeIndex(dts, name="datetime")
+        feat = feat[list(_DOMAIN_FEATURES)]
+        feat = feat.replace([np.inf, -np.inf], np.nan)
+        return feat, list(_DOMAIN_FEATURES)
+    except Exception as e:
+        logger.warning(f"domain features failed for {symbol}: {type(e).__name__}: {e}")
+        return None, []
+
+
 def fetch_alpha158_features(
     symbol: str,
     start_date: str,
@@ -311,6 +490,12 @@ def qlib_signal_probability(
             try:
                 df, names = fetch_alpha158_features(symbol, start_date, end_date)
                 if df is not None and len(df):
+                    fnames = model_obj["feature_names"]
+                    if any(f.startswith("wy_") for f in fnames):
+                        dfeat, _ = compute_domain_features(
+                            symbol, start_date, end_date)
+                        if dfeat is not None and len(dfeat):
+                            df = df.join(dfeat, how="inner")
                     series = qlib_probability_series(df, model_obj)
                     if series is not None and len(series):
                         prob_buy = float(series[-1])
@@ -573,14 +758,18 @@ def train_qlib_lgbm_v2(
     test_ratio: float = 0.2,
     num_boost_round: int = 500,
     save: bool = True,
+    use_domain: bool = True,
 ) -> dict[str, Any] | None:
-    """V2 训练: 针对 AUC=0.53 问题做四项改进。
+    """V3 训练: 在 V2 四项改进基础上注入威科夫领域特征 + 扩充股票池。
 
     改进点:
     1. 标签噪声: |return| < threshold 的样本丢弃, 只保留明确涨跌
     2. 特征冗余: 皮尔逊相关 > 0.95 的特征组只保留最重要的一个
     3. 超参数: 加强正则化 (min_child_samples, lambda, max_depth)
     4. 多周期: 同时训练 5/10/20 日, 选最优周期
+    5. 领域特征: VSA 量价 / 事件上下文 / 技术指标 稠密化并入
+       (use_domain=True, 见 compute_domain_features)
+    6. 股票池: 默认从 data/train_pool.txt 读取扩充池 (>200 只)
     """
     available = _is_qlib_available()
     if not available:
@@ -598,22 +787,24 @@ def train_qlib_lgbm_v2(
         return None
 
     if symbols is None:
-        symbols = [
-            "sh600036", "sh601398", "sh601988", "sh601328", "sh600000",
-            "sh601318", "sh601628", "sh600030", "sh601211", "sz300059",
-            "sh600519", "sz000858", "sz000333", "sz000651", "sh601888",
-            "sz002415", "sh600690", "sh600276", "sz300760", "sh603259",
-            "sz000538", "sz002594", "sh601012", "sz300750", "sh600104",
-            "sz002466", "sh600438", "sh688981", "sh603986", "sz002371",
-            "sh600745", "sz300308", "sh601857", "sh600900", "sh601899",
-            "sh601088", "sh600028", "sh601006", "sz000001", "sh600018",
-        ]
+        symbols = load_train_pool()
 
+    logger.info(f"v3: pool size {len(symbols)}, use_domain={use_domain}")
+    all_feature_names = list(_DOMAIN_FEATURES) if use_domain else []
     frames = []
     for sym in symbols:
         df, names = fetch_alpha158_features(sym, start_date, end_date)
         if df is None or len(df) < 80:
             continue
+        all_feature_names.extend(n for n in names if n not in all_feature_names)
+        if use_domain:
+            dfeat, dnames = compute_domain_features(sym, start_date, end_date)
+            if dfeat is not None and len(dfeat) >= 80:
+                df = df.join(dfeat, how="inner")
+                if len(df) < 80:
+                    continue
+                all_feature_names.extend(
+                    n for n in dnames if n not in all_feature_names)
         cdf = _fetch_df(sym, start_date, end_date, ["$close"])
         if cdf is None or cdf.empty:
             continue
@@ -632,7 +823,7 @@ def train_qlib_lgbm_v2(
         return None
 
     data = pd.concat(frames, axis=0)
-    feature_names = [c for c in names if c in data.columns]
+    feature_names = [c for c in all_feature_names if c in data.columns]
 
     feat_corr = data[feature_names].corr().abs()
     upper = feat_corr.where(np.triu(np.ones(feat_corr.shape), k=1).astype(bool))
@@ -751,6 +942,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Wyckoff Qlib 模型训练/推理")
     parser.add_argument("--train", action="store_true", help="训练 LightGBM 涨跌模型")
     parser.add_argument("--train-v2", action="store_true", help="V2 训练: 改进标签/特征/超参数")
+    parser.add_argument("--train-v3", action="store_true", help="V3 训练: 注入领域特征 + 扩充股票池")
+    parser.add_argument("--no-domain", action="store_true", help="V3: 关闭领域特征 (仅 Alpha158)")
     parser.add_argument("--symbols", type=str, default="", help="逗号分隔的股票代码候选池")
     parser.add_argument("--start", type=str, default="2019-01-01")
     parser.add_argument("--end", type=str, default="2026-07-03")
@@ -758,14 +951,15 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", type=float, default=0.01, help="V2: 收益阈值, 过滤噪声")
     args = parser.parse_args()
 
-    if args.train_v2:
+    if args.train_v2 or args.train_v3:
         sym_list = [s.strip().lower() for s in args.symbols.split(",") if s.strip()] or None
         res = train_qlib_lgbm_v2(
             symbols=sym_list, start_date=args.start, end_date=args.end,
             horizon=args.horizon, threshold=args.threshold,
+            use_domain=args.train_v3 and not args.no_domain,
         )
         if res:
-            print(f"\n=== V2 训练完成 ===")
+            print(f"\n=== {'V3' if args.train_v3 else 'V2'} 训练完成 ===")
             print(f"最优周期: {res['horizon']}日")
             print(f"AUC: {res['auc']:.4f}  准确率: {res['acc']:.4f}")
             print(f"训练集: {res['n_train']}  验证集: {res['n_valid']}")
@@ -777,7 +971,7 @@ if __name__ == "__main__":
             for name, imp in res.get("top_features", [])[:5]:
                 print(f"  {name}: {imp:.1f}")
         else:
-            print("V2 training failed")
+            print(f"{'V3' if args.train_v3 else 'V2'} training failed")
     elif args.train:
         sym_list = [s.strip().lower() for s in args.symbols.split(",") if s.strip()] or None
         res = train_qlib_lgbm(symbols=sym_list, start_date=args.start, end_date=args.end, horizon=args.horizon)

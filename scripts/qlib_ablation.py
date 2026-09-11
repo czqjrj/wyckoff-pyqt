@@ -50,6 +50,12 @@ def _load_model_and_features(code):
         code, "2022-01-01", "2026-09-10")
     if feat_df is None or feat_df.empty:
         return None, None, None, None
+    fnames = model_obj["feature_names"]
+    if any(f.startswith("wy_") for f in fnames):
+        dfeat, _ = qlib_adapter.compute_domain_features(
+            code, "2022-01-01", "2026-09-10")
+        if dfeat is not None and len(dfeat):
+            feat_df = feat_df.join(dfeat, how="inner")
     prob_buy = qlib_adapter.qlib_probability_series(feat_df, model_obj)
     if prob_buy is None:
         return None, None, None, None
