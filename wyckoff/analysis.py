@@ -59,6 +59,11 @@ _ANALYSIS_CACHE = {}
 # run_analysis 会从多个后台线程 (分析/扫描/面板扫描) 并发调用, 缓存必须加锁
 _ANALYSIS_LOCK = threading.Lock()
 
+# Qlib 强否决阈值 (模型极端看空/看多时否决结构方向):
+# prob_buy < QLIB_VETO_LO → 否决结构性买点; prob_buy > QLIB_VETO_HI → 否决结构性减仓点。
+QLIB_VETO_LO = 0.40
+QLIB_VETO_HI = 0.60
+
 
 def cached_kline(symbol: str, datalen: int, scale: int):
     """最近一次 run_analysis 缓存的分析用 K 线 DataFrame (供界面取用)。"""
@@ -163,18 +168,25 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     # - 当 Qlib 与结构判断方向相反时 (如结构多头但 Qlib 卖出概率高) → 
     #   视概差幅度决定是否抵消/降级
     qlib_direction_nudge = 0  # +1: 多头增强, -1: 空头增强, 0: 无影响
+    qlib_bull_strength = prob_buy - prob_sell   # (>0 偏多, <0 偏空), 已镜像 normalize
+    _veto_lo = qlib_prob.get("veto_lo", QLIB_VETO_LO)
+    _veto_hi = qlib_prob.get("veto_hi", QLIB_VETO_HI)
     if base_phase in ("底部整固", "上升趋势"):
         # 多头结构: Qlib 买入概率高 → 确认; 低 → 疑虑
-        if prob_buy > 0.6 and prob_sell < 0.4:
+        if prob_buy > _veto_hi and prob_sell < (1 - _veto_hi):
             qlib_direction_nudge = +1
-        elif prob_buy < 0.4 and prob_sell > 0.6:
+        elif prob_buy < _veto_lo and prob_sell > (1 - _veto_lo):
             qlib_direction_nudge = -1
     elif base_phase in ("顶部构筑", "下跌趋势"):
         # 空头结构: Qlib 卖出/空头概率高 → 确认; 低 → 疑虑
-        if prob_sell > 0.6 and prob_buy < 0.4:
+        if prob_sell > _veto_hi and prob_buy < (1 - _veto_hi):
             qlib_direction_nudge = -1
-        elif prob_buy > 0.6 and prob_sell < 0.4:
+        elif prob_buy > _veto_hi and prob_sell < (1 - _veto_hi):
             qlib_direction_nudge = +1
+    # Qlib 强否决条件: 模型极端看空 (prob_buy<veto_lo) 时否决结构性买点;
+    # 极端看多 (prob_buy>veto_hi) 时否决结构性减仓/看空点。
+    qlib_veto_buy = qlib_direction_nudge <= -1 and prob_buy < _veto_lo
+    qlib_veto_sell = qlib_direction_nudge >= 1 and prob_buy > _veto_hi
 
     # ═══ 阶段驱动方向判定 ═══
     direction = None
@@ -182,6 +194,10 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
         direction = "空头/减仓"
         stop = top or max((e["price"] for e in recent if e["type"] in ("BC", "UTAD", "LPSY")),
                           default=None)
+        if qlib_veto_sell:
+            # Qlib 极端看多 → 结构性减仓/做空点被否决, 不构成减仓指引
+            direction = "观望"
+            stop = t1 = t2 = None
     elif bearish_phase:
         # 无派发事件确认的空头阶段: 仅提示趋势偏弱, 不构成做空信号
         # (校准: 空头/观望类信号实盘命中率仅15%, 强上涨环境下多空翻转)。
@@ -191,11 +207,16 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
         # 买点需 Spring/ST 确认 (JOC/SOS 突破日信号实测无边际, 追高不占优)。
         # LPS/BU 是威科夫 Phase D 标准买点 (SOS/JOC 后的缩量回踩不破)——
         # 修复 detect_joc_lps_bu 后已能生成, 作为"低吸"确认同样有效。
-        direction = "多头/低吸"
-        stop = min((e["price"] for e in recent
-                    if e["type"] in ("Spring", "SC", "LPS", "BU")),
-                   default=None)
-        stop = stop * 0.99 if stop else ((bottom * 0.99) if bottom else None)
+        if qlib_veto_buy:
+            # Qlib 极端看空 → 结构性买点被否决, 降级观望 (模型与结构矛盾时不追买)
+            direction = "观望"
+            stop = t1 = t2 = None
+        else:
+            direction = "多头/低吸"
+            stop = min((e["price"] for e in recent
+                        if e["type"] in ("Spring", "SC", "LPS", "BU")),
+                       default=None)
+            stop = stop * 0.99 if stop else ((bottom * 0.99) if bottom else None)
     elif bullish_phase:
         # Qlib 影响微调: 买入概率高时可适当增强, 但 Wyckoff 结构优先
         if qlib_direction_nudge >= 1 and prob_buy > 0.5:
@@ -204,16 +225,25 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
             direction = "观望"  # Qlib 多头但结构空头 → 观望
         else:
             direction = "多头/持有"
-        # 根据 Qlib 置信度微调止损: 置信度高时可适当收紧止损
+        # 无确认买点时以区间下沿作常规持仓参考止损, 再按 Qlib 置信度微调收紧
+        stop = bottom * 0.99 if bottom else None
         qlib_stop_adjust = qlib_conf * qlib_alpha * (entry - bottom) if bottom else 0
         if stop is not None and qlib_conf > 0.5:
             stop = stop - qlib_stop_adjust if qlib_stop_adjust > 0 else stop
     elif neutral_phase and (spring or "ST" in rtypes or "LPS" in rtypes or "BU" in rtypes):
-        direction = "多头/突破"
-        stop = bottom
+        if qlib_veto_buy:
+            direction = "观望"
+            stop = t1 = t2 = None
+        else:
+            direction = "多头/突破"
+            stop = bottom
     elif neutral_phase and (utad or "BC" in rtypes or lpsy):
-        direction = "空头/减仓"
-        stop = top
+        if qlib_veto_sell:
+            direction = "观望"
+            stop = t1 = t2 = None
+        else:
+            direction = "空头/减仓"
+            stop = top
     else:
         direction = "观望"
         stop = t1 = t2 = None
@@ -395,6 +425,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                                         use_cache=not force_refresh), symbol=symbol)
     df = add_indicators(df, symbol=symbol)
     df = clamp_window(df, datalen)
+    df.attrs["symbol"] = symbol
     with _ANALYSIS_LOCK:
         _ANALYSIS_CACHE[cache_key] = (df, name, None)  # 第三位 vsa_signals, 下方填充
         if len(_ANALYSIS_CACHE) > 32:
@@ -601,7 +632,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
 
     trade_plan = build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr,
     float(df["close"].iloc[-1]),
-    qlib_prob={})
+    qlib_prob=None)
     # ── 威科夫Pro整合层 (可选增强) ──
     ce = counter_evidence(df, events, phase=phase, structure=structure)
     nt = nine_tests(df, events, pivots=pivots, phase=phase, structure=structure,
