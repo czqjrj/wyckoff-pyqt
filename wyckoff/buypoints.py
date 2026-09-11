@@ -89,6 +89,57 @@ KIND_RIGHT = ("sos_break", "bu_backup", "markup_break", "markup_bu")
 DISABLED_KINDS = frozenset({"sos_break", "markup_break", "markup_bu"})
 
 
+# 自适应门控参数: 根据结构类型和波动率返回 (GATE_LEFT_LOOK, RIGHT_LOWER)
+# 原则: 
+# - 底部吸筹结构 (acc): 左侧窗口可适当缩短 (更集中), 右侧比例可宽容一点
+# - 派发/顶部结构 (dist): 左侧窗口需扩大 (需更多确认), 右侧比例需严格
+# - 高波动市: 左侧窗口扩大 (给更多寻找确认的时间), 右侧比例收紧
+# - 低波动市: 左侧窗口缩小 (更敏感), 右侧比例宽容一点
+def _get_adaptive_gate_params(kind: str, vol_ma20: float) -> tuple:
+    """返回 (左侧看回根数, 右侧价位比例) 的自适应元组。"""
+    # 基础参数
+    base_left = 45
+    base_lower = 0.995
+
+    # 1) 根据结构类型调整
+    # kind 来源: 通过 judge_phase 判断, 或 events 中的结构标记
+    # acc = 吸筹, dist = 派发, md = 下跌趋势
+    if kind == "acc":
+        # 底部吸筹: 左侧窗口缩短 (更集中), 右侧比例宽容
+        left_adj = -10
+        lower_adj = +0.002  # 宽容 0.2%
+    elif kind == "dist":
+        # 派发/顶部: 左侧窗口扩大 (需更多确认), 右侧比例收严
+        left_adj = +15
+        lower_adj = -0.003  # 严格 0.3%
+    elif kind == "md":
+        # 下跌趋势: 直接剔除 (不在此处开启右侧加仓)
+        left_adj = +20
+        lower_adj = -0.005  # 极严格
+    else:
+        left_adj = 0
+        lower_adj = 0
+
+    # 2) 根据波动率进一步微调
+    # 波动率基准: 20% (0.20)
+    vol_ref = 0.20
+    if vol_ma20 is not None and vol_ma20 > 0:
+        # 波动率 > 25%: 扩大左侧窗口, 收紧右侧比例
+        if vol_ma20 > 0.25:
+            left_adj += 5
+            lower_adj -= 0.001
+        # 波动率 < 15%: 缩小左侧窗口, 宽容右侧比例
+        elif vol_ma20 < 0.10:
+            left_adj -= 5
+            lower_adj += 0.001
+
+    # 截取合理范围
+    final_left = max(20, min(80, base_left + left_adj))  # [20, 80]
+    final_lower = max(0.98, min(0.998, base_lower + lower_adj))  # [0.980, 0.998]
+
+    return final_left, final_lower
+
+
 def _finite(x) -> bool:
     return bool(np.isfinite(x))
 
@@ -642,15 +693,60 @@ def struct_buy_points(df, events, pivots=None, context_cache=None):
 
     # 左侧起仓 → 右侧加仓纪律: 右侧买点须以价位更低的左侧买点为前提。
     # (实证: 无此前提时右侧单独开仓盈亏比<1, 加此后整体胜率明显抬升。)
+    # 现改为自适应门控: 根据结构阶段和波动率动态调整左侧看回窗口和
+    # 右侧价位比例, 期望在各结构阶段保持一致的择时质量。
     right_gate = [b for b in result if b["kind"] in KIND_RIGHT]
     if right_gate:
+        # ── 计算结构阶段和波动率 ─────────────────────────────────────
+        # 使用判段面牌确定结构类型: acc=吸筹, dist=派发, md=下跌趋势
+        try:
+            from .phases import judge_phase
+            # 仅使用前面一部分数据判断当前结构类型 (避免用未来信息)
+            phase, _ = judge_phase(df, pivots, events)
+            if any(k in phase for k in ("Accumulation", "吸筹", "底部")):
+                struct_kind = "acc"
+            elif any(k in phase for k in ("Distribution", "派发", "顶部")):
+                struct_kind = "dist"
+            elif any(k in phase for k in ("Markdown", "下跌")):
+                struct_kind = "md"
+            else:
+                struct_kind = "acc"  # 默认视为底部结构
+        except Exception:
+            struct_kind = "acc"  # 降级: 默认视为底部结构
+
+        # 计算最近 20 根 K 线的波动率中位数 (ATR/收盘价 * 100)
+        close = df["close"].values.astype(float)
+        high = df["high"].values.astype(float)
+        low = df["low"].values.astype(float)
+        win = min(20, len(close))
+        if win >= 3:
+            prev = np.empty_like(close)
+            prev[1:] = close[:-1]
+            prev[0] = close[0]
+            tr = np.maximum(
+                high - low,
+                np.maximum(np.abs(high - prev), np.abs(low - prev)),
+            )
+            med_close = np.median(close[-win:])
+            if med_close > 0:
+                tr_pct = np.median(tr[-win:]) / med_close * 100.0
+            else:
+                tr_pct = 0.02
+            vol_ma20 = tr_pct / 100.0  # 转为小数
+        else:
+            vol_ma20 = 0.02  # 极少数据回退最小阈值
+        # ───────────────────────────────────────────────────────────────
+
+        # 获取自适应门控参数
+        gate_left, gate_lower = _get_adaptive_gate_params(struct_kind, vol_ma20)
+
         cache_gate = [(b["bar_idx"], b["entry_price"]) for b in result
                       if b["kind"] in KIND_LEFT]
         out_f = []
         for b in result:
             if b["kind"] in KIND_RIGHT:
-                ok = any(j < b["bar_idx"] and b["bar_idx"] - j <= GATE_LEFT_LOOK
-                         and left_price < b["entry_price"] * RIGHT_LOWER
+                ok = any(j < b["bar_idx"] and b["bar_idx"] - j <= gate_left
+                         and left_price < b["entry_price"] * gate_lower
                          for (j, left_price) in cache_gate)
                 if not ok:
                     continue
@@ -683,7 +779,7 @@ def latest_buy_points(df, events, pivots=None, look=ACTIONABLE_LOOK):
         bp["gap"] = round((last / bp["entry_price"] - 1) * 100, 2) if bp["entry_price"] else 0.0
         out.append(bp)
     out.sort(key=lambda b: (CLASS_META[b["cls"]][1], b["bar_idx"]), reverse=True)
-    return out[:8]
+    return out[:LB_MAX]
 
 
 # ──────────────────────────── 扫描 (scan_adv 兼容) ────────────────────────────

@@ -6,10 +6,19 @@ from .config import EVENT_COLORS, confirm_dir, event_dir
 
 USE_EMPIRICAL_CONF = True
 # 经验校准混合权重: 历史类型胜率对原 conf 的覆盖比例。
-# 0.55 过高 → 原 conf=80 被压缩到 63.5, 高分桶样本量塌缩, 导致
-# Spearman IC≈0 (打分与收益无关)。0.20 保留原打分排序主导权的同时
-# 仍允许历史数据对小样本类型做轻度收缩。
-EMPIRICAL_CONF_BLEND = 0.20
+# 调整前: 固定 0.20, 但不同事件类型实证可靠性差异巨大:
+# Spring(88% 胜率) → 少量混合, SOS/JOC(~55% 胜率) → 多量混合依赖历史
+# 此处改为每类型自适应权重, 保留原 conf 排序主导权的同时,
+# 更合理地利用历史数据对不同可靠性的类型进行收缩。
+EVENT_CONF_BLEND: dict[str, float] = {
+    "Spring": 0.10,      # 强信号: 少量混合, 保护原有高分
+    "Shakeout": 0.10,
+    "SOS": 0.25,         # 弱信号: 多量混合, 依赖历史可靠性校准
+    "JOC": 0.25,
+    "BC": 0.20,
+    "AR": 0.20,
+    "default": 0.20,     # 其他/中性类型
+}
 
 
 def _empirical_reliability(type_, d=0):
@@ -74,6 +83,11 @@ def _cap_to_ceiling(events):
     return events
 
 
+def _blend_conf_weight(e_type: str) -> float:
+    """返回该事件类型的 empirical conf blending weight。"""
+    return EVENT_CONF_BLEND.get(e_type, EVENT_CONF_BLEND["default"])
+
+
 def _apply_empirical_calibration(events):
     for e in events:
         if not USE_EMPIRICAL_CONF:
@@ -86,8 +100,9 @@ def _apply_empirical_calibration(events):
         # (旧版用 0.5 强制混合, 导致样本不足的类型被打到中段, IC→0)
         if rel is None:
             continue
+        blend = _blend_conf_weight(e.get("type", ""))
         e["conf"] = int(round(min(100, max(0,
-            conf * (1.0 - EMPIRICAL_CONF_BLEND) + rel * 100 * EMPIRICAL_CONF_BLEND))))
+            conf * (1.0 - blend) + rel * 100 * blend))))
     return events
 
 

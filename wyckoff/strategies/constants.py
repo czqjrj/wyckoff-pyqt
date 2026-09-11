@@ -24,12 +24,12 @@ VA_EXCLUDE_BJ = True
 VA_EXCLUDE_ST = True
 VA_MIN_PRICE = 3.0
 # 价值吸筹 conf 下限: 兜底信号也须有足够置信度
-VA_MIN_CONF = 80
+VA_MIN_CONF = 85
 
 # 威科夫完整做多买点·左侧起仓 (独立赛道, 不受大盘/板块/资金流门禁管束)
-LONG_MIN_CONF = 60      # 实证左侧最佳为左侧试探/高盈亏比; 用较宽下限避免过度挑剔
+LONG_MIN_CONF = 70      # 实证左侧提高置信度下限, 勝率提升; 信號數適度減少
 LB_ENTRY_MARGIN = 0.0   # 左侧 buy_price 触发价: 直接挂买点入场价 (低风险左侧, 等回踩)
-LB_MAX = 8              # 单期扫描最多回传的左侧候选数 (按 conf/盈亏比排序截断)
+LB_MAX = 15             # 单期扫描最多回传的左侧候选数 (按 conf/盈亏比排序截断)
 
 # 纪律强多头事件近端可买入窗口 (根)
 DISCIPLINE_EVENT_WINDOW = 10

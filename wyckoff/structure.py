@@ -6,6 +6,8 @@
 推进资格固化下来, 防止把孤立/越序事件推断成结构进度 (孤立 Spring 命中率低,
 无吸筹背景的 SOS 实测命中率仅 31%)。
 """
+import numpy as np
+
 from .config import ACC_PHASES, DIST_PHASES, W_PIVOT_LONG
 
 _ACC_TYPES = ("PSY", "SC", "ST", "Spring", "SOS", "LPS", "BU", "JOC", "Shakeout")
@@ -104,14 +106,24 @@ def _kind_by_events(recent, start, span):
     return "dist" if dist_w > acc_w else "acc"
 
 
-def _has_prereq(events, e, prereq, window, conf_thr=40):
+def _has_prereq(events, e, prereq, window, conf_thr=40, vol_ma20=None):
     """某事件在 e 之前 window 根内是否出现任一前置类型事件 (且置信度达标)。
 
-    events 需已按 idx 升序。因果校验核心: 后验事件只有在前置铺垫存在时才
-    算"结构推进", 孤立事件 (如无 SC/ST 的 Spring) 不构成威科夫阶段证据。
+    根据成交均量波动率自适应调整搜索窗口:
+    - 波动率 > 25%: 扩大窗口 1.5倍 (高波动市需更多根确认因果链)
+    - 波动率 < 15%: 缩小窗口 0.7倍 (低波动市减少误判)
+    - 普通市 (15-25%): 保持不变
     """
     if not prereq:
         return True
+    # 基于波动率自适应调整窗口大小
+    if vol_ma20 is not None and vol_ma20 > 0:
+        # 以 20% 为基准波动率
+        vol_ref = 0.20
+        # 波动率越高, 窗口扩大; 越低, 窗口收窄
+        vol_factor = 1.0 + (vol_ma20 - vol_ref) * 0.5
+        vol_factor = max(0.5, min(1.5, vol_factor))  # 截取 [0.5, 1.5]
+        window = int(window * vol_factor)
     i = e["idx"]
     for o in events:
         if o["idx"] >= i:
@@ -123,7 +135,7 @@ def _has_prereq(events, e, prereq, window, conf_thr=40):
     return False
 
 
-def _progress(events, kind):
+def _progress(events, kind, vol_ma20=None):
     """按因果链推进结构阶段: 事件逐个出现, 只有满足前置约束的高等级事件
     才推进 cur (越序/孤立事件被拦截, 不参与阶段判断)。
 
@@ -138,7 +150,7 @@ def _progress(events, kind):
         if st <= cur or e.get("conf", 100) < 40:
             continue
         need, win = prereq.get(e["type"], ((), 0))
-        if not _has_prereq(order, e, need, win):
+        if not _has_prereq(order, e, need, win, vol_ma20=vol_ma20):
             blocked.append((e["type"], need))
             continue
         cur = st
@@ -162,7 +174,32 @@ def structure_progress(events: list, df, phase: str = None):
         start = n - 200
         kind = _kind_by_events(recent, start, max(1, n - start))
 
-    cur, blocked = _progress(recent, kind)
+    # ── 基于波动率自适应前置窗口 ────────────────────────────────
+    # 计算最近 20 根 K 线的波动率中位数 (ATR/收盘价 * 100)
+    close = df["close"].values.astype(float)
+    high = df["high"].values.astype(float)
+    low = df["low"].values.astype(float)
+    win = min(20, len(close))
+    if win >= 3:
+        prev = np.empty_like(close)
+        prev[1:] = close[:-1]
+        prev[0] = close[0]
+        tr = np.maximum(
+            high - low,
+            np.maximum(np.abs(high - prev), np.abs(low - prev)),
+        )
+        med_close = np.median(close[-win:])
+        if med_close > 0:
+            vol_pct = np.median(tr[-win:]) / med_close * 100.0
+        else:
+            vol_pct = 0.02
+    else:
+        vol_pct = 0.03  # 极少数据回退最小阈值
+    # 将波动率转换为 ma20 参数风格 (百分比 -> 小数)
+    vol_ma20 = vol_pct / 100.0
+    # ─────────────────────────────────────────────────────────────
+
+    cur, blocked = _progress(recent, kind, vol_ma20=vol_ma20)
     _, _, phases, kind_txt = _prereqs_for(kind)
     letter, name, note = phases[cur]
 
