@@ -30,6 +30,15 @@ _qlib_features_cache: dict[str, dict[str, float]] = {}
 
 QLIB_MODEL_FILE = os.path.join(paths.DATA_DIR, "qlib_lgbm.joblib")
 
+# 项目内 QLib 数据目录 (data/qlib/cn_data)。优先使用环境变量 QLIB_DATA_DIR
+# 以便测试隔离; 若项目内目录不存在则回退到用户目录 ~/.qlib/qlib_data/cn_data。
+_default_provider_uri = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "qlib", "cn_data")
+if not os.path.isdir(_default_provider_uri):
+    _legacy = os.path.join(os.path.expanduser("~"), ".qlib", "qlib_data", "cn_data")
+    if os.path.isdir(_legacy):
+        _default_provider_uri = _legacy
+QLIB_DATA_DIR = os.environ.get("QLIB_DATA_DIR", _default_provider_uri)
+
 
 def _is_qlib_available() -> bool:
     """检查 qlib 是否已安装并可用。"""
@@ -41,7 +50,7 @@ def _is_qlib_available() -> bool:
 
             _ = qlib.__version__
             try:
-                qlib.init()
+                qlib.init(provider_uri=QLIB_DATA_DIR)
             except Exception:
                 pass
             _qlib_available = True
@@ -68,7 +77,7 @@ def _fetch_df(
 
     if not _qlib_init_done:
         try:
-            qlib.init()
+            qlib.init(provider_uri=QLIB_DATA_DIR)
         except Exception as e:
             logger.warning(f"qlib.init() failed: {e}")
         from qlib.config import C

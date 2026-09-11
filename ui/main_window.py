@@ -66,6 +66,7 @@ from . import theme
 from .analysis_ctrl import AnalysisController
 from .chart_manager import ChartManager
 from .code_search import CodeSearchDialog
+from .components.workers import FnThread
 from .extra_windows import (
     AlertsWindow,
     CompareWindow,
@@ -395,6 +396,9 @@ class MainWindow(QMainWindow):
         t.addAction("多股票对比", self.open_compare)
         t.addSeparator()
         t.addAction("校准中心", "Ctrl+Shift+A", lambda: self.open_accuracy_center())
+        t.addSeparator()
+        t.addAction("QLib 数据更新", lambda: self._qlib_update_data())
+        t.addAction("QLib 模型训练", lambda: self._qlib_train_model())
         t.addSeparator()
         t.addAction("清除行情缓存", self._clear_market_cache)
 
@@ -3382,6 +3386,95 @@ class MainWindow(QMainWindow):
         self._status(f"报告已导出: {txt_path}", theme.C_DOWN)
 
     # ── 清除缓存 / 帮助 ──
+    def _qlib_update_data(self):
+        """后台更新 QLib 本地行情数据 (自选股全量重写)。"""
+        from wyckoff.qlib_adapter import QLIB_DATA_DIR
+        from wyckoff.qlib_update import load_watch_pool, update_symbols
+
+        watch = load_watch_pool()
+        if not watch:
+            QMessageBox.information(self, "QLib 数据更新", "自选股列表为空, 无目标可更新。")
+            return
+        if not os.path.isdir(QLIB_DATA_DIR):
+            QMessageBox.warning(
+                self, "QLib 数据更新",
+                f"QLib 数据目录不存在:\n{QLIB_DATA_DIR}\n\n"
+                "请先完成首次数据初始化 (复制 ~/.qlib/qlib_data/cn_data)。")
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("QLib 数据更新")
+        box.setText("正在后台更新 QLib 行情数据 (自选股, 约 30-60 秒)...")
+        box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+        box.show()
+
+        from wyckoff.qlib_adapter import QLIB_DATA_DIR as _DD
+
+        def _work():
+            return update_symbols(watch, _DD)
+
+        th = FnThread(_work, self)
+        self._qlib_thread = th
+
+        def _done(res):
+            if res is not None:
+                fail = res.get("fail") or []
+                msg = (f"更新完成: 成功 {res.get('ok', 0)} 只"
+                       + (f", 失败 {len(fail)}: {', '.join(fail)}" if fail else "")
+                       + f"\n数据目录: {_DD}")
+            else:
+                msg = "更新完成 (无有效结果)。"
+            box.done(0)
+            QMessageBox.information(self, "QLib 数据更新", msg)
+
+        def _err(text):
+            box.done(0)
+            QMessageBox.critical(self, "QLib 数据更新失败", str(text))
+
+        th.ok.connect(_done)
+        th.err.connect(_err)
+        th.finished.connect(lambda: box.done(1) if box.isVisible() else None)
+        th.start()
+
+    def _qlib_train_model(self):
+        """后台训练 LightGBM 涨跌模型 (成分股 + Alpha158)。"""
+        title = "QLib 模型训练"
+        from wyckoff.qlib_adapter import train_qlib_lgbm
+
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText("正在后台训练 QLib 涨跌模型 (LightGBM, 约 1-3 分钟)...")
+        box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+        box.show()
+
+        def _work():
+            return train_qlib_lgbm(save=True)
+
+        th = FnThread(_work, self)
+        self._qlib_thread = th
+
+        def _done(res):
+            box.done(0)
+            if res is None:
+                QMessageBox.warning(self, title, "训练未产生有效结果 (数据不足或依赖缺失)。")
+                return
+            from wyckoff.qlib_adapter import QLIB_MODEL_FILE
+
+            msg = (f"模型训练完成 (已保存到 {QLIB_MODEL_FILE})\n"
+                   f"AUC: {res.get('auc', '-')}  ACC: {res.get('acc', '-')}  "
+                   f"基准率: {res.get('base_rate', '-')}\n"
+                   f"样本: 训练 {res.get('n_train')} / 验证 {res.get('n_valid')}\n"
+                   f"区间: {res.get('train_start')} ~ {res.get('train_end')}")
+            QMessageBox.information(self, title, msg)
+
+        def _err(text):
+            box.done(0)
+            QMessageBox.critical(self, f"{title}失败", str(text))
+
+        th.ok.connect(_done)
+        th.err.connect(_err)
+        th.finished.connect(lambda: box.done(1) if box.isVisible() else None)
+        th.start()
+
     def _clear_market_cache(self):
         from wyckoff import datasource, sqldb
         stats = sqldb.cache_stats()
@@ -3734,6 +3827,9 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
         th = getattr(self, "_thread", None)
         if th is not None and th.isRunning():
             th.wait(5000)
+        qth = getattr(self, "_qlib_thread", None)
+        if qth is not None and qth.isRunning():
+            qth.wait(15000)
         t = getattr(self, "_startup_scan_timer", None)
         if t is not None:
             try:
