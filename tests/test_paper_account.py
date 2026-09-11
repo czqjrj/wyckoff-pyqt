@@ -234,6 +234,47 @@ def test_run_scan_anytime_bypasses_gate(monkeypatch):
     assert st["scan_count"] == 1
 
 
+def test_run_scan_passes_weak_when_weak_market(monkeypatch):
+    """弱市时 run_scan 必须把 weak=True 传给 _apply_auto_conditions,
+    否则价值吸筹候选在弱市仍会生成入场条件单 (曾漏传被默认为 False)。"""
+    monkeypatch.setattr(paper, "gate_reason", lambda anytime=False: None)
+    monkeypatch.setattr(paper, "_mainboard_universe", lambda n: ["sh600001"])
+    monkeypatch.setattr(
+        paper, "pick_candidates",
+        lambda *a, **k: [{"code": "sh600001", "conf": 90,
+                          "strategy": "screener_value_accumulation"}])
+    monkeypatch.setattr(paper, "_weak_market_flag", lambda: True)
+    seen = {}
+    def fake_apply(st, cand, weak=False):
+        seen["weak"] = weak
+        return 0
+    monkeypatch.setattr(paper, "_apply_auto_conditions", fake_apply)
+    monkeypatch.setattr(paper, "save_state", lambda s: s)
+    st = {"scan_count": 0, "candidates": [], "conditions": [], "positions": []}
+    paper.run_scan(st, scan_type="", anytime=True)
+    assert seen.get("weak") is True
+
+
+def test_run_scan_passes_weak_when_not_weak(monkeypatch):
+    """非弱市时 run_scan 传 weak=False (与 run_cycle 默认同口径)。"""
+    monkeypatch.setattr(paper, "gate_reason", lambda anytime=False: None)
+    monkeypatch.setattr(paper, "_mainboard_universe", lambda n: ["sh600001"])
+    monkeypatch.setattr(
+        paper, "pick_candidates",
+        lambda *a, **k: [{"code": "sh600001", "conf": 90,
+                          "strategy": "long_buy_left"}])
+    monkeypatch.setattr(paper, "_weak_market_flag", lambda: False)
+    seen = {}
+    def fake_apply(st, cand, weak=False):
+        seen["weak"] = weak
+        return 0
+    monkeypatch.setattr(paper, "_apply_auto_conditions", fake_apply)
+    monkeypatch.setattr(paper, "save_state", lambda s: s)
+    st = {"scan_count": 0, "candidates": [], "conditions": [], "positions": []}
+    paper.run_scan(st, scan_type="", anytime=True)
+    assert seen.get("weak") is False
+
+
 # ── 交易时段判定 (trading_time) ─────────────────────────────
 
 def test_gate_reason_hours_and_day(monkeypatch):

@@ -569,6 +569,9 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
     reason = gate_reason(anytime=anytime)
     if reason:
         return f"跳过扫描: {reason}"
+    # 弱市过滤: 指数未站上 MA20 → 降仓上限与停用价值吸筹 (与 run_cycle 同口径)。
+    # 扫描时点即判定一次, 供下方条件单生成与换手限仓共用 (避免弱市 VA 漏入条件单)。
+    st["weak"] = _weak_market_flag()
     st['scan_count'] = st.get('scan_count', 0) + 1
     now = datetime.now().isoformat()
     st['last_scan_time'] = now
@@ -623,7 +626,8 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
         fresh['next_scan_time'] = st['next_scan_time']
         fresh['candidates'] = cand
         fresh['last_scan_result'] = result_str
-        _apply_auto_conditions(fresh, cand)
+        fresh['weak'] = bool(st.get('weak', False))
+        _apply_auto_conditions(fresh, cand, weak=fresh['weak'])
         try:
             save_state(fresh)
         except Exception:
