@@ -2,8 +2,14 @@
 
 当安装了 qlib (>=1.6.0) 时，提供以下功能：
 - fetch_qlib_features: 计算价格/技术因子
-- qlib_signal_probability: 基于因子模型预测买卖概率
-- caliabrte_wyckoff_thresholds: 基于历史回测调整 Wyckoff 阈值
+- fetch_alpha158_features: 计算 qlib Alpha158 全量 158 个因子
+- train_qlib_lgbm: 基于 Alpha158 因子训练 LightGBM 涨跌模型
+- qlib_signal_probability: 基于训练模型预测买卖概率
+- calibrate_wyckoff_thresholds: 基于历史回测调整 Wyckoff 阈值
+
+数据读取统一走 ``qlib.data.data.DatasetD.dataset``：qlib 0.9.7 的
+``D.features`` 存在 ``inst_processors`` 参数错位 bug (microsoft/qlib#1949),
+直接对 ``DatasetD.dataset`` 传位置参数可绕过。
 
 当 qlib 未安装时，提供具备前向兼容性的占位实现，
 确保主程序无 ImportError 降级为纯 Wyckoff 模式。
@@ -11,12 +17,18 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+import os
+from typing import Any
+
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-_qlib_available: Optional[bool] = None
-_qlib_features_cache: Dict[str, Dict[str, float]] = {}
+_qlib_available: bool | None = None
+_qlib_init_done: bool = False
+_qlib_features_cache: dict[str, dict[str, float]] = {}
+
+QLIB_MODEL_FILE = os.path.join(paths.DATA_DIR, "qlib_lgbm.joblib")
 
 
 def _is_qlib_available() -> bool:
@@ -24,8 +36,9 @@ def _is_qlib_available() -> bool:
     global _qlib_available
     if _qlib_available is None:
         try:
-            import qlib
-            import qlib.data
+            import qlib  # noqa: F401
+            import qlib.data  # noqa: F401
+
             _ = qlib.__version__
             try:
                 qlib.init()
@@ -40,13 +53,57 @@ def _is_qlib_available() -> bool:
     return _qlib_available
 
 
+def _fetch_df(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    expressions: list[str],
+) -> tuple:
+    """通过 DatasetD.dataset 读取单只股票的一段因子数据。
+
+    返回 (df, )。如果 qlib 尚未 init，先自动初始化。
+    """
+    global _qlib_init_done
+    import qlib
+
+    if not _qlib_init_done:
+        try:
+            qlib.init()
+        except Exception as e:
+            logger.warning(f"qlib.init() failed: {e}")
+        from qlib.config import C
+
+        if C.provider_uri is not None:
+            _qlib_init_done = True
+    from qlib.data.data import DatasetD
+
+    inst = symbol.upper()
+    df = DatasetD.dataset([inst], list(expressions), start_date, end_date, "day")
+    if df is not None and len(df) and "$" in str(df.columns[0]):
+        df = df.copy()
+        df.columns = [c[1:] if isinstance(c, str) and c.startswith("$") else c for c in df.columns]
+    return df
+
+
+def _as_single(df):
+    """把 DatasetD 返回的多索引 df 变成单列交易日索引。"""
+    if df is None:
+        return df
+    if df.index.nlevels > 1:
+        try:
+            df = df.droplevel(level="instrument")
+        except Exception:
+            df = df.reset_index(level="instrument", drop=True)
+    return df
+
+
 def fetch_qlib_features(
     symbol: str,
     start_date: str,
     end_date: str,
-    factor_list: Optional[list] = None,
-) -> Dict[str, float]:
-    """计算给定期间 symbol 的 Qlib 因子值。
+    factor_list: list | None = None,
+) -> dict[str, float]:
+    """计算给定期间 symbol 的 Qlib 因子值 (基于真实行情)。
 
     参数
     ----------
@@ -65,72 +122,112 @@ def fetch_qlib_features(
     Dict[str, float]
         因子名 -> 最新值的映射。因子计算失败或无数据时返回空字典。
     """
+    if factor_list is None:
+        factor_list = ["momentum_10", "momentum_20", "mean_reversion_30", "volatility_10"]
+
     available = _is_qlib_available()
     if not available:
         logger.debug("qlib not available; returning synthetic features")
-        return {fname: 0.0 for fname in (factor_list or [])}
+        return {fname: 0.0 for fname in factor_list}
 
     try:
-        from qlib.data import Hunter
-        from qlib.workflow import RpcExecutor
+        df = _fetch_df(symbol, start_date, end_date, ["$close", "$high", "$low", "$open", "$volume"])
+    except Exception as e:
+        logger.error(f"qlib fetch features failed: {e}")
+        return {fname: 0.0 for fname in factor_list}
+    if df is None or df.empty:
+        logger.warning(f"qlib: no data for {symbol} {start_date}-{end_date}")
+        return {fname: 0.0 for fname in factor_list}
 
-        if not qlib.__central__.initialized:
-            qlib.init()
+    df = _as_single(df)
+    if "close" not in df.columns:
+        return {fname: 0.0 for fname in factor_list}
 
-        hunter = Hunter(executor=RpcExecutor())
-        df = hunter.fetch(
-            instruments=symbol,
-            start_time=start_date,
-            end_time=end_date,
-            fields=["close", "high", "low", "open", "volume"],
-            dtype="array",
-        )
-        if df is None or df.empty:
-            logger.warning(f"qlib: no data for {symbol} {start_date}-{end_date}")
-            return {}
-
-        if factor_list is None:
-            factor_list = ["momentum_10", "momentum_20", "mean_reversion_30", "volatility_10"]
-
-        features: Dict[str, float] = {}
-        for fname in factor_list:
-            try:
-                if "momentum" in fname.lower():
-                    n = int(fname.split("_")[-1]) if "_" in fname else 10
-                    rets = df["close"].pct_change(n)
-                    features[fname] = float(rets.iloc[-1]) if len(rets) > 0 else 0.0
-                elif "mean_reversion" in fname.lower():
-                    s = df["close"].rolling(20).mean()
-                    std = df["close"].rolling(20).std()
-                    if len(s) > 0 and len(std) > 0:
-                        z = (df["close"].iloc[-1] - s.iloc[-1]) / std.iloc[-1]
-                        features[fname] = float(z)
-                    else:
-                        features[fname] = 0.0
-                elif "volatility" in fname.lower():
-                    n = int(fname.split("_")[-1]) if "_" in fname else 10
-                    rets = df["close"].pct_change(n)
-                    features[fname] = float(rets.std()) if len(rets) > 1 else 0.0
+    close = df["close"].astype(float)
+    features: dict[str, float] = {}
+    for fname in factor_list:
+        try:
+            if "momentum" in fname.lower():
+                n = int(fname.split("_")[-1]) if "_" in fname else 10
+                ret = close.pct_change(n)
+                features[fname] = float(ret.iloc[-1]) if len(ret) > 0 and ret.notna().iloc[-1] else 0.0
+            elif "mean_reversion" in fname.lower():
+                s = close.rolling(20).mean()
+                std = close.rolling(20).std()
+                if len(s) > 0 and not std.isna().iloc[-1] and std.iloc[-1] != 0:
+                    z = (close.iloc[-1] - s.iloc[-1]) / std.iloc[-1]
+                    features[fname] = float(z)
                 else:
                     features[fname] = 0.0
-            except Exception as e:
-                logger.debug(f"factor {fname} compute failed: {e}")
+            elif "volatility" in fname.lower():
+                n = int(fname.split("_")[-1]) if "_" in fname else 10
+                ret = close.pct_change()
+                features[fname] = float(ret.rolling(n).std().iloc[-1]) if len(ret) > 1 else 0.0
+            else:
                 features[fname] = 0.0
+        except Exception as e:
+            logger.debug(f"factor {fname} compute failed: {e}")
+            features[fname] = 0.0
 
-        cache_key = f"{symbol}|{end_date}"
-        _qlib_features_cache[cache_key] = features
-        return features
+    cache_key = f"{symbol}|{end_date}"
+    _qlib_features_cache[cache_key] = features
+    return features
+
+
+def fetch_alpha158_features(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> tuple:
+    """计算 symbol 的 qlib Alpha158 全量因子。
+
+    返回 (DataFrame, feature_names)，DataFrame 的 index 为交易日,
+    列为 158 个因子名 (KMID, KLEN, ... ROC5, MA5, ...)。若 qlib
+    不可用或读取失败，返回 (None, [])。
+    """
+    available = _is_qlib_available()
+    if not available:
+        return None, []
+
+    try:
+        from qlib.contrib.data.loader import Alpha158DL
+
+        fields, names = Alpha158DL.get_feature_config()
+        df = _fetch_df(symbol, start_date, end_date, fields)
     except Exception as e:
-        logger.error(f"qlib fetch_qlib_features error: {e}")
-        return {fname: 0.0 for fname in (factor_list or [])}
+        logger.error(f"qlib fetch alpha158 failed for {symbol}: {e}")
+        return None, []
+
+    if df is None or df.empty:
+        return None, names
+
+    df = _as_single(df)
+    df.columns = names
+    return df, names
+
+
+def _load_qlib_model():
+    """加载已训练的 LightGBM 模型, 未训练或损坏时返回 None。"""
+    try:
+        import joblib
+
+        if not os.path.exists(QLIB_MODEL_FILE):
+            return None
+        obj = joblib.load(QLIB_MODEL_FILE)
+        if not isinstance(obj, dict) or "model" not in obj or "feature_names" not in obj:
+            return None
+        return obj
+    except Exception as e:
+        logger.warning(f"qlib model load failed: {e}")
+        return None
 
 
 def qlib_signal_probability(
     symbol: str,
     datalen: int = 250,
     scale: int = 240,
-) -> Dict[str, float]:
-    """基于 Qlib 因子/模型预测当前周期的买卖概率。
+) -> dict[str, float]:
+    """基于 Qlib 训练模型预测当前周期的买卖概率。
 
     返回字典:
     {
@@ -139,29 +236,59 @@ def qlib_signal_probability(
         "confidence": float # 模型 confidence (0-1)
     }
 
+    若模型未训练，返回基于 Alpha158 动量/均值回归的经验概率估计。
     若 qlib 未安装，返回基于 Wyckoff 结构的经验概率估计。
     """
     import numpy as np
     import pandas as pd
 
     available = _is_qlib_available()
+    end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+    start_date = (pd.Timestamp.now() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
+
     if available:
+        model_obj = _load_qlib_model()
+        if model_obj is not None:
+            try:
+                df, names = fetch_alpha158_features(symbol, start_date, end_date)
+                if df is not None and len(df):
+                    feat_names = model_obj["feature_names"]
+                    X = df.iloc[[-1]][feat_names].reindex(columns=feat_names).astype(float)
+                    model = model_obj["model"]
+                    if hasattr(model, "predict_proba"):
+                        proba = model.predict_proba(X)[0]
+                        buy_class = int(model_obj.get("buy_class", 1))
+                        prob_buy = float(proba[buy_class])
+                    else:
+                        pred = float(model.predict(X)[0])
+                        prob_buy = float(pred) if 0 <= pred <= 1 else 1 / (1 + np.exp(-pred))
+                    prob_sell = 1.0 - prob_buy
+                    confidence = float(model_obj.get("auc", 0.55))
+                    return {
+                        "prob_buy": min(max(prob_buy, 0.01), 0.99),
+                        "prob_sell": min(max(prob_sell, 0.01), 0.99),
+                        "confidence": confidence,
+                    }
+            except Exception as e:
+                logger.error(f"qlib model inference error: {e}")
+
         try:
-            features = fetch_qlib_features(
-                symbol,
-                start_date=(pd.Timestamp.now() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
-                end_date=pd.Timestamp.now().strftime("%Y-%m-%d"),
-            )
+            features = fetch_qlib_features(symbol, start_date=start_date, end_date=end_date)
             prob_buy = 1 / (1 + np.exp(-features.get("momentum_10", 0) * 2 + features.get("mean_reversion_30", 0)))
             prob_sell = 1 / (1 + np.exp(features.get("momentum_10", 0) * 2 + features.get("mean_reversion_30", 0)))
             confidence = min(1.0, abs(features.get("momentum_10", 0)) + 0.3)
-            return {"prob_buy": float(prob_buy), "prob_sell": float(prob_sell), "confidence": float(confidence)}
+            return {
+                "prob_buy": float(min(max(prob_buy, 0.01), 0.99)),
+                "prob_sell": float(min(max(prob_sell, 0.01), 0.99)),
+                "confidence": float(confidence),
+            }
         except Exception as e:
             logger.error(f"qlib signal probability error: {e}")
 
     # 降级：基于 Wyckoff 结构的经验概率
     try:
         from .datasource import fetch_kline
+
         df = fetch_kline(symbol, datalen=datalen, scale=scale)
         if df is None or df.empty:
             return {"prob_buy": 0.5, "prob_sell": 0.5, "confidence": 0.0}
@@ -175,11 +302,145 @@ def qlib_signal_probability(
         return {"prob_buy": 0.5, "prob_sell": 0.5, "confidence": 0.0}
 
 
+def train_qlib_lgbm(
+    symbols: list[str] | None = None,
+    start_date: str = "2019-01-01",
+    end_date: str = "2026-07-03",
+    horizon: int = 5,
+    test_ratio: float = 0.2,
+    num_boost_round: int = 200,
+    save: bool = True,
+) -> dict[str, Any] | None:
+    """训练 LightGBM 涨跌模型。
+
+    对每只股票提取 Alpha158 因子, 标签为未来 ``horizon`` 日收益的符号
+    (>0 记为 1, 否则 0)。按时间顺序划分训练/验证集 (避免未来函数),
+    训练二分类 LightGBM 并返回指标。``save=True`` 时将模型写入
+    ``QLIB_MODEL_FILE``。
+
+    symbols 默认取沪深主流的流动性样本 (与 backtest 基准池一致)。
+    """
+    available = _is_qlib_available()
+    if not available:
+        logger.warning("qlib not available; cannot train")
+        return None
+
+    try:
+        import joblib
+        import lightgbm as lgb
+        import numpy as np
+        import pandas as pd
+    except ImportError as e:
+        logger.warning(f"training deps missing: {e}")
+        return None
+
+    if symbols is None:
+        symbols = [
+            "sh600036", "sh601398", "sh601988", "sh601328", "sh600000",
+            "sh601318", "sh601628", "sh600030", "sh601211", "sz300059",
+            "sh600519", "sz000858", "sz000333", "sz000651", "sh601888",
+            "sz002415", "sh600690", "sh600276", "sz300760", "sh603259",
+            "sz000538", "sz002594", "sh601012", "sz300750", "sh600104",
+            "sz002466", "sh600438", "sh688981", "sh603986", "sz002371",
+            "sh600745", "sz300308", "sh601857", "sh600900", "sh601899",
+            "sh601088", "sh600028", "sh601006", "sz000001", "sh600018",
+        ]
+
+    frames = []
+    for sym in symbols:
+        df, names = fetch_alpha158_features(sym, start_date, end_date)
+        if df is None or len(df) < 60:
+            continue
+        cdf = _fetch_df(sym, start_date, end_date, ["$close"])
+        if cdf is None or cdf.empty:
+            continue
+        cdf = _as_single(cdf)
+        close = cdf["close"].astype(float)
+        if len(close) != len(df):
+            close = close.reindex(df.index)
+        df = df.copy()
+        df["__symbol"] = sym
+        df["__return"] = close.shift(-horizon) / close - 1
+        frames.append(df)
+    if not frames:
+        logger.warning("no usable data for training")
+        return None
+
+    data = pd.concat(frames, axis=0)
+    data = data.dropna(subset=["__return"])
+    if len(data) < 200:
+        logger.warning(f"insufficient training rows: {len(data)}")
+        return None
+
+    data["__label"] = (data["__return"] > 0).astype(np.int8)
+    feature_names = [c for c in names if c in data.columns]
+
+    data = data.sort_index()
+    n = len(data)
+    split = int(n * (1 - test_ratio))
+    train = data.iloc[:split]
+    valid = data.iloc[split:]
+
+    X_train = train[feature_names].astype(float)
+    y_train = train["__label"].values
+    X_valid = valid[feature_names].astype(float)
+    y_valid = valid["__label"].values
+
+    dtr = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
+    dva = lgb.Dataset(X_valid, label=y_valid, feature_name=feature_names, reference=dtr)
+
+    params = {
+        "objective": "binary",
+        "metric": "auc",
+        "boosting_type": "gbdt",
+        "learning_rate": 0.05,
+        "num_leaves": 31,
+        "verbose": -1,
+        "num_threads": 4,
+        "seed": 42,
+    }
+    booster = lgb.train(
+        params,
+        dtr,
+        num_boost_round=num_boost_round,
+        valid_sets=[dva],
+        callbacks=[lgb.early_stopping(20), lgb.log_evaluation(0)],
+    )
+
+    preds = booster.predict(X_valid, num_iteration=booster.best_iteration)
+    from sklearn.metrics import accuracy_score, roc_auc_score
+
+    auc = float(roc_auc_score(y_valid, preds)) if len(np.unique(y_valid)) > 1 else 0.5
+    acc = float(accuracy_score(y_valid, (preds > 0.5).astype(int)))
+    base_rate = float(y_valid.mean())
+
+    result: dict[str, Any] = {
+        "model": booster,
+        "feature_names": feature_names,
+        "horizon": horizon,
+        "auc": auc,
+        "acc": acc,
+        "base_rate": base_rate,
+        "buy_class": 1,
+        "n_train": int(len(X_train)),
+        "n_valid": int(len(X_valid)),
+        "symbols": list(symbols),
+        "train_start": str(data.index.get_level_values(-1).min()),
+        "train_end": str(data.index.get_level_values(-1).max()),
+        "trained_at": pd.Timestamp.now().isoformat(),
+    }
+
+    if save:
+        joblib.dump(result, QLIB_MODEL_FILE)
+        logger.info(f"qlib model saved to {QLIB_MODEL_FILE} (auc={auc:.3f}, acc={acc:.3f})")
+    return result
+
+
 def calibrate_wyckoff_thresholds(
     history_data: list,
     method: str = "quantile",
     quantile: float = 0.5,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """基于历史 Wyckoff 信号回测结果，使用 Qlib 因子环境校准阈值。
 
     参数
@@ -201,6 +462,18 @@ def calibrate_wyckoff_thresholds(
     """
     available = _is_qlib_available()
     if available:
+        model_obj = _load_qlib_model()
+        if model_obj is not None:
+            # 用模型验证集的 AUC 对阈值做温和校准: 模型越准, 阈值容忍度越高
+            auc = float(model_obj.get("auc", 0.55))
+            default = _default_calibration()
+            min_rr = default["min_rr"] * (1.0 - min(0.2, max(0.0, (auc - 0.5) * 0.6)))
+            stop_pct = default["stop_pct"] * (1.0 + min(0.1, max(0.0, (auc - 0.5) * 0.3)))
+            return {
+                "min_rr": round(float(min_rr), 3),
+                "stop_pct": round(float(stop_pct), 4),
+                "confidence_cutoff": "中",
+            }
         logger.info("qlib calibrate: using qlib modeling pipeline (placeholder)")
         return _default_calibration()
 
@@ -210,8 +483,13 @@ def calibrate_wyckoff_thresholds(
 
     try:
         import numpy as np
+
         rrs = [float(item.get("rr", 0)) for item in history_data if isinstance(item, dict) and item.get("rr") is not None]
-        stops = [float(item.get("stop_pct", 0.02)) for item in history_data if isinstance(item, dict) and item.get("stop_pct") is not None]
+        stops = [
+            float(item.get("stop_pct", 0.02))
+            for item in history_data
+            if isinstance(item, dict) and item.get("stop_pct") is not None
+        ]
         default = _default_calibration()
 
         result = {
@@ -225,10 +503,35 @@ def calibrate_wyckoff_thresholds(
         return _default_calibration()
 
 
-def _default_calibration() -> Dict[str, float]:
+def _default_calibration() -> dict[str, float]:
     """默认校准值（基于项目现有经验经验）。"""
     return {
         "min_rr": 3.0,
         "stop_pct": 0.05,
         "confidence_cutoff": "中",
     }
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Wyckoff Qlib 模型训练/推理")
+    parser.add_argument("--train", action="store_true", help="训练 LightGBM 涨跌模型")
+    parser.add_argument("--symbols", type=str, default="", help="逗号分隔的股票代码候选池")
+    parser.add_argument("--start", type=str, default="2019-01-01")
+    parser.add_argument("--end", type=str, default="2026-07-03")
+    parser.add_argument("--horizon", type=int, default=5, help="预测未来 N 日涨跌")
+    args = parser.parse_args()
+
+    if args.train:
+        sym_list = [s.strip().lower() for s in args.symbols.split(",") if s.strip()] or None
+        res = train_qlib_lgbm(symbols=sym_list, start_date=args.start, end_date=args.end, horizon=args.horizon)
+        if res:
+            print(
+                f"train complete: auc={res['auc']:.3f}, acc={res['acc']:.3f}, "
+                f"base_rate={res['base_rate']:.3f}, rows(train/valid)={res['n_train']}/{res['n_valid']}"
+            )
+        else:
+            print("train failed")
+    else:
+        print("use --train to train the model")

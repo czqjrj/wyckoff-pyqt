@@ -69,6 +69,8 @@ debian/
 /wx_machine_id
 /wx_paper.lock
 /wyckoff_watchlist.json
+# Qlib LightGBM 训练模型 (本地训练产物, 数据截至训练日, 勿入库)
+/qlib_lgbm.joblib
 
 # ── 回测/回放运行产物 (缓存/独立状态/行情库, 本地生成勿入库) ──
 /data/

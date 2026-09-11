@@ -1,5 +1,5 @@
 import logging
-import logging
+
 """多维度信号融合: K线结构 / 威科夫事件 / VSA量价 / P&F点数图 / Qlib因子 → 统一多空评分。
 
 设计动机: 各模块 (phase/events/vsa/pnf) 独立输出各自的多空判断, 结论区并列
@@ -461,13 +461,15 @@ def _summary_text(score, bias, confidence, dims, conflicts, htf=0):
 def _qlib_factor_score(df, last_close):
     """计算 Qlib 因子对当前周期的评分 (-100~+100)。
 
-    通过 fetch_qlib_features 获取因子值，使用简单的线性映射将因子值
-    变换到评分区间。因子主要关注动量与均值回归两个维度。
+    因子与传入 K 线同时间区间 (动量 + 均值回归) 映射到评分区间:
+    - qlib 本地数据可读取时, 用 fetch_qlib_features 取真实因子;
+    - 否则用 df 自身计算同等因子 (同源一致, 不混入实时行情, 保证
+      合成/历史回测数据与测试稳定)。
 
     参数
     ----------
     df : pd.DataFrame
-        包含 K 线数据的 DataFrame，需包含 close 列。
+        包含 K 线数据的 DataFrame，需包含 close 列及 day/索引日期。
     last_close : float
         当前最新收盘价。
 
@@ -476,30 +478,61 @@ def _qlib_factor_score(df, last_close):
     float
         归一化评分，范围约 [-100, +100]，正值偏多，负值偏空。
     """
+    from datetime import datetime, timedelta
+
+    import pandas as pd
+
     try:
-        from .qlib_adapter import fetch_qlib_features
+        from .qlib_adapter import _is_qlib_available, fetch_qlib_features
     except Exception:
         # qlib 未安装，返回 0 (中性)
         return 0.0
 
-    # 获取最近 180 天的因子数据 (因子计算需要足够历史)
-    import pandas as pd
-    from datetime import datetime, timedelta
-
+    # 因子计算需要足够历史, 取 K 线自身时间区间
+    if isinstance(df.index, pd.DatetimeIndex) and len(df.index):
+        frame_dates = df.index
+    elif "day" in df.columns and len(df):
+        frame_dates = pd.to_datetime(df["day"])
+    else:
+        frame_dates = None
     end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    if frame_dates is not None:
+        end_date = frame_dates.max().strftime("%Y-%m-%d")
+        start_date = (frame_dates.max() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
 
     try:
-        features = fetch_qlib_features(
-            df.attrs.get("symbol", "sh600104"), start_date, end_date
-        )
+        if _is_qlib_available():
+            now = pd.Timestamp.now().normalize()
+            if frame_dates is not None and abs((now - frame_dates.max()).days) <= 10:
+                features = fetch_qlib_features(df.attrs.get("symbol", "sh600104"), start_date, end_date)
+            else:
+                features = {}
+        else:
+            features = {}
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.debug(f"qlib factor score fetch failed: {e}")
-        return 0.0
+        features = {}
 
-    if not features:
-        return 0.0
+    # 无 qlib / 数据区间未覆盖 → 用 df 自身数据计算同等因子
+    if not features or not any(abs(v) > 1e-9 for v in features.values()):
+        try:
+            close = pd.to_numeric(df["close"], errors="coerce").dropna()
+            if len(close) < 15:
+                return 0.0
+            mom = float(close.iloc[-1] / close.iloc[-11] - 1) if len(close) >= 11 else 0.0
+            mean_c = close.rolling(20).mean()
+            std_c = close.rolling(20).std()
+            if std_c.iloc[-1] and not pd.isna(std_c.iloc[-1]):
+                mr = float((close.iloc[-1] - mean_c.iloc[-1]) / std_c.iloc[-1])
+            else:
+                mr = 0.0
+            features = {"momentum_10": mom, "mean_reversion_30": mr}
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.debug(f"qlib local factor compute failed: {e}")
+            return 0.0
 
     # 基于两个核心因子计算评分:
     # 1. momentum_10: 短期动量 (正值 → 多头倾向)
