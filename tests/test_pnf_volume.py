@@ -103,6 +103,7 @@ def _rebuild_bar_col(df, box, reversal=3):
     cols = []
     bar_col = [0] * n
     for i in range(1, n):
+        bar_col[i] = len(cols)
         hi, lo = r(highs[i]), r(lows[i])
         if cur["type"] == "X":
             top = cur["rows"][-1]

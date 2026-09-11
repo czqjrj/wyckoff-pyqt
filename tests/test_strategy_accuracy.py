@@ -27,8 +27,8 @@ def clean_sig_file(monkeypatch):
 def test_record_mark_fired_and_stats():
     psa.record_signal("paper_discipline_bull", "600001", "600001", "测试一",
                       "Spring", 90, "2024-01-02", 10.0)
-    psa.record_signal("screener_value_accumulation", "600002", "600002",
-                      "测试二", "Accumulation", 80, "2024-01-02", 20.0)
+    psa.record_signal("long_buy_left", "600002", "600002",
+                      "测试二", "左侧买点", 80, "2024-01-02", 20.0)
     psa.mark_fired("paper_discipline_bull", "600001")
     recs = psa.load_signals()
     assert len(recs) == 2
@@ -36,7 +36,7 @@ def test_record_mark_fired_and_stats():
     assert fired["fired"] is True
     s = psa.signal_stats()
     assert s["paper_discipline_bull"]["n"] == 1
-    assert s["screener_value_accumulation"]["n"] == 1
+    assert s["long_buy_left"]["n"] == 1
     assert s["_summary"]["total"] == 2
 
 
@@ -68,14 +68,14 @@ def test_cond_accuracy():
         {"status": "done", "symbol": "600001", "correct": False,
          "reason": "自动:paper_discipline_bull:Spring(90)"},
         {"status": "done", "symbol": "600002", "correct": True,
-         "reason": "自动:screener_value_accumulation:Spring(80)"},
+         "reason": "自动:long_buy_left:左侧买点(80)"},
         {"status": "pending", "symbol": "600001", "correct": None},
     ]
     out = psa.cond_accuracy(st)
     assert out["paper_discipline_bull"]["done"] == 2
     assert out["paper_discipline_bull"]["correct"] == 1
     assert out["paper_discipline_bull"]["accuracy"] == 0.5
-    assert out["screener_value_accumulation"]["accuracy"] == 1.0
+    assert out["long_buy_left"]["accuracy"] == 1.0
 
 
 def test_profit_summary_geometric_cum():
@@ -85,7 +85,7 @@ def test_profit_summary_geometric_cum():
          "ret": 0.10, "bars": 5},
         {"symbol": "600002", "strategy": "paper_discipline_bull",
          "ret": -0.05, "bars": 6},
-        {"symbol": "600003", "strategy": "screener_value_accumulation",
+        {"symbol": "600003", "strategy": "long_buy_left",
          "ret": 0.20, "bars": 10},
     ]
     out = psa.profit_summary(st)
@@ -94,7 +94,7 @@ def test_profit_summary_geometric_cum():
     assert pb["win_rate"] == 0.5
     assert pb["cum_ret"] == pytest.approx((1.10 * 0.95) - 1.0)
     assert pb["avg_ret"] == pytest.approx((0.10 - 0.05) / 2)
-    assert out["screener_value_accumulation"]["n"] == 1
+    assert out["long_buy_left"]["n"] == 1
 
 
 def test_strategy_report_renders():

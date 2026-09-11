@@ -104,6 +104,9 @@ def _build_pnf(df: pd.DataFrame, box: float, reversal: int = 3):
     cols = []
     bar_col = [0] * n
     for i in range(1, n):
+        # 每根K线先归属到当前列 (len(cols) 即 cur 的列号); 若本根触发
+        # 反转, 下面的分支会改写为反转后新列的列号。
+        bar_col[i] = len(cols)
         h = r(highs[i])
         low = r(lows[i])
         if cur["type"] == "X":
