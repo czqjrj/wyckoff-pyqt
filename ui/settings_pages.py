@@ -422,7 +422,8 @@ class GeneralPage(SettingsPage):
                 self.cb_profile_sync.setChecked(True)
                 from wyckoff.storage import save_settings
                 save_settings(dict(self._s))
-                self._profile_sync_status.setText("同步成功")
+                self._profile_sync_status.setText(
+                    result.get("note") or "同步成功")
             else:
                 self._profile_sync_status.setText(
                     f"同步失败: {result.get('error', '未知错误')}")

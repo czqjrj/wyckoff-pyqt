@@ -169,6 +169,56 @@ def test_apply_profile_persists_shadow_for_later_pull(tmp_path):
     assert st2["paper"]["ts"] == old_ts + 10.0
 
 
+def test_paper_write_skipped_keeps_shadow_and_no_clobber(tmp_path):
+    """同步遇模拟盘周期锁让位 (paper 写回被跳过) 时, 不得污染影子。
+
+    回归背景: 写回被跳过 (跨进程锁被进行中的周期占用) 却仍把合并结果写进影子,
+    下次 collect 会把仍未落盘的旧盘误判为本地新变更 (打 now 时间戳), 在 LWW 中
+    反超并覆盖云端更新, 造成「模拟盘同步抖动」— 从云端/另一设备拉取的新版本
+    被本机旧数据回吐顶掉。修复后: 被跳过的类型保留旧影子, 云端更新留待锁空闲
+    时正常生效。
+    """
+    m = _reload_modules(tmp_path)
+    old = {"cash": 1_000_000, "positions": [], "closed": [],
+           "orders": [], "candidates": [], "pending": [],
+           "conditions": [], "equity_hist": [], "meta": {}}
+    _write(tmp_path, "wx_paper.json", old)
+    st = m._collect_type("paper")
+    old_ts = st["paper"]["ts"]
+
+    # 云端已有更新 (另一设备较新版本, ts 更晚)
+    newer = dict(old)
+    newer["closed"] = [{"symbol": "600000", "ret": 0.1, "reason": "stop_loss"}]
+    remote = {"schema": m.SCHEMA, "types": {"paper": {"items": {
+        "paper": {"v": newer, "ts": old_ts + 50}}}}}
+
+    # 1) 模拟盘跨进程锁被进行中的周期占用 → 同步让位, 写回被跳过
+    orig_lock = m._paper_lock
+    m._paper_lock = lambda timeout=3.0: None
+    r = m.apply_profile(remote)
+    assert r["paper_skipped"] is True
+    # 影子不得被未落盘的合并值污染
+    shad = m._load_shadow()["paper"]
+    assert shad["paper"]["v"] == old
+    assert shad["paper"]["ts"] == old_ts
+    # 磁盘保持本地旧盘
+    with open(os.path.join(tmp_path, "wx_paper.json"), encoding="utf-8") as f:
+        assert json.load(f) == old
+
+    # 2) 锁空闲后同步 → 云端新版本正常生效, 不被旧盘回吐覆盖
+    m._paper_lock = orig_lock
+    st2 = m._collect_type("paper")
+    assert st2["paper"]["v"] == old
+    assert st2["paper"]["ts"] == old_ts, "未落盘的旧盘不得被误打新时间戳"
+    merged = m._merge_items(st2, remote["types"]["paper"]["items"])
+    assert merged["paper"]["v"] == newer
+    r2 = m.apply_profile(
+        {"schema": m.SCHEMA, "types": {"paper": {"items": merged}}})
+    assert r2["changed"] is True and r2["paper_skipped"] is False
+    with open(os.path.join(tmp_path, "wx_paper.json"), encoding="utf-8") as f:
+        assert json.load(f)["closed"] == newer["closed"]
+
+
 def test_no_net_guards_ops():
     assert ps._no_net() is True
     r = ps.sync_once()

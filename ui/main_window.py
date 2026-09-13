@@ -1359,7 +1359,7 @@ class MainWindow(QMainWindow):
 
         def _finish(res):
             if isinstance(res, dict) and res.get("ok"):
-                self._status("账户数据同步完成")
+                self._status(res.get("note") or "账户数据同步完成")
                 self.reload_watchlist()
                 self._refresh_paper_ui()
             else:
@@ -1383,7 +1383,7 @@ class MainWindow(QMainWindow):
 
         def _finish(res):
             if isinstance(res, dict) and res.get("ok"):
-                self._status("从远端同步私有数据完成")
+                self._status(res.get("note") or "从远端同步私有数据完成")
                 self.reload_watchlist()
                 self._refresh_paper_ui()
             else:
@@ -2961,6 +2961,10 @@ class MainWindow(QMainWindow):
             if isinstance(result, dict) and result.get("ok"):
                 self.reload_watchlist()
                 self._refresh_paper_ui()
+                if result.get("note"):
+                    self._status(result["note"])
+            elif isinstance(result, dict) and result.get("error"):
+                self._status(f"账户自动同步失败: {result['error']}")
         except Exception as e:
             log_exc("账户自动同步结果刷新失败", e)
         self._schedule_profile_auto_sync()

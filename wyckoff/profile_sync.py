@@ -167,13 +167,9 @@ def _write_records(path, state, key_fn):
 
 
 def _read_paper():
-    from .paper import _release_paper_lock
-    fh = _paper_lock()
-    try:
-        return _load_json(PAPER_FILE, None)
-    finally:
-        if fh is not None:
-            _release_paper_lock(fh)
+    # 读无需持模拟盘跨进程锁: save_state / atomic_write_json 均先写临时文件再
+    # os.replace, 原子可见 → 读取始终看到完整旧版或新版, 且不被进行中的周期阻塞。
+    return _load_json(PAPER_FILE, None)
 
 
 def _write_paper(v):
@@ -398,12 +394,16 @@ def apply_profile(bundle):
             st = {k: (v if isinstance(v, dict) else {"v": v, "ts": 0})
                   for k, v in items.items()}
             changed |= writer(st)
-    _persist_shadow(bundle)
+    _persist_shadow(bundle, skip_types=("paper",) if paper_skipped else ())
     return {"changed": changed, "paper_skipped": paper_skipped}
 
 
-def _persist_shadow(bundle):
+def _persist_shadow(bundle, skip_types=()):
     """把已应用的合并结果写回影子, 保持影子==磁盘状态。
+
+    skip_types: 本次未真正写回本机 (如模拟盘写回被跨进程锁跳过) 的类型,
+    保留其旧影子 — 与磁盘实际状态保持一致, 避免下次 collect 把未落盘内容
+    误判为本地新变更 (打 now 时间戳) 回吐覆盖云端, 造成同步抖动 (历史 bug)。
 
     历史 bug: apply 后影子停留在"拉取前"的值, 导致下次 collect 时把刚拉下来的
     新版数据误判为本地新变更 (打 now 时间戳), 在 LWW 合并中反过来覆盖云端/远端,
@@ -411,6 +411,8 @@ def _persist_shadow(bundle):
     """
     shadow = _load_shadow()
     for tname in TYPES:
+        if tname in skip_types:
+            continue
         items = ((bundle.get("types", {}) or {}).get(tname, {}) or {}).get(
             "items", {})
         norm = {}
@@ -459,7 +461,7 @@ def _cloud_sync_once():
         types[tname] = {"items": _merge_items(lt, rt)}
     merged = {"schema": SCHEMA, "machine": _machine_id(),
               "exported_ts": time.time(), "types": types}
-    apply_profile(merged)
+    res = apply_profile(merged)
     # 回写该用户各类型条目 (整体覆盖, 与合并结果一致)
     for tname in TYPES:
         try:
@@ -467,7 +469,12 @@ def _cloud_sync_once():
             cloud_db.write_profile_items(user, tname, items)
         except Exception:
             return {"ok": False, "error": f"云写入失败: {tname}"}
-    return {"ok": True}
+    out = {"ok": True}
+    if res.get("paper_skipped"):
+        out["paper_skipped"] = True
+        out["note"] = ("模拟盘写回被进行中的周期让位 (跨进程锁), "
+                       "将随下次同步/周期完成后再对齐")
+    return out
 
 
 def _cloud_pull():
@@ -482,9 +489,13 @@ def _cloud_pull():
         except Exception:
             rt = {}
         types[tname] = {"items": _merge_items(lt, rt)}
-    apply_profile({"schema": SCHEMA, "machine": _machine_id(),
-                   "exported_ts": time.time(), "types": types})
-    return {"ok": True}
+    res = apply_profile({"schema": SCHEMA, "machine": _machine_id(),
+                         "exported_ts": time.time(), "types": types})
+    out = {"ok": True}
+    if res.get("paper_skipped"):
+        out["paper_skipped"] = True
+        out["note"] = "模拟盘写回被进行中的周期让位 (跨进程锁), 下次同步再对齐"
+    return out
 
 
 def _cloud_push():
