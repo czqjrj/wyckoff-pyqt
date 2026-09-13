@@ -17,7 +17,7 @@ os.environ.setdefault("WYCKOFF_DATA_DIR", tempfile.mkdtemp())
 from wyckoff import online_model as om
 
 
-def _rec(ret, typ="SOS", conf=70, date="2024-06-01", extra=None):
+def _rec(ret, typ="Spring", conf=70, date="2024-06-01", extra=None):
     feats = {"vr": 1.5, "rw": 1.2, "cpos": 0.7, "trend": 1, "pos60": 0.8,
              "boll_pct": 0.6, "bw_pct": 40.0, "reson": 2, "dir": 1}
     if extra:
@@ -115,15 +115,15 @@ def test_train_takeover_conf_direction(tmp_path, monkeypatch):
         return {"vr": vr, "rw": 1.2, "cpos": 0.7, "trend": 1, "pos60": 0.8,
                 "boll_pct": 0.6, "bw_pct": 40.0, "reson": 2, "dir": 1}
     # 高 vr 多头事件 → conf 应上升
-    ev = {"type": "SOS", "conf": 50, "feat": _full_feat(2.5)}
+    ev = {"type": "Spring", "conf": 50, "feat": _full_feat(2.5)}
     assert om.apply_model_conf([ev]) == 1
     assert ev["conf"] > 50
     # 低 vr 多头事件 → 该信号不可靠, conf 应下降
-    ev2 = {"type": "SOS", "conf": 50, "feat": _full_feat(0.5)}
+    ev2 = {"type": "Spring", "conf": 50, "feat": _full_feat(0.5)}
     assert om.apply_model_conf([ev2]) == 1
     assert ev2["conf"] < 50
     # 涨跌停等硬性低置信档保持不动
-    ev3 = {"type": "SOS", "conf": 3, "feat": _full_feat(2.5)}
+    ev3 = {"type": "Spring", "conf": 3, "feat": _full_feat(2.5)}
     assert om.apply_model_conf([ev3]) == 0
     assert ev3["conf"] == 3
 

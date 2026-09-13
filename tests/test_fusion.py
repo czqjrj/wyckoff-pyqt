@@ -34,7 +34,7 @@ def test_bullish_fusion():
     df = _df(closes)
     events = [
         {"idx": len(df) - 10, "type": "Spring", "conf": 90},
-        {"idx": len(df) - 30, "type": "SOS", "conf": 80},
+        {"idx": len(df) - 30, "type": "ST", "conf": 80},
     ]
     vsa = [{"idx": len(df) - 5, "label": "SPR"},
            {"idx": len(df) - 15, "label": "SPR"}]
@@ -76,8 +76,8 @@ def test_conflict_detected():
 
 def test_event_score_decay():
     """威科夫事件评分: 多头正、空头负、时间衰减 (距当前越近权重越高)。"""
-    recent = [{"idx": 119, "type": "SOS", "conf": 100}]  # 距当前 1
-    old = [{"idx": 20, "type": "SOS", "conf": 100}]      # 距当前 100
+    recent = [{"idx": 119, "type": "Spring", "conf": 100}]  # 距当前 1
+    old = [{"idx": 20, "type": "Spring", "conf": 100}]      # 距当前 100
     s_recent = _event_score(recent, recent_window=120, max_idx=120)
     s_old = _event_score(old, recent_window=120, max_idx=120)
     assert s_recent > 0 and s_recent > s_old, "近期事件应比久远事件权重更高"

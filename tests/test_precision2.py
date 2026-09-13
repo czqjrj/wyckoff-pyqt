@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from wyckoff.backtest import backtest_events
+from wyckoff.config import confirm_dir, event_dir
 from wyckoff.events import confirm_events, detect_all
 from wyckoff.fusion import _align, _event_score, _htf_direction, fuse_signals
 from wyckoff.indicators import add_indicators, find_pivots
@@ -96,9 +97,16 @@ def test_detect_all_carries_confirmed():
 
 # ─────────────────────── 2. 融合层确认加权 _event_score ──────────────────────
 
+def test_sos_still_structural_neutral():
+    """SOS 全量实测 (20/10/5 根) 均接近或劣于随机 → 降为中性结构标记,
+    不计方向 (event_dir=0, 无确认反转方向), 仅保留阶段/背景用途。"""
+    assert event_dir("SOS") == 0
+    assert confirm_dir("SOS") == 0
+
+
 def test_event_score_confirmed_weighting():
     """已确认事件得分 > 待确认 > 未确认 (同类型同置信同时点)。"""
-    base = {"idx": 490, "type": "SOS", "conf": 100}
+    base = {"idx": 490, "type": "Spring", "conf": 100}
     s_ok = _event_score([dict(base, confirmed=True)], max_idx=499)
     s_none = _event_score([dict(base, confirmed=None)], max_idx=499)
     s_fail = _event_score([dict(base, confirmed=False)], max_idx=499)
@@ -107,7 +115,7 @@ def test_event_score_confirmed_weighting():
 
 def test_event_score_no_confirmed_key_unchanged():
     """无 confirmed 字段 (旧数据/手工构造) 权重不变; 显式 None 视为待确认×0.9。"""
-    base = {"idx": 490, "type": "SOS", "conf": 100}
+    base = {"idx": 490, "type": "Spring", "conf": 100}
     s_plain = _event_score([dict(base)], max_idx=499)
     s_none = _event_score([dict(base, confirmed=None)], max_idx=499)
     assert s_plain > s_none  # None=待确认 ×0.9; 无字段不做任何调整
@@ -177,7 +185,7 @@ def test_vol_gate_breaks_in_low_vol():
             df.loc[i - expand_before:i, ["boll_up", "boll_dn"]] = 1.01, 0.99  # 压缩→低分位
         else:
             df.loc[:i - expand_before - 1, ["boll_up", "boll_dn"]] = 1.01, 0.99  # 前期压缩
-        ev = event_confidence(df, [{"idx": i, "type": "SOS", "price": float(df['close'].iloc[i])}])
+        ev = event_confidence(df, [{"idx": i, "type": "Spring", "price": float(df['close'].iloc[i])}])
         return ev[0]
 
     e_low = conf_for(compress_before=True, expand_before=20)    # 事件前收窄→蓄势

@@ -166,16 +166,18 @@ EVENT_CN = {
     "UT": "上冲测试", "SOW": "弱势信号", "Shakeout": "震仓/诱空",
 }
 
-BULL_EVENTS = ("SOS", "JOC", "Spring", "LPS", "ST", "BU", "Shakeout")
+BULL_EVENTS = ("JOC", "Spring", "LPS", "ST", "BU", "Shakeout")
 BEAR_EVENTS = ("UTAD", "LPSY", "UT", "SOW")
-NEUTRAL_EVENTS = ("SC", "BC", "AR")
+NEUTRAL_EVENTS = ("SC", "BC", "AR", "SOS")
 
 
 def event_dir(typ):
     """事件方向: 1=多头, -1=空头, 0=中性
     实证: SC/BC/AR 在不同阶段有不同含义, 统一标中性;
     SC 在吸筹末期为反转信号, BC 在派发末期为反转信号,
-    AR 是 SC 后第一次反弹(常被卖出, 为结构确认而非方向信号)。"""
+    AR 是 SC 后第一次反弹(常被卖出, 为结构确认而非方向信号)。
+    SOS: 全量实测 20/10/5 根命中均 ~22-29% (任何口径均弱于随机且倒扣),
+        其触发锚点在行情局部顶部, 属结构性背景标记 (吸筹确认), 不计方向。"""
     if typ in BULL_EVENTS:
         return 1
     if typ in BEAR_EVENTS:

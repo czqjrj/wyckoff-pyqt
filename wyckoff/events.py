@@ -282,6 +282,12 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
             if vr <= 1.3:
                 continue
             i = int(high_idx[k])
+            # 收盘必须站上突破位 (前枢轴高) —— 否则该高点只是冲刺试探 (UTAD 候选),
+            # 从"波峰尖"标高企信号, 其后 20 根均值回归向下 (全量实测 SOS 看多命中
+            # 仅 29.3%, 倒扣 19.6pt vs 池基准)。收盘站上才算真正把供应吃到:
+            # SOS=强度信号, 需收盘确认, 锚点应从波峰尖移到确认收盘。
+            if closes[i] <= high_price[k - 1]:
+                continue
             if len(accum_idx) and np.any((accum_idx < i) & (i - accum_idx <= 60)):
                 events.append(dict(type="SOS", idx=i, date=high_date[k],
                                    price=float(high_price[k]), desc=f"量比{vr:.1f}",
