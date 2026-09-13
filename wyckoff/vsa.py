@@ -231,6 +231,16 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
     # 自己一侧而误判"顺势" (转折点漏检)。滞后时不产生 NaN 判断处回退为 0/False。
     trend_up_lag = _trend_up(df, lag=3)
     trend_dn_lag = ~trend_up_lag
+    # 均线多头排列 (MA20>MA50 且收盘>MA50): 按趋势环境给部分标签加门 —— 全量
+    # 分组实测 (5425只, scripts/vsa_by_trend.py): TEST 多头环境命中 +5.6pt 而空头
+    # -3.0; TRD 空头环境 +12.2pt 而多头 +0.2; NS 多头 +3.5 而空头 +1.2。其余
+    # 标签 (SC/DEM/ETR/SV) 两环境均贴近随机, 不加门 (由融合权重度量降权)。
+    _ma20 = df["price_ma20"].values if "price_ma20" in df.columns else None
+    _ma50 = df["price_ma50"].values if "price_ma50" in df.columns else None
+    trend_ma = np.zeros(n, dtype=bool)
+    if _ma20 is not None and _ma50 is not None:
+        trend_ma = (np.isfinite(_ma20) & np.isfinite(_ma50)
+                    & (_ma20 > _ma50) & (close > _ma50))
     # 前10根高点/低点 (基准: ta.highest(high[1],10) / ta.lowest(low[1],10)):
     # TRU/UPT 突破前高与 SUP 阻力位供给共用, 提前计算避免重复滚动。
     prev_hi_max = pd.Series(high).rolling(10).max().shift(1).values
@@ -258,7 +268,9 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
     cand["EF"] = c2 & ~cand["UT"] & ~cand["SPR"] & (body < rng * 0.4) & dn_bar
     c3 = (vr <= 0.6) & ((vr <= 0.5) | z_dn_low) & ~c1 & ~c2
     cand["ND"] = c3 & up_bar
-    cand["NS"] = c3 & dn_bar
+    # NS (无量下探): 只信多头环境 (全量: 多头 +3.5pt vs 空头 +1.2pt) —— 上升趋势
+    # 中的缩量回调才是"无供给"确认的回落, 下跌中继里的缩量下探多是阴跌延续。
+    cand["NS"] = c3 & dn_bar & trend_ma
 
     # FibAlgo 5 类
     cand["DEM"] = up_bar & spr_wide & v_huge & near_high
@@ -291,17 +303,19 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
     cand["ND"] = cand.get("ND") | (v_low05 & up_bar & (close >= high - rng * 0.3)
                                    & (rng < spread_ma))
     cand["SV"] = cand["SV"] | (dn_bar & v_high15 & (close > low + rng * 0.3))
-    cand["TEST"] = dn_bar & v_low05 & (close >= high - rng * 0.3)
+    cand["TEST"] = dn_bar & v_low05 & (close >= high - rng * 0.3) & trend_ma
     cand["BC"] = cand["BC"] | (up_bar & v_high15 & (close < high - rng * 0.3)
                                & spr_wide_adv)
     cand["NS"] = cand.get("NS") | (v_low05 & dn_bar & (close <= low + rng * 0.3)
-                                   & (rng < spread_ma))
+                                   & (rng < spread_ma) & trend_ma)
     cand["ETR"] = up_bar & v_high15 & (close >= high - rng * 0.2) & spr_wide_adv
     cand["ETF"] = dn_bar & v_high15 & (close <= low + rng * 0.2) & spr_wide_adv
     cand["TRU"] = (high > prev_hi_max) & (close < prev_hi_max) & (close < high - rng * 0.3) \
         & v_high15 & trend_up_lag
+    # TRD (诱空反转, 看多): 只有在下跌环境才可靠 (全量: 空头排列 +12.2pt vs
+    # 多头 +0.2pt) —— 上升趋势里的向下假突破多属洗盘, 信号价值低。
     cand["TRD"] = (low < prev_lo_min) & (close > prev_lo_min) & (close > low + rng * 0.3) \
-        & v_high15 & trend_dn_lag
+        & v_high15 & trend_dn_lag & ~trend_ma
 
     # ── 信号优先级去重: 每根 K 线取优先级最高的标签 ──
     labels = np.full(n, "N", dtype=object)
