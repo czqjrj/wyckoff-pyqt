@@ -125,12 +125,16 @@ _DESC = {
 }
 
 
-def _trend_up(df, n=20):
-    """20 根线性回归斜率判定上升趋势 (FibAlgo 趋势上下文)。向量化滚动最小二乘。"""
-    close = df["close"].values.astype(float)
+def _trend_up(df, n=20, lag=0):
+    """20 根线性回归斜率判定上升趋势 (FibAlgo 趋势上下文)。向量化滚动最小二乘。
+
+    lag>0 时按"滞后再判定"剔除当前 K 线对趋势自身的拖拽: 大阴/大阳线会拖拽
+    slope 翻向自己一侧, 使真正逆势的转折 K 线被误判为顺势而漏检 (SV/CHOC/TRU
+    等逆势标签尤其受影响)。lag=3 表示用 -3 根为止的 20 根窗口判定该 bar 的趋势。"""
+    close = pd.Series(df["close"].values.astype(float)).shift(lag).values
     j = np.arange(len(close), dtype=float)
     jj = j * j
-    tjy = j * close
+    tjy = np.where(np.isfinite(close), j * close, np.nan)
     s_j = pd.Series(j).rolling(n).sum().values
     s_y = pd.Series(close).rolling(n).sum().values
     s_jj = pd.Series(jj).rolling(n).sum().values
@@ -223,8 +227,14 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
     spr_wide = rng > spread_ma * th["spr_wide_coef"]
     near_high = cpos >= 0.7
     near_low = cpos <= 0.3
-    trend_up = _trend_up(df)
-    trend_dn = ~trend_up
+    # 逆势标签 (SV/CHOC/SUP/TRU 等) 用滞后 3 根的趋势, 避免当前大K自身把斜率拖向
+    # 自己一侧而误判"顺势" (转折点漏检)。滞后时不产生 NaN 判断处回退为 0/False。
+    trend_up_lag = _trend_up(df, lag=3)
+    trend_dn_lag = ~trend_up_lag
+    # 前10根高点/低点 (基准: ta.highest(high[1],10) / ta.lowest(low[1],10)):
+    # TRU/UPT 突破前高与 SUP 阻力位供给共用, 提前计算避免重复滚动。
+    prev_hi_max = pd.Series(high).rolling(10).max().shift(1).values
+    prev_lo_min = pd.Series(low).rolling(10).min().shift(1).values
     v_huge = v_high | v_ultra
 
     # ── VSA Advanced 量级/幅宽阈值 (与 FibAlgo 同源均量/均幅, 阈值略不同) ──
@@ -246,32 +256,36 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
     cand["SPR"] = c2 & dn_bar & (cpos >= 0.65)
     cand["ER"] = c2 & ~cand["UT"] & ~cand["SPR"] & (body < rng * 0.4) & up_bar
     cand["EF"] = c2 & ~cand["UT"] & ~cand["SPR"] & (body < rng * 0.4) & dn_bar
-    c3 = (vr <= 0.6) & ~c1 & ~c2
+    c3 = (vr <= 0.6) & ((vr <= 0.5) | z_dn_low) & ~c1 & ~c2
     cand["ND"] = c3 & up_bar
     cand["NS"] = c3 & dn_bar
 
     # FibAlgo 5 类
     cand["DEM"] = up_bar & spr_wide & v_huge & near_high
-    cand["SUP"] = dn_bar & spr_wide & v_huge & near_low
+    # 强势供给只存在于已确立的上升趋势: 下跌趋势中的放量大阴线是恐慌抛售
+    # (应为 SC/超跌), 实测被系统性反向标空 (SUP 44% 命中)。且在阻力位之下
+    # (高≤前10根高点, 未突破前高) —— 突破前高的放量阴线是 UPT 上冲量(诱多),
+    # 两者互斥, 否则 SUP 在上涨数据里恒被 UPT 掩码成死标签。
+    cand["SUP"] = dn_bar & spr_wide & v_huge & near_low & trend_up_lag \
+        & (high <= prev_hi_max)
     cand["ABS"] = v_huge & spr_narrow
     cand["EVR"] = v_low & spr_wide          # 低努力高结果 (高努力低结果=ABS)
     # Stopping Volume (FibAlgo): 高量 + 收盘方向与趋势相反 + 已确立趋势
-    cand["SV"] = v_huge & ((up_bar & trend_dn) | (dn_bar & trend_up))
+    cand["SV"] = v_huge & ((up_bar & trend_dn_lag) | (dn_bar & trend_up_lag))
     # Change of Character: 20根最宽幅 + 量接近20根最高 + 逆势 + 收极端
-    rng_max20 = pd.Series(rng).rolling(20).max().values
-    vol_max20 = pd.Series(vol).rolling(20).max().values
+    # 用 shift(1) 排除当前根: 否则"最宽/最高量"恒真 (自证), 门形同虚设。
+    rng_max20 = pd.Series(rng).rolling(20).max().shift(1).values
+    vol_max20 = pd.Series(vol).rolling(20).max().shift(1).values
     widest20 = rng >= rng_max20 * 0.999
     near_peak_vol = (vol >= vol_max20 * 0.9) | z_up_climax
     extreme = (cpos <= th["extreme_lo"]) | (cpos >= th["extreme_hi"])
     cand["CHOC"] = (widest20 & near_peak_vol & extreme
-                    & ((up_bar & trend_dn) | (dn_bar & trend_up)))
+                    & ((up_bar & trend_dn_lag) | (dn_bar & trend_up_lag)))
 
     # VSA Advanced 10 类 (逐条移植)
     # UPT (上冲量/诱多): 在 VSA Advanced 原始"高量宽幅阴线收于低端"基础上,
     # 补充"突破前10根高点"约束 —— 真正意义的上冲量是突破阻力失败 (诱多),
     # 与普通强势供给 SUP / 努力下跌 ETF 区分, 避免被高优先级覆盖成为死标签。
-    prev_hi_max = pd.Series(high).rolling(10).max().shift(1).values  # ta.highest(high[1],10)
-    prev_lo_min = pd.Series(low).rolling(10).min().shift(1).values   # ta.lowest(low[1],10)
     cand["UPT"] = (v_high15 & dn_bar & (close <= low + rng * 0.3) & spr_wide_adv
                    & (high > prev_hi_max))
     cand["ND"] = cand.get("ND") | (v_low05 & up_bar & (close >= high - rng * 0.3)
@@ -284,8 +298,10 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
                                    & (rng < spread_ma))
     cand["ETR"] = up_bar & v_high15 & (close >= high - rng * 0.2) & spr_wide_adv
     cand["ETF"] = dn_bar & v_high15 & (close <= low + rng * 0.2) & spr_wide_adv
-    cand["TRU"] = (high > prev_hi_max) & (close < high - rng * 0.3) & v_high15
-    cand["TRD"] = (low < prev_lo_min) & (close > low + rng * 0.3) & v_high15
+    cand["TRU"] = (high > prev_hi_max) & (close < prev_hi_max) & (close < high - rng * 0.3) \
+        & v_high15 & trend_up_lag
+    cand["TRD"] = (low < prev_lo_min) & (close > prev_lo_min) & (close > low + rng * 0.3) \
+        & v_high15 & trend_dn_lag
 
     # ── 信号优先级去重: 每根 K 线取优先级最高的标签 ──
     labels = np.full(n, "N", dtype=object)

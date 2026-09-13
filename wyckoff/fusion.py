@@ -94,7 +94,9 @@ def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
     (win_rate_of / win_rate_of_oos 已返回方向化命中占比, 空头信号以跌记中。)
     before_ts: 样本外校准 —— 只统计该信号出现之前的样本 (消除"用未来数据
     校准当前信号权重"的前瞻偏差); None 时用全历史 (含未来, 有轻微前瞻)。
-    返回 [0.5, 1.5] 区间系数。样本不足/校准关闭 → 1.0。
+    返回 [0.3, 1.5] 区间系数。样本不足/校准关闭 → 1.0。
+    下限 0.3 而非 0.5: 贴近/劣于随机的标签 (NS/ND/BC/TRU/SUP 等) 应直接打
+    到半折以下, 而非被 0.5 地板托住继续实质影响融合分数。
     """
     if not USE_WINRATE_CALIBRATION:
         return 1.0
@@ -110,7 +112,7 @@ def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
         if direction == 0:
             return 1.0
         alignment = win - baseline
-        return max(0.5, min(1.5, 1.0 + alignment * 2.5))
+        return max(0.3, min(1.5, 1.0 + alignment * 2.5))
     except Exception:
         return 1.0
 
@@ -235,6 +237,29 @@ def _kline_score(phase, df, events):
         score = -50.0
     else:
         score = 0.0
+    # 均值回归先验 (docs/accuracy_report.md §三): 拉升带以局部高点收尾其后续跌 81.9%,
+    # 下跌带以局部低点收尾其后反弹 81.6% —— 与"追涨杀跌"直觉相反。对 上升/下跌趋势
+    # 末段 (近期净变超阈值且收盘在区间极值端 = 趋势已走大半) 方向分向反转修正;
+    # 吸筹/派发结构本身是顺势阶段 (66.7%/71.4%), 不修正。
+    try:
+        cl = df["close"].values
+        hi = df["high"].values
+        lo = df["low"].values
+        n = len(cl)
+        w = 60
+        if n >= w + 5:
+            t0 = n - w
+            net = float(cl[-1] / cl[t0] - 1)
+            rng_hi = float(hi[t0:].max())
+            rng_lo = float(lo[t0:].min())
+            near_hi = rng_hi > rng_lo and float(cl[-1]) >= rng_hi * 0.95
+            near_lo = rng_hi > rng_lo and float(cl[-1]) <= rng_lo * 1.05
+            if "Markup" in phase and net >= 0.15 and near_hi:
+                score -= 40.0   # 拉升尾声: 高位续涨空间耗尽, 反转先验偏空
+            elif "Markdown" in phase and net <= -0.15 and near_lo:
+                score += 40.0   # 下跌尾声: 低位超跌, 反转先验偏多
+    except Exception:
+        pass
     # 均线修正: 多头排列+15 / 空头排列-10 (实测两者方向命中率都贴近基准甚至
     # 反向——多头排列20根44%、空头40根46.5%, 均线排列不是可靠的方向信号,
     # 大幅降权避免误导, 方向主要交给阶段与事件)

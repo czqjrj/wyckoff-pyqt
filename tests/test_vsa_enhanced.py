@@ -52,8 +52,18 @@ def test_new_labels_produce():
         _, sigs = _classify(trend_up=trend_up, seed=seed)
         for s in sigs:
             produced[s["label"]] = produced.get(s["label"], 0) + 1
+    # SUP 是"阻力位之下的强势供给" (上升趋势中的放量宽幅阴线收近低, 且不突破
+    # 前10根高点 —— 突破前高的被害单是 UPT)。纯随机数据上此类 K 线会被 SC
+    # (入场高潮) 或 UPT (突破) 掩码, 构造显式场景验证其可产出。
+    df = _mk_df(400, trend_up=True, seed=1)
+    df.loc[150, ["open", "high", "low", "close", "volume"]] = \
+        [65.5, 64.5, 62.2, 62.5, 1.75e6]
+    df = add_indicators(df, symbol="600104")
+    for s in vsa_classify(df, scale=240):
+        produced[s["label"]] = produced.get(s["label"], 0) + 1
     missing = new_labels - set(produced)
     assert not missing, f"以下新增标签未产出: {missing}"
+    assert produced.get("SUP", 0) >= 1
     assert produced, "未产出任何 VSA 标签"
 
 

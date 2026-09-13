@@ -19,6 +19,12 @@ from .config import (
     RANGE_MIN_TOUCHES,
     RANGE_PROBE_WIN,
     RANGE_TOL,
+    TOP_HEAD,
+    TOP_JMIN_BARS,
+    TOP_LOOK,
+    TOP_MIN_BARS,
+    TOP_REC_HI,
+    TOP_REC_LO,
     W_RECENT,
 )
 
@@ -447,12 +453,16 @@ def _validate_phase(df, s, e, k, look=120, break_pct=0.05):
     lo2 = lo[mid + 1:e + 1]
     hi1 = float(hi[s:mid + 1].max())
     hi2 = hi[mid + 1:e + 1]
-    if abs(net) > 0.10:
-        return "markup" if net > 0 else "markdown"
-    # 带宽过宽 (含多段趋势) → 改写为趋势段
     band_hi = float(hi[s:e + 1].max())
     band_lo = float(lo[s:e + 1].min())
-    if band_hi / band_lo - 1 > 0.50:
+    # 净变动阈值与带宽对齐: 吸筹/派发净漂移允许到带宽的 30% (下限 10%)。原先固定
+    # ±10% 会把带宽 30~50% 内 10~15% 的正常中性漂移误判为趋势改写, 挤压结构样本。
+    band = band_hi / band_lo - 1 if band_lo > 0 else 0.0
+    net_lim = max(0.10, 0.30 * band)
+    if abs(net) > net_lim:
+        return "markup" if net > 0 else "markdown"
+    # 带宽过宽 (含多段趋势) → 改写为趋势段
+    if band > 0.50:
         return "markup" if net >= 0 else "markdown"
     if k == "accumulation":
         # 吸筹要求低点防守: 后段低点跌破前段低点 >3% → 已跌破支撑, 非吸筹
@@ -468,9 +478,13 @@ def _validate_phase(df, s, e, k, look=120, break_pct=0.05):
             if close[w_end - 1] < band_lo:
                 return "markdown"
     else:  # distribution
-        # 派发要求高点封顶: 后段高点突破前段 >3% → 突破续涨, 非派发
+        # 派发要求高点封顶: 后段高点突破前段 >3%, 且带末收盘仍站在突破位上方
+        # → 有效突破续涨, 非派发。单纯试高 (UTAD 式冲破前高、收盘收回带内) 是
+        # 派发典型行为, 不判 markup (校准: 原条件把带内试高顶一并改写为拉升,
+        # 挤压派发样本而双层约束 (net/带宽) 又叠加重判)。
         if hi2.size and hi2.max() > hi1 * 1.03:
-            return "markup"
+            if close[e] > hi1 * 1.01:
+                return "markup"
         # 派发中低点明显抬升且净涨 → 实为上行结构
         if lo2.size and lo2.min() > lo1 * 1.03 and net > 0.02:
             return "markup"
@@ -638,6 +652,121 @@ def _bottom_structure_ok(df, pivots, m, e):
     return False
 
 
+def _has_dist_evidence(events, a, b):
+    """拐点窗口内是否存在派发事件证据 (BC/UT/UTAD/LPSY/SOW)。"""
+    if not events:
+        return False
+    return any(a <= e["idx"] <= b and e["type"] in DIST_RANGE_EV for e in events)
+
+
+def _top_structure_ok(df, pivots, m, e):
+    """末段筑顶的结构确认 (无事件时用): 不创新高 (收盘未超最近枢轴高点),
+    且收盘跌破 MA20 或 MA20 斜率向下。用于"回落未达 8%"的早期筑顶, 避免把
+    上升中继当顶。"""
+    close = df["close"].values
+    n = len(df)
+    highs = [p for p in pivots if p["type"] == "high" and m <= p["idx"] <= n]
+    if highs:
+        last_high = highs[-1]["price"]
+        if last_high > 0 and close[e] >= last_high * 0.99:
+            return False
+    ma20 = df["price_ma20"].values
+    if np.isfinite(ma20[e]) and close[e] < ma20[e]:
+        return True
+    if e >= 8 and np.isfinite(ma20[e]) and np.isfinite(ma20[e - 8]) \
+            and ma20[e] < ma20[e - 8]:
+        return True
+    return False
+
+
+def _mark_tops(df, phases, events=None, pivots=None, min_bars=None,
+               jmin_bars=None, rec_lo=None, rec_hi=None, look=None,
+               head=None):
+    """把"高点封顶 + 回落"的威科夫派发顶部标为派发带 (对 _mark_bottoms 的对称镜像)。
+
+    两种情形:
+    - 情形A (段内筑顶): 拉升段尾部自顶回落 (无新高 + 回落) → 尾部 [m,e] 标派发;
+    - 情形B (跨段拐点): 拉升段在段末触顶, 回落发生在紧随的派发/下跌段
+      (markup→distribution/markdown) → 跨边界找顶, 从顶部到回落 8% 标派发。
+    校准 (docs/accuracy_report.md §三): 拉升带以局部高点收尾, 其后 20 根续跌占 81.9%
+    —— 延伸的拉升末段标"拉升"是最大误判源, 顶部回落即应切派发。
+    """
+    min_bars = TOP_MIN_BARS if min_bars is None else min_bars
+    jmin_bars = TOP_JMIN_BARS if jmin_bars is None else jmin_bars
+    rec_lo = TOP_REC_LO if rec_lo is None else rec_lo
+    rec_hi = TOP_REC_HI if rec_hi is None else rec_hi
+    look = TOP_LOOK if look is None else look
+    head = TOP_HEAD if head is None else head
+    need_events = events is not None
+    hi = df["high"].values
+    cl = df["close"].values
+    out = []
+    i = 0
+    while i < len(phases):
+        a, e, k = phases[i]
+        if k != "markup":
+            out.append((a, e, k))
+            i += 1
+            continue
+        m = a + int(np.argmax(hi[a:e + 1]))
+        # 情形A: 所有拉升段 (不限于末段) 尾部若现"高点封顶 + 回落"即切出派发带。
+        # 要求先有真实拉升段 (顶不能就在波段起点), 且回落段不长于拉升段2倍。
+        if m - a >= min_bars \
+                and e - m + 1 >= min_bars \
+                and e - m + 1 <= (m - a) * 2 \
+                and hi[m + 1:e + 1].max() <= hi[m] * 1.005:
+            rec = cl[e] / cl[m] - 1  # 负值: 自顶回落幅度
+            drop = -rec
+            ev_ok = not need_events or _has_dist_evidence(events, m, e)
+            # 标准筑顶: 回落 8~30% (需派发事件或结构确认);
+            # 早期筑顶: 回落 4~8% 且不创新高 + 跌破/走平 MA20。
+            if (rec_lo <= drop <= rec_hi and (ev_ok or _top_structure_ok(df, pivots, m, e))) \
+                    or (rec_lo * 0.5 <= drop < rec_lo
+                        and _top_structure_ok(df, pivots, m, e)):
+                z = None
+                for j in range(m + 1, e + 1):
+                    if cl[j] <= cl[m] * (1 - rec_lo * 0.5):
+                        z = j
+                        break
+                if m > a:
+                    out.append((a, m - 1, "markup"))
+                # 回落温和(≤20%)整段算派发; 回落过强则只把顶+初段回落算派发,
+                # 强回落部分归下跌
+                if z is None or drop <= 0.20:
+                    out.append((m, e, "distribution"))
+                else:
+                    out.append((m, z, "distribution"))
+                    out.append((z + 1, e, "markdown"))
+                i += 1
+                continue
+        if i + 1 < len(phases):
+            a2, e2, k2 = phases[i + 1]
+            if k2 in ("markdown", "distribution"):
+                w0 = max(a, e - head)
+                w1 = min(e2, e + look)
+                if w1 - w0 + 1 >= min_bars:
+                    mb = w0 + int(np.argmax(hi[w0:w1 + 1]))
+                    if mb < w1 and hi[mb + 1:w1 + 1].max() <= hi[mb] * 1.005:
+                        drop = 1 - cl[w1] / cl[mb]
+                        if rec_lo <= drop <= rec_hi:
+                            z = None
+                            for j in range(mb + 1, w1 + 1):
+                                if cl[j] <= cl[mb] * (1 - rec_lo):
+                                    z = j
+                                    break
+                            if z is not None and z - mb + 1 >= jmin_bars:
+                                if mb > a:
+                                    out.append((a, mb - 1, "markup"))
+                                out.append((mb, z, "distribution"))
+                                if z + 1 <= e2:
+                                    out.append((z + 1, e2, k2))
+                                i += 2
+                                continue
+        out.append((a, e, k))
+        i += 1
+    return out
+
+
 def _mark_bottoms(df, phases, events=None, pivots=None, min_bars=None,
                   jmin_bars=None, rec_lo=None, rec_hi=None, look=None,
                   head=None):
@@ -768,6 +897,10 @@ def phase_segments(df: pd.DataFrame, pivots, events=None, order=6, smooth=9, min
     # 底部标吸筹: 所有下跌→拉升拐点 (受信任, 不再校验翻转; 提供事件表时需
     # 吸筹事件证据 (SC/ST/Spring/SOS 等) 才标记)
     segs = _mark_bottoms(df, segs, events, pivots)
+    # 顶部对称标派发: 拉升→回落拐点, 把拉升带末端的高点回落切为派发带
+    # (校准: 拉升带后 20 根续跌占 81.9%, 延伸拉升末段标"拉升"是最大误判源)。
+    # 与 _mark_bottoms 同构镜像: 提供事件表时需派发事件证据 (BC/UTAD/LPSY 等)。
+    segs = _mark_tops(df, segs, events, pivots)
     # 末段近期急跌: 把"拉升/吸筹"带里最近的下跌尾巴切出来 (如冲高后崩落)
     segs = _mark_recent_decline(df, segs)
     merged = []
