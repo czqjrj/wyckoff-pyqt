@@ -78,6 +78,7 @@ def _apply_auto_conditions(st, cand, weak=False):
     # 已持标的的入场条件单一并取消 (持仓期间买入条件单无意义, 且会反复触发→取消)。
     seen = {}
     va_off = not paper._CUR.get("enable_va", True)
+    long_off = not paper._CUR.get("enable_long_left", True)
     for c in conds:
         if c.get("kind") != "buy_price" or c.get("status") != "active":
             continue
@@ -86,6 +87,11 @@ def _apply_auto_conditions(st, cand, weak=False):
             c["status"] = "cancelled"
             c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
             c["note"] = "停用价值吸筹, 取消入场条件单"
+            continue
+        if long_off and c.get("strategy") == STRATEGY_LONG_LEFT:
+            c["status"] = "cancelled"
+            c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            c["note"] = "停用威科夫左侧买点, 取消入场条件单"
             continue
         if code in held:
             c["status"] = "cancelled"

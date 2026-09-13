@@ -6,6 +6,7 @@ from datetime import datetime
 import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
+from ..strategies.constants import STRATEGY_VALUE_ACC
 from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAILING_STOP, WEAK_MAX_POS
 
 

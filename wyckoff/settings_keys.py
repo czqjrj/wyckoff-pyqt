@@ -108,6 +108,8 @@ class Paper(_Base):
     VA_WEIGHT = "paper_va_weight"
     # 价值吸筹策略总开关: False = 模拟盘完全停用该策略 (不再扫描/生成入场条件单)
     ENABLE_VA = "paper_enable_va"
+    # 威科夫左侧买点策略总开关: False = 模拟盘完全停用 (不再扫描/生成入场条件单)
+    ENABLE_LONG_LEFT = "paper_enable_long_left"
     # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
     REBALANCE = "paper_rebalance"
     # ── 微信推送 (交易发生时通知) ─────────────────────────────
@@ -249,7 +251,10 @@ DEFAULTS = {
     Paper.SCAN_INTERVAL: 1800,
     Paper.ENABLE_CHINEXT: False,
     Paper.ENABLE_STAR: False,
-    Paper.ENABLE_VA: True,
+    # 价值吸筹回退默认关闭 (实测为负贡献): 需用户显式 paper_enable_va=true 开启
+    Paper.ENABLE_VA: False,
+    # 威科夫左侧买点默认关闭 (命中率与右侧纪律叠加度低): 需显式 paper_enable_long_left=true
+    Paper.ENABLE_LONG_LEFT: False,
     AI.FALSIFY_ENABLED: False,
     AI.INTERPRET_ENABLED: False,
     AI.API_KEY: "",

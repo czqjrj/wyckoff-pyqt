@@ -3,6 +3,8 @@
 import statistics
 import time
 
+import numpy as np
+
 import wyckoff.paper as paper
 from ._params import SLIP_BUY, SLIP_SELL
 

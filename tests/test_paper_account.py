@@ -63,7 +63,13 @@ def test_pick_candidates_left_buy_ignores_market_gate(monkeypatch):
     """威科夫左侧买点: 大盘未站上MA20 时仍可入池 (独立赛道, gated=False,
     挂买点入场价 below 条件单, 不受板块/资金流门禁管束)。"""
     _apply(monkeypatch, LeftMgr(), market_ok=(False, "大盘未站上MA20"))
-    out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    old = paper._CUR.get("enable_long_left", False)
+    paper._CUR["enable_long_left"] = True
+    try:
+        out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    finally:
+        if "enable_long_left" in paper._CUR and paper._CUR.get("enable_long_left", True) != old:
+            paper._CUR["enable_long_left"] = old
     assert len(out) == 1
     e = out[0]
     assert e["strategy"] == "long_buy_left"

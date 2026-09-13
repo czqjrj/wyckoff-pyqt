@@ -1,9 +1,11 @@
 """模拟盘面板 (自动筛选→自动下单→自动卖出→收益统计)。
 
-复用 wyckoff.paper 引擎 + 策略管理器双策略 (策略4·纪律 / 威科夫左侧买点) + extra_windows 的表格/线程模式:
+复用 wyckoff.paper 引擎 + 策略管理器纪律策略 + extra_windows 的表格/线程模式:
   - 手动执行周期 (run_cycle) 与 定时自动执行周期 (30/15 分钟), 后台线程避免卡 UI。
-  - 右侧策略概览按策略管理器注册的双策略并行统计 (纪律 / 左侧买点)。
-  - 四个数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
+  - 右侧策略概览按当前启用的策略 (默认策略4·纪律) 并行统计。
+  - 数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
+  策略启停由设置键控制: paper_enable_long_left / paper_enable_va (默认均关,
+  即仅纪律)。通过设置键重新启用后, 扫描模式与概览会自动跟随。
 """
 
 from PyQt6.QtCore import Qt, QThread, QTime, QTimer, pyqtSignal
@@ -164,12 +166,32 @@ def _strat_cn(s):
     return _STRAT_CN.get(s or "", s or "-")
 
 
-# ── 扫描模式 (多策略并行) ─────────────────────────────────
-_SCAN_MODES = (
-    ("混合扫描(纪律+左侧买点)", ""),  # 双策略并行: 策略4·纪律 + 威科夫左侧买点
-    ("纪律扫描(强多头+硬门禁)", "discipline"),
-    ("左侧买点扫描", "long_buy_left"),
-)
+# ── 扫描/策略 (活跃策略 + 动态扫描模式) ────────────────────
+# 活跃策略 = 策略管理器注册顺序 且经过设置键启停过滤
+#   paper_enable_long_left / paper_enable_va 默认 False → 现网仅策略4·纪律
+def _active_order():
+    from wyckoff.paper import _CUR as _PC
+    gates = {"long_buy_left": "enable_long_left",
+             "screener_value_accumulation": "enable_va"}
+    out = []
+    for key in _STRAT_ORDER:
+        if gates.get(key) and not _PC.get(gates[key], True):
+            continue
+        out.append(key)
+    return out
+
+
+def _scan_mode_items():
+    """按活跃策略生成扫描模式选项 (空值=全策略并线)。"""
+    order = _active_order()
+    items = []
+    if len(order) > 1:
+        items.append(("混合扫描(全部策略)", ""))
+    for key in order:
+        label = "纪律扫描(强多头+硬门禁)" if key == "paper_discipline_bull" else \
+            f"{_strat_cn(key)}扫描"
+        items.append((label, key))
+    return items or [("纪律扫描(强多头+硬门禁)", "paper_discipline_bull")]
 
 
 # ── 后台线程 ──────────────────────────────────────────────
@@ -195,17 +217,12 @@ class _CycleThread(QThread):
     def run(self):
         from wyckoff._log import log_exc
         from wyckoff.paper import run_cycle
-        from wyckoff.strategies.constants import (
-            STRATEGY_DISCIPLINE,
-            STRATEGY_LONG_LEFT,
-        )
         settings = dict(self._settings or {})
-        # 根据 mode 推断 strategies 子集
+        # 根据 mode 推断 strategies 子集: 空值=全策略并线 (引擎按 enable_* 过滤);
+        # 具体策略 key=单策略模式。
         strategies = None
-        if self._mode == "discipline":
-            strategies = (STRATEGY_DISCIPLINE,)
-        elif self._mode == "long_buy_left":
-            strategies = (STRATEGY_LONG_LEFT,)
+        if self._mode:
+            strategies = (self._mode,)
 
         def _cb(done, total, code):
             # progress 只在真正全市场重扫时被 pick_candidates 调用 →
@@ -229,7 +246,7 @@ class _CycleThread(QThread):
 
 
 class _ScanThread(QThread):
-    """后台执行 run_scan (多策略并行, 不阻塞 UI)。"""
+    """后台执行 run_scan (按活跃策略, 不阻塞 UI)。"""
     done = pyqtSignal(object)
     progress = pyqtSignal(int)
 
@@ -336,7 +353,7 @@ class _TrackEvalThread(QThread):
 
 
 class PaperWindow(QDialog):
-    """模拟盘: 账户概览 + 策略概览(双策略) + 多页签 + 周期调度。"""
+    """模拟盘: 账户概览 + 策略概览 + 多页签 + 周期调度。"""
 
     def __init__(self, parent=None, settings=None, on_load=None):
         super().__init__(parent)
@@ -352,8 +369,8 @@ class PaperWindow(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
-        root.addWidget(_accent_header("模拟盘 · 双策略并行 "
-                                      "(策略4·纪律 + 威科夫左侧买点) → "
+        root.addWidget(_accent_header("模拟盘 · "
+                                      f"{' + '.join(_strat_cn(k) for k in _active_order())} → "
                                       "筛选→买入→卖出→统计"))
 
         # 顶部: 账户概览 + 操作行 + 策略概览 (水平分栏)
@@ -374,8 +391,8 @@ class PaperWindow(QDialog):
         lv.addWidget(self.scan_info)
         top_lay.addWidget(left_box, 2)
 
-        # 右: 策略概览 (双策略并行)
-        right_box = QGroupBox("策略概览 (双策略)")
+        # 右: 策略概览
+        right_box = QGroupBox("策略概览")
         rv = QGridLayout(right_box)
         self._strat_blocks = {}
         rv.addWidget(_flabel("策略"), 0, 0)
@@ -384,7 +401,7 @@ class PaperWindow(QDialog):
         rv.addWidget(_flabel("20根命中"), 0, 3)
         rv.addWidget(_flabel("胜率"), 0, 4)
         rv.addWidget(_flabel("累计"), 0, 5)
-        for row, key in enumerate(_STRAT_ORDER, start=1):
+        for row, key in enumerate(_active_order(), start=1):
             name = _STRAT_CN[key]
             lab_name = QLabel(name)
             lab_name.setStyleSheet("font-weight:bold;")
@@ -450,12 +467,12 @@ class PaperWindow(QDialog):
         hb_scan.setSpacing(8)
         hb_scan.addWidget(_flabel("策略+扫描"))
         self.cb_scan_mode = QComboBox()
-        for label, _mode in _SCAN_MODES:
+        for label, _mode in _scan_mode_items():
             self.cb_scan_mode.addItem(label)
         self.cb_scan_mode.setToolTip(
-            "混合: 双策略并行 (纪律/左侧买点)\n"
-            "纪律: 仅策略4·纪律 (强多头+硬门禁)\n"
-            "左侧买点: 威科夫完整做多买点")
+            "扫描策略随当前启用的策略自动生成\n"
+            "默认 (paper_enable_long_left/paper_enable_va=关): 仅纪律扫描\n"
+            "重新启用作废策略后会自动出现对应选项")
         hb_scan.addWidget(self.cb_scan_mode)
 
         hb_scan.addWidget(_flabel("扫描数"))
@@ -467,7 +484,7 @@ class PaperWindow(QDialog):
         self.sp_scan_n.setToolTip(
             "扫描数量 (默认上限 6000)\n"
             "模拟盘扫描范围收敛为沪深主板: 沪 600/601/603/605 + 深 000/001/002/003 ≈ 3100 只\n"
-            "创业板/科创板/北交所不参与三策略并线; "
+            "创业板/科创板/北交所不参与纪律策略扫描; "
             "数量仅是上限, 实际以主板全量为准")
         hb_scan.addWidget(self.sp_scan_n)
 
@@ -947,16 +964,6 @@ class PaperWindow(QDialog):
         self.sp_trail_back.setToolTip(
             "移动止盈回落: 激活后从持仓峰值回撤该比例平仓 (回测推荐 8%)")
 
-        self.sp_va_weight = QDoubleSpinBox()
-        self.sp_va_weight.setRange(0.10, 1.00)
-        self.sp_va_weight.setSingleStep(0.05)
-        self.sp_va_weight.setDecimals(2)
-        self.sp_va_weight.setValue(
-            float(self._settings.get(S.Paper.VA_WEIGHT, 0.6)))
-        self.sp_va_weight.setSuffix(" x")
-        self.sp_va_weight.setToolTip(
-            "策略4纪律单仓资金权重 (回测推荐 0.6)")
-
         self.ck_weak = QCheckBox("弱市过滤")
         self.ck_weak.setChecked(
             bool(self._settings.get(S.Paper.WEAK_FILTER, True)))
@@ -982,9 +989,7 @@ class PaperWindow(QDialog):
         grid.addWidget(self.sp_trail_act, 2, 1)
         grid.addWidget(QLabel("回落%"), 2, 2)
         grid.addWidget(self.sp_trail_back, 2, 3)
-        grid.addWidget(QLabel("价值权重"), 2, 4)
-        grid.addWidget(self.sp_va_weight, 2, 5)
-        grid.addWidget(self.ck_weak, 2, 6, 1, 6)
+        grid.addWidget(self.ck_weak, 2, 4, 1, 8)
         for w in fields:
             w[1].setToolTip({
                 self.sp_maxpos: "同时持有的最大股票数 (1~5)",
@@ -996,7 +1001,7 @@ class PaperWindow(QDialog):
                 self.sp_cash: "模拟盘初始资金 (更改后需重置账户)",
             }[w[1]])
         hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+15%·回落 8% / "
-                      "弱市过滤开 / 价值权重 0.6")
+                      "弱市过滤开")
         hint.setStyleSheet(f"color: {theme.C_MUTED};")
         grid.addWidget(hint, 3, 0, 1, len(fields) * 2 + 1)
 
@@ -1018,7 +1023,6 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.TRAIL_ATR_MULT] = self.sp_trail_atr.value()
         self._settings[S.Paper.TRAIL_ACTIVATE_PCT] = self.sp_trail_act.value()
         self._settings[S.Paper.TRAIL_BACK_PCT] = self.sp_trail_back.value()
-        self._settings[S.Paper.VA_WEIGHT] = self.sp_va_weight.value()
         self._settings[S.Paper.WEAK_FILTER] = self.ck_weak.isChecked()
         # 自动执行模式 (0=关闭 / 900=15m / 1800=30m)
         self._settings[S.Paper.SCAN_INTERVAL] = (
@@ -1036,8 +1040,8 @@ class PaperWindow(QDialog):
         self.refresh()
 
     def _current_mode(self):
-        """当前扫描/周期执行模式 (多策略并行)。"""
-        return _SCAN_MODES[self.cb_scan_mode.currentIndex()][1]
+        """当前扫描/周期执行模式 (按活跃策略动态生成)。"""
+        return _scan_mode_items()[self.cb_scan_mode.currentIndex()][1]
 
     # ── 主题 ──────────────────────────────────────────────
     def apply_theme(self):
@@ -1064,7 +1068,7 @@ class PaperWindow(QDialog):
 
     # ── 扫描 ──────────────────────────────────────────────
     def _on_scan_now(self):
-        """策略+扫描: 按所选模式后台扫描, 双策略并行。"""
+        """策略+扫描: 按所选模式后台扫描 (跟随活跃策略)。"""
         if self._scan_thread and self._scan_thread.isRunning():
             return
         mode = self._current_mode()
@@ -1380,9 +1384,10 @@ class PaperWindow(QDialog):
 
     # ── 渲染 ──────────────────────────────────────────────
     def _strategy_summary(self, st):
-        """按策略管理器双策略并行统计。"""
+        """按当前活跃策略统计 (默认仅策略4·纪律)。"""
+        order = _active_order()
         by_strat = {}
-        for key in _STRAT_ORDER:
+        for key in order:
             by_strat[key] = {"signals": 0, "positions": 0, "wins": 0,
                              "trades": 0, "rets": []}
         for c in st["candidates"]:
@@ -1401,7 +1406,7 @@ class PaperWindow(QDialog):
                     by_strat[k]["wins"] += 1
                 by_strat[k]["rets"].append(c.get("ret", 0))
         out = {}
-        for key in _STRAT_ORDER:
+        for key in order:
             d = by_strat[key]
             n = d["trades"]
             cum = (sum(d["rets"]) * 100 if d["rets"]
@@ -1418,14 +1423,14 @@ class PaperWindow(QDialog):
         return out
 
     def _refresh_strategy_blocks(self, st):
-        """刷新右侧双策略概览 (信号/持仓/命中/胜率/累计)。"""
+        """刷新右侧策略概览 (信号/持仓/命中/胜率/累计), 仅活跃策略。"""
         summ = self._strategy_summary(st)
         try:
             from wyckoff.paper_strategy_accuracy import signal_stats
             sig = signal_stats()
         except Exception:
             sig = {}
-        for key in _STRAT_ORDER:
+        for key in _active_order():
             blocks = self._strat_blocks.get(key)
             if not blocks:
                 continue
@@ -1450,11 +1455,9 @@ class PaperWindow(QDialog):
         sig = signal_stats()
         cond = cond_accuracy(st)
         prof = profit_summary(st)
-        from wyckoff.strategies.constants import STRATEGY_VALUE_ACC
+        active_strategies = frozenset(_active_order())
         rows = []
-        for key in _STRAT_ORDER:
-            if key == STRATEGY_VALUE_ACC:
-                continue
+        for key in active_strategies:
             a = sig.get(key, {})
             h = a.get("horizons", {})
             e = cond.get(key, {})
@@ -1493,7 +1496,7 @@ class PaperWindow(QDialog):
         except Exception:
             recs = []
         for r in recs:
-            if r.get("strategy") == STRATEGY_VALUE_ACC:
+            if r.get("strategy") not in active_strategies:
                 continue
             srows.append({
                 "date": str(r.get("date", ""))[:10],
@@ -1635,7 +1638,7 @@ class PaperWindow(QDialog):
                     color_cols=("ret",))
         self.t_closed.setSortingEnabled(False)
 
-        # 候选 (按策略优先级排序, 双策略并行展示)
+        # 候选 (按活跃策略优先级排序, 多策略并线展示)
         cand_sorted = sorted(
             st["candidates"],
             key=lambda c: (_STRAT_ORDER.index(c.get("strategy", ""))

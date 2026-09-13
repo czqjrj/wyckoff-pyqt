@@ -215,13 +215,20 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     if min_conf is None:
         min_conf = paper._CUR["min_conf"]
     # 价值吸筹停用时: 统一在选股源头剔除该策略 (不产生候选/条件单)。
+    _disabled = []
     if not paper._CUR.get("enable_va", True):
+        _disabled.append(STRATEGY_VALUE_ACC)
+    if not paper._CUR.get("enable_long_left", True):
+        _disabled.append(STRATEGY_LONG_LEFT)
+    if _disabled:
         if strategies is None:
-            strategies = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT)
+            strategies = tuple(
+                s for s in (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT, STRATEGY_VALUE_ACC)
+                if s not in _disabled)
         else:
-            strategies = tuple(s for s in strategies if s != STRATEGY_VALUE_ACC)
+            strategies = tuple(s for s in strategies if s not in _disabled)
         if not strategies:
-            # 显式仅指定价值吸筹 (如 UI 模式扫描) → 直接返回空, 避免回退全策略
+            # 显式仅指定已停用策略 (如 UI 模式扫描) → 直接返回空, 避免回退全策略
             return []
     from ..datasource import fetch_kline
     from ..fundamental import fetch_sector
@@ -312,6 +319,10 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             # 兜底保证 任何路径都不产出 VA 候选/条件单)。
             if not paper._CUR.get("enable_va", True) \
                     and cand.get("strategy") == STRATEGY_VALUE_ACC:
+                return code, None, None
+            # 左侧买点已停用: 候选层面兜底剔除。
+            if not paper._CUR.get("enable_long_left", True) \
+                    and cand.get("strategy") == STRATEGY_LONG_LEFT:
                 return code, None, None
             return code, cand, flow
         except Exception:

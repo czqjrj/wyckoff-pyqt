@@ -197,6 +197,8 @@ def apply_paper_params(settings=None):
         "va_weight": float(_get(S.Paper.VA_WEIGHT, VA_WEIGHT)),
         # 价值吸筹总开关 (False=彻底停用)
         "enable_va": bool(_get(S.Paper.ENABLE_VA, ENABLE_VA)),
+        # 威科夫左侧买点总开关 (False=彻底停用)
+        "enable_long_left": bool(_get(S.Paper.ENABLE_LONG_LEFT, ENABLE_LONG_LEFT)),
         # 周期级等权再平衡
         "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
         # 微信推送配置
@@ -242,6 +244,7 @@ _CUR = {
     "weak_index_code": WEAK_INDEX_CODE,
     "va_weight": VA_WEIGHT,
     "enable_va": ENABLE_VA,
+    "enable_long_left": ENABLE_LONG_LEFT,
     "rebalance": REBALANCE,
     "push_enabled": PUSH_ENABLED,
     "push_method": PUSH_METHOD,
@@ -463,6 +466,10 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
             if not _CUR.get("enable_va", True) \
                     and e.get("strategy") == STRATEGY_VALUE_ACC:
                 continue
+            # 开关停用左侧买点: 存量候选兜底拦截 (防止历史候选重放入场)
+            if not _CUR.get("enable_long_left", True) \
+                    and e.get("strategy") == STRATEGY_LONG_LEFT:
+                continue
             px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
             last = float(e.get("last", 0) or 0)
             if e.get("trigger") == "below":
@@ -609,9 +616,16 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
         label = f"策略管理器扫描({paper_strategy_accuracy.STRATEGY_CN.get(scan_type, scan_type)})"
         empty_note = (f"{label}: 无满足条件的候选 (该策略的门禁/conf/事件未满足)")
     else:
-        label = "策略管理器扫描(纪律+左侧买点+价值吸筹)"
-        empty_note = ("策略管理器扫描: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁拦截, "
-                      "左侧买点未现于可执行窗口, 价值吸筹未现于底部整固)")
+        from wyckoff.strategies.candidates import STRATEGY_CN as _SCN
+        active_labels = []
+        if _CUR.get("enable_long_left", True):
+            active_labels.append(_SCN.get(STRATEGY_LONG_LEFT, "左侧买点"))
+        if _CUR.get("enable_va", True):
+            active_labels.append(_SCN.get(STRATEGY_VALUE_ACC, "价值吸筹"))
+        label = (f"纪律+{'/'.join(active_labels)}" if active_labels
+                 else "纪律")
+        label = f"策略管理器扫描({label})"
+        empty_note = (f"{label}: 无满足条件的候选 (纪律强多头事件/conf/大盘/板块/资金流门禁拦截)")
     result_str = (f"{label}: 扫描{scanned} 码, 命中 {len(cand)} 个候选"
                   if cand else empty_note)
     st['last_scan_result'] = result_str
