@@ -25,8 +25,17 @@ W_VSA = 0.20
 W_PNF = 0.15
 
 # Qlib 因子维度权重: 量化模型预测作为技术面信号的权重修正
-# 系数 α: 通过历史回测学习最优值，建议起始值 0.15~0.25
-W_QLIB = 0.15
+# 改版: 概率并入方向评分后权重上调 (0.15→0.25), 让模型概率对综合多空倾向
+# 有实质影响力 (见 _qlib_factor_score: 模型概率主导评分)。
+W_QLIB = 0.25
+
+# 模型概率主导 Qlib 维度评分的混合系数: prob 部分权重 0.7 / 动量-均值回归 0.3
+QLIB_PROB_MIX = 0.7
+
+# 模型概率 → 评分灵敏度: 概率每偏离 0.5 一个百分点 → score×2.4
+# (prob 0.65 → +36, 0.35 → -36; 乘 W_QLIB 后对综合分贡献约 ±9, 越过 ±8 方向阈值)
+QLIB_PROB_SENSITIVITY = 2.4
+QLIB_PROB_SCALE = 100.0
 
 # 新闻情绪维度权重 (小权重探索: 无 A/B 实证样本前不喧宾夺主)
 W_NEWS = 0.05
@@ -275,7 +284,7 @@ def _align(score, htf):
 
 
 def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
-                 news_sentiment=None, forward_calendar=None):
+                 news_sentiment=None, forward_calendar=None, qlib_prob=None):
     """融合五类信号 (K线/威科夫/VSA/P&F/Qlib), 返回综合评分与维度明细。
 
     参数: 与各模块输出直接兼容 (analysis.py 中已有)。
@@ -283,6 +292,9 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
         含 items 明细与 validation 摘要; 旧格式 dict 也兼容)。
       forward_calendar: news.fetch_forward_calendar 的前瞻日历
         ({items, risk_days, risk_label}), 有临近偏空节点时多头信号降置信。
+      qlib_prob: Qlib 模型概率 dict ({prob_buy, prob_sell, confidence}),
+        由调用方统一获取传入, 避免 fusion 内部重复加载模型; 为 None 时
+        Qlib 维度按数据新鲜度回退 (见 _qlib_factor_score)。
     返回 dict:
       score     综合评分 (-100~+100, >0 偏多)
       bias      看多 / 看空 / 中性
@@ -310,8 +322,8 @@ def fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=None, oos=False,
          "detail": pnf_t.get("direction", "range") if pnf_t else "无"},
     ]
     # Qlib 因子维度: 量化模型预测的概率评分
-    # 通过 fetch_qlib_features 获取因子值，将因子值映射到 -100~+100 评分区间
-    qlib_score = _qlib_factor_score(df, last_close)
+    # 模型概率 (prob_buy) 主导 (0.7) + 动量/均值回归因子补充 (0.3), 映射到 -100~+100。
+    qlib_score = _qlib_factor_score(df, last_close, qlib_prob)
     dims.append({
         "key": "qlib", "name": "Qlib因子",
         "score": _align(qlib_score, htf),
@@ -458,25 +470,65 @@ def _summary_text(score, bias, confidence, dims, conflicts, htf=0):
     return "  ".join(parts)
 
 
-def _qlib_factor_score(df, last_close):
-    """计算 Qlib 因子对当前周期的评分 (-100~+100)。
+def _qlib_factor_score(df, last_close, qlib_prob=None):
+    """计算 Qlib 维度评分 (-100~+100)。
+
+    版本2: 已训练模型的买入概率 (prob_buy) 主导方向评分, 动量/均值回归因子补充。
+    - qlib_prob 传入时直接使用 (调用方已统一获取, 口径一致);
+    - 否则若 qlib 可用且数据新鲜, 内部用 qlib_signal_probability 获取;
+    - 模型概率不可用 (无模型/数据不新鲜/离线) → 回退到原动量+均值回归映射，
+      或 df 自身计算同等因子 (回测/合成数据下同源一致)。
+
+    概率→评分: (prob-0.5) × QLIB_PROB_SENSITIVITY × 100, 0.5 中性。
+    """
+    from datetime import datetime, timedelta
+
+    import pandas as pd
+
+    prob = None
+    if isinstance(qlib_prob, dict):
+        prob = qlib_prob.get("prob_buy")
+    # 无传入概率 → 内部获取 (仅 qlib 可用且数据新鲜时, 避免拖慢历史回测)
+    if prob is None:
+        try:
+            from .qlib_adapter import _is_qlib_available
+            if _is_qlib_available():
+                from .qlib_adapter import qlib_signal_probability
+                if isinstance(df.index, pd.DatetimeIndex) and len(df.index):
+                    frame_max = df.index.max()
+                elif "day" in df.columns and len(df):
+                    frame_max = pd.to_datetime(df["day"]).max()
+                else:
+                    frame_max = None
+                now = pd.Timestamp.now().normalize()
+                if frame_max is not None and abs((now - frame_max).days) <= 10:
+                    qp = qlib_signal_probability(
+                        df.attrs.get("symbol", "sh600104"),
+                        datalen=len(df), scale=240)
+                    prob = qp.get("prob_buy")
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.debug(f"qlib prob score fetch failed: {e}")
+            prob = None
+
+    # 模型概率可用 → 概率主导评分 (概率 70% + 因子 30%)
+    if prob is not None:
+        prob_score = (float(prob) - 0.5) * QLIB_PROB_SCALE * QLIB_PROB_SENSITIVITY
+        prob_score = max(-100.0, min(100.0, prob_score))
+        factor_score = _qlib_factor_fallback(df)
+        return prob_score * QLIB_PROB_MIX + factor_score * (1.0 - QLIB_PROB_MIX)
+
+    # 无模型概率 → 原动量+均值回归因子评分 (兼容旧行为)
+    return _qlib_factor_fallback(df)
+
+
+def _qlib_factor_fallback(df):
+    """动量 + 均值回归因子映射评分 (-100~+100), 无模型概率时的兜底。
 
     因子与传入 K 线同时间区间 (动量 + 均值回归) 映射到评分区间:
     - qlib 本地数据可读取时, 用 fetch_qlib_features 取真实因子;
     - 否则用 df 自身计算同等因子 (同源一致, 不混入实时行情, 保证
       合成/历史回测数据与测试稳定)。
-
-    参数
-    ----------
-    df : pd.DataFrame
-        包含 K 线数据的 DataFrame，需包含 close 列及 day/索引日期。
-    last_close : float
-        当前最新收盘价。
-
-    返回
-    -----
-    float
-        归一化评分，范围约 [-100, +100]，正值偏多，负值偏空。
     """
     from datetime import datetime, timedelta
 
@@ -535,29 +587,17 @@ def _qlib_factor_score(df, last_close):
             return 0.0
 
     # 基于两个核心因子计算评分:
-    # 1. momentum_10: 短期动量 (正值 → 多头倾向)
-    # 2. mean_reversion_30: 中期均值回归 (偏离均值的距离)
     mom = features.get("momentum_10", 0.0)
     mr = features.get("mean_reversion_30", 0.0)
 
-    # 简单线性映射: 将因子组合映射到 -100~+100
-    # 阶段 1: 纯动量驱动 (mr 近似 0) → 由 mom 直接决定
-    # 阶段 2: 动量 + 均值回归 综合
-    # 权重: 动量 60%, 均值回归 40%
     weight_mom = 0.6
     weight_mr = 0.4
 
-    # 将因子值转化为 -1~1 归一化区间 (近似: 3σ 经验规则)
-    # momentum: 通常在 [-0.1, 0.1] 之间，映射到 [-1, 1]
-    # mean_reversion z-score: 通常在 [-3, 3] 之间，映射到 [-1, 1]
     mom_norm = max(-1.0, min(1.0, mom * 10))    # 简单放大
     mr_norm = max(-1.0, min(1.0, mr))          # 已是 z-score
 
-    # 综合评分: -50 到 +50 的基础区间，再通过 W_QLIB 系数放大到总评分
     base_score = mom_norm * weight_mom + mr_norm * weight_mr
-    # 映射到 -100~+100
-    score = base_score * 50.0  # -50~+50 → -100~+100
+    score = base_score * 50.0
 
-    # 限制在有效范围
     score = max(-100.0, min(100.0, score))
     return float(score)

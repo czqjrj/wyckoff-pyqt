@@ -556,10 +556,18 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
 
     # ── 多维度信号融合: K线结构 / 威科夫事件 / VSA / P&F → 统一多空评分
     #    (mf 高周期方向注入融合权重: 顺周/月线趋势的信号加权, 逆势信号降权)
+    # Qlib 模型概率统一获取一次, fusion 与 trade_plan 共用 (口径一致, 避免重复推理)。
+    _qlib_prob = {"prob_buy": 0.5, "prob_sell": 0.5, "confidence": 0.0}
+    try:
+        from .qlib_adapter import qlib_signal_probability
+        _qlib_prob = qlib_signal_probability(symbol, datalen=datalen, scale=scale)
+    except Exception:
+        pass
     fusion = fuse_signals(df, phase, events, vsa_signals, pnf_t, mf=mf,
                           news_sentiment=news_sentiment,
                           forward_calendar=(news_sentiment or {}).get("forward_calendar")
-                          if news_sentiment else None)
+                          if news_sentiment else None,
+                          qlib_prob=_qlib_prob)
     # Qlib 回测校准: 基于历史信号回测动态调整阈值 (仅日线确认模式)
     calibrated_thresholds = {}
     if scale == 240 and confirm_enabled:
@@ -632,7 +640,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
 
     trade_plan = build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr,
     float(df["close"].iloc[-1]),
-    qlib_prob=None)
+    qlib_prob=_qlib_prob)
     # ── 威科夫Pro整合层 (可选增强) ──
     ce = counter_evidence(df, events, phase=phase, structure=structure)
     nt = nine_tests(df, events, pivots=pivots, phase=phase, structure=structure,
