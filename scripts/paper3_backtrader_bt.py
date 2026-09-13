@@ -313,6 +313,8 @@ def main():
                     help="价值吸筹单仓资金权重")
     ap.add_argument("--va-slots", type=int, default=1,
                     help="价值吸筹同时持有上限")
+    ap.add_argument("--no-left-buy", action="store_true",
+                    help="停用威科夫左侧买点 (与模拟盘 paper_enable_long_left=false 对齐)")
     ap.add_argument("--start", default=None, help="回测区间起点 YYYY-MM-DD (含)")
     ap.add_argument("--end", default=None, help="回测区间终点 YYYY-MM-DD (不含)")
     ap.add_argument("--report", default="docs/paper3_backtrader_bt.md")
@@ -321,6 +323,8 @@ def main():
     codes = [c.strip() for c in args.codes.split(",") if c.strip()]
     include_order = ["paper_discipline_bull", "long_buy_left",
                      "screener_value_accumulation"]
+    if args.no_left_buy:
+        include_order = [s for s in include_order if s != "long_buy_left"]
     lo = pd.to_datetime(args.start) if args.start else None
     hi = pd.to_datetime(args.end) if args.end else None
     if lo is not None and hi is not None and lo >= hi:
@@ -472,7 +476,7 @@ def main():
         print(f"期末资产: {end_v:,.0f}")
 
     _write_report(args.report, args, codes, recs, acc, eq_stats,
-                  port_stats, by_strat, counts, failed)
+                  port_stats, by_strat, counts, failed, include_order)
     print(f"\n报告已写入: {args.report}")
 
 
@@ -484,7 +488,10 @@ def _pct(v, sig=1, pos=True):
 
 
 def _write_report(path, args, codes, recs, acc, eq, port, by_strat,
-                  counts, failed):
+                  counts, failed, include_order=None):
+    if not include_order:
+        include_order = ["paper_discipline_bull", "long_buy_left",
+                         "screener_value_accumulation"]
     span = f"{args.start or '最早'} ~ {args.end or '最新'}"
     weak_txt = "开启" if not args.weak_off else "关闭"
     L = ["# 模拟盘三策略 backtrader 组合回测报告", "",
@@ -502,9 +509,7 @@ def _write_report(path, args, codes, recs, acc, eq, port, by_strat,
          "",
          "| 策略 | 信号数 | 命中5 | 命中10 | 命中20 | 均值20 |",
          "|---|---|---|---|---|---|"]
-    for s in tsa.TYPES_ORDER if hasattr(tsa, "TYPES_ORDER") else [
-            "paper_discipline_bull", "long_buy_left",
-            "screener_value_accumulation"]:
+    for s in tsa.TYPES_ORDER if hasattr(tsa, "TYPES_ORDER") else include_order:
         a = acc[s]
         L.append(f"| {s} | {counts[s]} | {_pct(a['hit5'], 0, pos=False)} | {_pct(a['hit10'], 0, pos=False)} | "
                  f"{_pct(a['hit20'], 0, pos=False)} | {_pct(a['avg20'], 2)} |")
@@ -520,8 +525,7 @@ def _write_report(path, args, codes, recs, acc, eq, port, by_strat,
           "",
           "| 策略 | 平仓 | 胜率 | 平均 | 累计 | 盈亏比 | 均持(根) |",
           "|---|---|---|---|---|---|---|"]
-    for s in ["paper_discipline_bull", "long_buy_left",
-              "screener_value_accumulation"]:
+    for s in include_order:
         st = closed_stats(by_strat.get(s, []))
         if not st:
             L.append(f"| {s} | 0 | - | - | - | - | - |")

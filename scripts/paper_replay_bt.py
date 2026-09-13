@@ -70,7 +70,13 @@ def load_stock_events(code, min_conf, datalen):
         idx = int(e.get("idx", 0) or 0)
         if idx < 0 or idx >= len(df):
             continue
-        events.append({"idx": idx, "type": e["type"], "conf": conf})
+        events.append({
+            "idx": idx,
+            "type": e["type"],
+            "conf": conf,
+            "confirmed": bool(e.get("confirmed")),
+            "avail_idx": int(e["avail_idx"]) if e.get("avail_idx") is not None else None,
+        })
     events.sort(key=lambda x: x["idx"])
     sector = ""
     try:
@@ -125,14 +131,22 @@ def load_market_gate(datalen=850):
         return None
 
 
-def newest_buyable(rec, j, window=10):
+def newest_buyable(rec, j, window=10, require_confirm=False):
     """返回该股票在 bar j 处可买入的最新事件 (事件在 j 之前 ≤window 根内)。
 
+    require_confirm=True 时只考虑"已确认"事件, 且仅当其确认后 ava = avail_idx+1
+    (确认后的第1根) 已到达才放行 (避免事件当根即买、底部回踩被止损的过早单)。
     返回 (event, buy_bar) 或 None。buy_bar 用事件后下一根=事件idx+1 (开盘买入)。
     """
     best = None
     for e in rec["events"]:
         if e["idx"] <= j and (j - e["idx"]) <= window:
+            if require_confirm:
+                if not e.get("confirmed"):
+                    continue
+                ava = int(e.get("avail_idx") or -1)
+                if ava < 0 or j < ava + 1:
+                    continue
             if best is None or e["idx"] > best["idx"]:
                 best = e
     if best is None:
@@ -141,6 +155,115 @@ def newest_buyable(rec, j, window=10):
 
 
 BEAR_TYPES = {"UTAD", "LPSY"}
+
+_qlib_prob_cache = {}
+
+
+def load_qlib_prob_map(stocks, force=False):
+    """预计算每只股票的 qlib prob_buy 序列 {code: {daystr: prob}} (带磁盘缓存)。
+
+    复用 qlib_adapter.qlib_probability_series (模型 raw 预测 + 样本内分位归一化)。
+    与 qlib_ablation 同口径; 注意 _spread_probabilities 按整段样本分位做归一化,
+    属研究性验证口径 (回测为严格因果应改用前缀分位, 但这里与消融实验一致以对比)。
+    返回 dict[code]={day==>prob_buy}; qlib 不可用/个股缺失时返回空 (该股 gate 失效 fail-open)。
+    """
+    global _qlib_prob_cache
+    if _qlib_prob_cache:
+        return _qlib_prob_cache
+    cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                              "data", "paper_replay_data", "qlib_prob_map.pkl")
+    cache_path = os.path.abspath(cache_path)
+    if not force and os.path.exists(cache_path):
+        try:
+            import pickle
+            with open(cache_path, "rb") as f:
+                _qlib_prob_cache = pickle.load(f)
+            return _qlib_prob_cache
+        except Exception:
+            pass
+    from wyckoff import qlib_adapter
+    if not qlib_adapter._is_qlib_available():
+        return {}
+    model_obj = qlib_adapter._load_qlib_model()
+    if model_obj is None:
+        # 模型文件路径基于 paths.DATA_DIR, 回放进程被 WYCKOFF_DATA_DIR 重定向后
+        # 会找不到 joblib → 退回仓库根原模型 (不能让 P3 gate 静默失效)。
+        import joblib
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for _cand in (os.path.join(repo_root, "qlib_lgbm.joblib"),
+                      os.path.join(repo_root, "data", "qlib_lgbm.joblib")):
+            if os.path.exists(_cand):
+                try:
+                    model_obj = joblib.load(_cand)
+                    if (
+                        isinstance(model_obj, dict)
+                        and "model" in model_obj
+                        and "feature_names" in model_obj
+                    ):
+                        break
+                    model_obj = None
+                except Exception:
+                    model_obj = None
+        if model_obj is None:
+            return {}
+    fnames = model_obj.get("feature_names") or []
+    need_domain = any(f.startswith("wy_") for f in fnames)
+    out = {}
+    import time as _t
+    t0 = _t.time()
+    for i, rec in enumerate(stocks):
+        code = rec["code"]
+        try:
+            start = str(rec["day"][0])[:10]
+            end = str(rec["day"][-1])[:10]
+            feat_df, _ = qlib_adapter.fetch_alpha158_features(code, start, end)
+            if feat_df is None or feat_df.empty:
+                continue
+            if need_domain:
+                try:
+                    dfeat, _ = qlib_adapter.compute_domain_features(code, start, end)
+                    if dfeat is not None and len(dfeat):
+                        feat_df = feat_df.join(dfeat, how="inner")
+                except Exception:
+                    pass
+            probs = qlib_adapter.qlib_probability_series(feat_df, model_obj)
+            if probs is None:
+                continue
+            rows = {}
+            import pandas as _pd
+            for d, p in zip(feat_df.index, probs):
+                rows[str(_pd.Timestamp(d).normalize())[:10]] = float(p)
+            out[code] = rows
+        except Exception:
+            continue
+        if (i + 1) % 20 == 0 or i == len(stocks) - 1:
+            print(f"qlib 概率预计算 {i + 1}/{len(stocks)} ({_t.time() - t0:.0f}s)", flush=True)
+    try:
+        import pickle
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "wb") as f:
+            pickle.dump(out, f, protocol=4)
+        print(f"已写 qlib 概率缓存: {cache_path}")
+    except Exception:
+        pass
+    _qlib_prob_cache = out
+    return out
+
+
+def qlib_probe(stock, D, prob_map, veto_hi=0.60):
+    """Qlib gate: 指定股票在某日的 prob_buy (中性时 None=不否决)。
+
+    prob_map 键为 'YYYY-MM-DD'; D 为 pandas.Timestamp 或 date → 统一按日期字符串查。
+    """
+    m = prob_map.get(stock)
+    if not m:
+        return None
+    key = str(D)[:10]
+    p = m.get(key)
+    if p is None:
+        return None
+    return bool(p >= veto_hi), float(p)
 
 
 def bear_signal_on(rec, j, window=10):
@@ -287,12 +410,10 @@ def _window_df(rec, D, day_to_j):
     return df.iloc[: j + 1]
 
 
-def replay(stocks, params, market_gate=None):
+def replay(stocks, params, market_gate=None, prob_map=None):
     """逐日重放, 复用模拟盘引擎 (paper.step / _rebalance_portfolio / _make_order / fill_buy)。
 
-    与实盘同口径: 固定 -3% 止损 / +15% 止盈 / 破位 / 结构位, 市价成交 (含滑点);
-    满足平仓条件即平仓, 不因短期持有到期强制平仓 (hold 设很大作安全上限)。
-    建仓等权 (总权益/max_pos)。
+    prob_map: {code: {day: prob_buy}} QLib 概率映射, 卖出端否决用 (见 --qlib-veto)。
     """
     from wyckoff.settings_keys import S
 
@@ -305,14 +426,14 @@ def replay(stocks, params, market_gate=None):
 
     with paper_log.disabled():  # 逐事件整文件日志读写是回放主开销, 一并关掉
         try:
-            st = _replay_impl(paper, hold, stocks, params, market_gate, S)
+            st = _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map)
             _real_save(st)
             return st
         finally:
             paper.save_state = _real_save
 
 
-def _replay_impl(paper, hold, stocks, params, market_gate, S):
+def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
     paper.apply_paper_params(
         {
             S.Paper.INIT_CASH: params["init_cash"],
@@ -322,6 +443,17 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
             S.Paper.TAKE_PROFIT: params["take_profit"],
             S.Paper.COST: params["cost"],
             S.Paper.MIN_CONF: params["min_conf"],
+            S.Paper.TRAILING_STOP: bool(params.get("trailing_stop", True)),
+            S.Paper.TRAIL_BACK_PCT: float(params.get("trail_back_pct") or 0.0),
+            S.Paper.TRAIL_ACTIVATE_PCT: float(params.get("trail_activate_pct") or 0.0),
+            S.Paper.TRAIL_ATR_MULT: float(params.get("trail_atr_mult") or 0.0),
+            # 回放口径: 用户已显式给 stop_loss/take_profit, 单笔风险预算风控
+            # (max_risk_pct=2%) 会与宽止损(如-8%)冲突而系统性压死纪律策略
+            # (33%等权仓位×8%=2.6%>2%)。回放里让风险由止盈止损参数本身决定。
+            "paper_max_risk_pct": 1.0,
+            # 账户回撤门禁同样放开: 回测目标是最优止盈止损参数本身,
+            # 回撤期的入场裁量由统计表(回撤指标)呈现, 不由该门禁压制买入。
+            "paper_max_drawdown": 1.0,
         }
     )
     cfg = paper._CUR
@@ -382,6 +514,16 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
                     if dfw is not None and len(dfw)
                     else pos.get("last", pos["buy_px"])
                 )
+                qlib_veto_hi = float(params.get("qlib_veto_hi") or 0.60)
+                qlib_on = bool(params.get("qlib_veto")) and prob_map
+                if qlib_on and not pos.get("qlib_veto_used"):
+                    probe = qlib_probe(pos["symbol"], D, prob_map, qlib_veto_hi)
+                    if probe and probe[0]:
+                        # QLib 极强看多 → 否决本次空头信号卖出一次 (防踏空)。
+                        pos["qlib_veto_used"] = True
+                        st.setdefault("_qlib_veto_hits", []).append(
+                            (pos["symbol"], str(D)[:10]))
+                        continue
                 sell_price = last * (1 - paper.SLIP_SELL)
                 paper.close_position(st, pos, sell_price, "空头信号", event_type=bear["type"])
 
@@ -394,9 +536,13 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S):
             j = day_to_j[k].get(D)
             if j is None:
                 continue
-            ev = newest_buyable(rec, j, window=params["window"])
+            ev = newest_buyable(rec, j, window=params["window"],
+                                require_confirm=params.get("disc_confirm"))
             strategy = "paper_discipline_bull"
             if ev is None:
+                # 价值吸筹回退默认关闭 (纪律-only); 显式 --va 才启用
+                if not params.get("va"):
+                    continue
                 va = va_candidate(rec, j, va_m)
                 if va is None:
                     continue
@@ -554,9 +700,16 @@ def build_report(st, params):
         f"止损-{params['stop_loss'] * 100:.0f}% · 止盈+{params['take_profit'] * 100:.0f}% · "
         f"单边成本{params['cost'] * 100:.2f}%"
     )
+    trail_txt = (
+        f"移动止盈(激活+{float(params.get('trail_activate_pct') or 0) * 100:.0f}% "
+        f"回落{float(params.get('trail_back_pct') or 0) * 100:.0f}%)"
+        if bool(params.get("trailing_stop", True)) and float(params.get("trail_back_pct") or 0) > 0
+        else "固定止盈+固定止损"
+    )
+    L.append(f"- 止盈止损形态: {trail_txt}")
     L.append(
-        "- 双策略选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先, "
-        "无纪律信号时回退价值吸筹(底部整固 + 近20根内吸筹事件, 无conf门槛)"
+        "- 选股: 纪律(强多头事件 Spring/Shakeout/ST/LPS/SC conf≥阈值) 优先"
+        + ("; 价值吸筹回退已启用(--va)" if params.get("va") else " · 价值吸筹回退关闭(默认)")
     )
     if params.get("va_confirm"):
         L.append(
@@ -597,6 +750,9 @@ def build_report(st, params):
     L.append("### 收益统计")
     L.append("")
     L.append(f"- 已平仓: **{s['n_closed']}** 笔 · 当前持仓 {s['n_positions']} 只")
+    if params.get("qlib_veto") and st.get("_qlib_veto_hits"):
+        L.append(f"- QLib 卖出端否决: **{len(st['_qlib_veto_hits'])}** 次 "
+                 f"(空头信号被模型强多信号否决)")
     L.append(f"- 累计收益(账面): **{s['total_return'] * 100:+.2f}%**")
     if s["win_rate"] is not None:
         L.append(
@@ -741,11 +897,34 @@ def build_report(st, params):
 def main():
     ap = argparse.ArgumentParser(description="模拟盘引擎·真实K线历史回放回测")
     ap.add_argument("--max-codes", type=int, default=60, help="扫描股票数上限")
+    ap.add_argument(
+        "--qlib-pool",
+        action="store_true",
+        help="用 qlib 训练池 (train_pool.txt) 作为 universe (保证 qlib 概率覆盖, 供 --qlib-veto 对照)",
+    )
     ap.add_argument("--conf", type=int, default=None, help="最低置信度 (默认取模块值)")
     ap.add_argument("--maxpos", type=int, default=None, help="持仓上限")
     ap.add_argument("--hold", type=int, default=None, help="持有K数")
     ap.add_argument("--stop", type=float, default=None, help="止损(小数, 如0.05)")
     ap.add_argument("--tp", type=float, default=None, help="止盈(小数, 如0.15)")
+    ap.add_argument(
+        "--trail-back",
+        type=float,
+        default=None,
+        help="移动止盈回落幅度(小数, 如0.08; 开启=追踪止损模式)",
+    )
+    ap.add_argument(
+        "--trail-activate",
+        type=float,
+        default=None,
+        help="移动止盈激活浮盈比例(小数; 0=复用止盈线)",
+    )
+    ap.add_argument(
+        "--no-trail",
+        action="store_false",
+        dest="trailing_stop",
+        help="关闭移动止盈/追踪止损 (退化为固定止盈+固定止损)",
+    )
     ap.add_argument("--cost", type=float, default=None, help="单边成本")
     ap.add_argument("--cash", type=float, default=None, help="初始资金")
     ap.add_argument("--window", type=int, default=10, help="信号可买入窗口(根)")
@@ -782,6 +961,17 @@ def main():
         dest="bear_exit",
         help="关闭事件型空头信号卖出 (默认开启: 持仓遇 UTAD/LPSY 主动平仓)",
     )
+    ap.add_argument(
+        "--qlib-veto",
+        action="store_true",
+        help="QLib 卖出端否决: 空头信号卖出触发且模型极强看多(prob≥0.6)时否决该次平仓一次",
+    )
+    ap.add_argument(
+        "--qlib-veto-hi",
+        type=float,
+        default=0.60,
+        help="QLib 否决阈值 (prob_buy, 默认0.60)",
+    )
     ap.add_argument("--start", default="", help="回放起始日期 YYYY-MM-DD")
     ap.add_argument(
         "--datalen",
@@ -801,6 +991,11 @@ def main():
         help="价值吸筹·确认式入场: 事件后首根收盘站上MA10再建仓 (默认事件出现即买)",
     )
     ap.add_argument(
+        "--disc-confirm",
+        action="store_true",
+        help="纪律·确认式入场: 事件确认(收上事件极值)后首根才建仓, 减少0~2根回踩止损",
+    )
+    ap.add_argument(
         "--va-slots",
         type=int,
         default=0,
@@ -810,8 +1005,12 @@ def main():
         "--va-bear-grace",
         type=int,
         default=0,
-        help="价值吸筹·空头卖出宽限期 (根): 吸筹建仓后前 N 根不因 "
-        "UTAD/LPSY 空头事件平仓 (默认0=无宽限)",
+        help="价值吸筹·空头卖出宽限期(根, 0=关闭)",
+    )
+    ap.add_argument(
+        "--va",
+        action="store_true",
+        help="启用价值吸筹回退 (默认关闭: 只跑纪律策略 paper_discipline_bull)",
     )
     ap.add_argument("--report", default="", help="写出报告 md 路径")
     ap.add_argument("--export", default="", help="导出逐笔 CSV 路径")
@@ -830,6 +1029,12 @@ def main():
         "hold_bars": args.hold if args.hold is not None else 999,
         "stop_loss": args.stop if args.stop is not None else defaults["stop_loss"],
         "take_profit": args.tp if args.tp is not None else defaults["take_profit"],
+        "trailing_stop": args.trailing_stop,
+        "trail_back_pct": args.trail_back if args.trail_back is not None
+        else defaults["trail_back_pct"],
+        "trail_activate_pct": args.trail_activate if args.trail_activate is not None
+        else defaults["trail_activate_pct"],
+        "trail_atr_mult": defaults["trail_atr_mult"],
         "cost": args.cost if args.cost is not None else defaults["cost"],
         "init_cash": args.cash if args.cash is not None else defaults["init_cash"],
         "window": args.window,
@@ -840,8 +1045,12 @@ def main():
         "flow_gate": args.flow_gate,
         "sect_gate": args.sect_gate,
         "bear_exit": args.bear_exit,
+        "qlib_veto": args.qlib_veto,
+        "qlib_veto_hi": args.qlib_veto_hi,
         "strategy_track": args.strategy_track,
         "va_confirm": args.va_confirm,
+        "disc_confirm": args.disc_confirm,
+        "va": args.va,
         "va_slots": args.va_slots,
         "va_bear_grace": args.va_bear_grace,
     }
@@ -851,16 +1060,26 @@ def main():
     # wyckoff_all_stocks.json → local_universe 会返回 0, 导致"扫描 0 只"。
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     uni = []
-    try:
-        from wyckoff.utils import normalize_symbol
+    if args.qlib_pool:
+        try:
+            from wyckoff.utils import normalize_symbol
 
-        list_path = os.path.join(repo_root, "wyckoff_all_stocks.json")
-        import json
+            pool_path = os.path.join(repo_root, "data", "train_pool.txt")
+            with open(pool_path, encoding="utf-8") as f:
+                uni = [normalize_symbol(c.strip()) for c in f if c.strip()]
+        except Exception:
+            uni = []
+    if not uni:
+        try:
+            from wyckoff.utils import normalize_symbol
 
-        with open(list_path, encoding="utf-8") as f:
-            uni = [normalize_symbol(c) for c in json.load(f).keys()]
-    except Exception:
-        uni = []
+            list_path = os.path.join(repo_root, "wyckoff_all_stocks.json")
+            import json
+
+            with open(list_path, encoding="utf-8") as f:
+                uni = [normalize_symbol(c) for c in json.load(f).keys()]
+        except Exception:
+            uni = []
     # 兜底: 在线宇宙 / 主目录 local_universe
     if not uni:
         try:
@@ -935,8 +1154,13 @@ def main():
             if market_gate
             else "大盘20日线门禁: 已启用(指数数据缺失, 视为不满足)"
         )
-    st = replay(stocks, params, market_gate=market_gate)
-
+    prob_map = {}
+    if args.qlib_veto:
+        prob_map = load_qlib_prob_map(stocks)
+        print(
+            f"QLib 概率映射: {len(prob_map)} 只 (缺口 {len(stocks) - len(prob_map)} 只)"
+        )
+    st = replay(stocks, params, market_gate=market_gate, prob_map=prob_map)
     if args.export:
         import csv
 
