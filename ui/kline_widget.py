@@ -91,6 +91,7 @@ LAYER_DEFS = (
     ("vsa", "VSA"),
     ("locks", "锁点"),
     ("news", "新闻"),
+    ("structure", "结构"),
 )
 
 
@@ -511,7 +512,7 @@ class KlineWidget(BasePlotWidget):
                  draw_waves=True, locks=None, tr=None, profile=None, phase=None,
                  segs=None, sector=None, vsa_signals=None, wave_cum=None,
                  wave_segs=None, up_mask=None, caption=None, symbol=None,
-                 scale=240, news_markers=None, **extra):
+                 scale=240, news_markers=None, struct=None, **extra):
         # 批量更新: 三栏图表构建期间禁用重绘 (减少中间状态闪烁)
         self.setUpdatesEnabled(False)
         try:
@@ -559,7 +560,7 @@ class KlineWidget(BasePlotWidget):
                               [list(w) for w in (waves or [])],
                               bool(draw_waves), locks or [], tr, profile,
                               segs or [], sector, vsa_signals or [],
-                              news_markers or [])
+                              news_markers or [], struct)
             self._build_volume(df, wave_segs or [])
             self._build_cum(df, wave_cum, wave_segs, caption)
 
@@ -696,7 +697,7 @@ class KlineWidget(BasePlotWidget):
     # ── 主图: 蜡烛 + 均线 + 波段 + 事件 + 锁 + VSA ──
     def _build_price(self, df, title, pivots, events, waves, draw_waves,
                      locks, tr, profile, segs, sector, vsa_signals,
-                     news_markers=None):
+                     news_markers=None, struct=None):
         x = np.arange(self._n)
         plot = self.price_plot
         plot.setTitle(title or "", color=theme.C_TEXT, size=f"{self._fs(3)}pt")
@@ -783,23 +784,105 @@ class KlineWidget(BasePlotWidget):
 
         x_end = self._n - 1
         if tr:
-            plot.addItem(pg.InfiniteLine(
-                pos=tr["top"], angle=0,
-                pen=_pen(theme.C_UP, 1.0, Qt.PenStyle.DashDotLine)))
-            plot.addItem(pg.InfiniteLine(
-                pos=tr["bottom"], angle=0,
-                pen=_pen(theme.C_DOWN, 1.0, Qt.PenStyle.DashDotLine)))
-            self._text(plot, x_end, tr["top"], f" TR上轨 {tr['top']:.2f}",
-                       theme.C_UP, anchor=(1, 0.5), delta=-2)
-            self._text(plot, x_end, tr["bottom"], f" TR下轨 {tr['bottom']:.2f}",
-                       theme.C_DOWN, anchor=(1, 0.5), delta=-2)
+            # TR 箱体: 半透明底色让盘整区一目了然
+            tr_fill = pg.LinearRegionItem(
+                [float(tr["bottom"]), float(tr["top"])],
+                orientation='horizontal',
+                brush=_brush_alpha(theme.C_AMBER, 0.055),
+                pen=pg.mkPen(None))
+            tr_fill.setZValue(-80)
+            tr_fill.mouseEnabled = False
+            self._add(plot, tr_fill, "structure")
+            for pos, color in [(tr["top"], theme.C_UP), (tr["bottom"], theme.C_DOWN)]:
+                line = pg.InfiniteLine(pos=float(pos), angle=0,
+                                       pen=_pen(color, 1.0, Qt.PenStyle.DashDotLine))
+                self._add(plot, line, "structure")
+            self._text(plot, x_end, float(tr["top"]),
+                       f" TR上轨 {tr['top']:.2f}", theme.C_UP,
+                       anchor=(1, 0.5), delta=-2, layer="structure")
+            self._text(plot, x_end, float(tr["bottom"]),
+                       f" TR下轨 {tr['bottom']:.2f}", theme.C_DOWN,
+                       anchor=(1, 0.5), delta=-2, layer="structure")
         if profile:
             poc = profile["poc"]
-            plot.addItem(pg.InfiniteLine(
-                pos=poc, angle=0,
-                pen=_pen(theme.C.get("poc", theme.C_AMBER), 1.2, Qt.PenStyle.DotLine)))
-            self._text(plot, x_end, poc, f" POC {poc:.2f}",
-                       theme.C.get("poc", theme.C_AMBER), anchor=(1, 0.5), delta=-2)
+            line = pg.InfiniteLine(
+                pos=float(poc), angle=0,
+                pen=_pen(theme.C.get("poc", theme.C_AMBER), 1.2, Qt.PenStyle.DotLine))
+            self._add(plot, line, "structure")
+            self._text(plot, x_end, float(poc), f" POC {poc:.2f}",
+                       theme.C.get("poc", theme.C_AMBER),
+                       anchor=(1, 0.5), delta=-2, layer="structure")
+            # HVN/LVN 节点带
+            for hv in profile.get("hvn", [])[:3]:
+                ylo_b = float(hv["lo"])
+                yhi_b = float(hv["hi"])
+                band = pg.LinearRegionItem(
+                    [ylo_b, yhi_b], orientation='horizontal',
+                    brush=_brush_alpha(theme.C_AMBER, 0.065),
+                    pen=pg.mkPen(None))
+                band.setZValue(-75)
+                band.mouseEnabled = False
+                self._add(plot, band, "structure")
+                self._text(plot, x_end, (ylo_b + yhi_b) / 2, " HVN",
+                           theme.C_AMBER, anchor=(1, 0.5), delta=-2,
+                           layer="structure")
+            for lv in profile.get("lvn", [])[:3]:
+                ylo_l = float(lv["lo"])
+                yhi_l = float(lv["hi"])
+                band = pg.LinearRegionItem(
+                    [ylo_l, yhi_l], orientation='horizontal',
+                    brush=_brush_alpha(theme.C_PANEL, 0.10),
+                    pen=pg.mkPen(theme.C_PANEL, width=0))
+                band.setZValue(-75)
+                band.mouseEnabled = False
+                self._add(plot, band, "structure")
+
+        # 辅助画线: Creek 小溪 / Ice 冰线 / S·R / Throwback / SOT
+        if struct:
+            ytop, ybot = self._full_y
+            span = ytop - ybot
+            for sr in struct.get("s_r", []):
+                col = (theme.C.get("sup", theme.C_UP) if sr["role"] == "S"
+                       else theme.C.get("res", theme.C_DOWN))
+                line = pg.InfiniteLine(pos=float(sr["price"]), angle=0,
+                                       pen=_pen(col, 0.8, Qt.PenStyle.DashLine))
+                line.setZValue(-10)
+                self._add(plot, line, "structure")
+            if struct.get("creek"):
+                ck_price = float(struct["creek"]["price"])
+                line = pg.InfiniteLine(pos=ck_price, angle=0,
+                                       pen=_pen(theme.C.get("creek", "#2563eb"), 1.4,
+                                                Qt.PenStyle.DashLine))
+                line.setZValue(-8)
+                self._add(plot, line, "structure")
+                self._text(plot, x_end, ck_price,
+                           f" 小溪 {ck_price:.2f}", theme.C.get("creek", "#2563eb"),
+                           anchor=(1, 0.5), delta=-2, layer="structure")
+            if struct.get("ice"):
+                ice_price = float(struct["ice"]["price"])
+                line = pg.InfiniteLine(pos=ice_price, angle=0,
+                                       pen=_pen(theme.C.get("ice", "#7c3aed"), 1.4,
+                                                Qt.PenStyle.DashLine))
+                line.setZValue(-8)
+                self._add(plot, line, "structure")
+                self._text(plot, x_end, ice_price,
+                           f" 冰线 {ice_price:.2f}", theme.C.get("ice", "#7c3aed"),
+                           anchor=(1, 0.5), delta=-2, layer="structure")
+            for st in struct.get("events", []):
+                col = (theme.C.get("throwback", "#0ea5e9")
+                       if st["type"] == "Throwback"
+                       else theme.C.get("sot", "#f59e0b"))
+                ix = int(st["idx"])
+                yy = float(st["price"])
+                dot = pg.PlotDataItem([ix], [yy], symbol="t", symbolSize=9,
+                                      symbolBrush=pg.mkBrush(col),
+                                      symbolPen=pg.mkPen(col))
+                self._add(plot, dot, "structure")
+                self._text(plot, ix, yy - span * 0.01,
+                           f" {st['type']}·{st['conf']} ", col,
+                           anchor=(0.5, 1), delta=-2, bold=True,
+                           fill=_brush_alpha(theme.C_PANEL, 0.85),
+                           layer="structure")
 
         if draw_waves and len(waves) >= 2:
             self._draw_waves(plot, waves)

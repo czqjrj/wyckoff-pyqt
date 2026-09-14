@@ -11,7 +11,7 @@ from wyckoff.config import EVENT_COLORS
 
 _KEYS = {
     "df", "title", "pivots", "events", "waves", "draw_waves", "locks",
-    "tr", "profile", "phase", "segs", "sector", "vsa_signals",
+    "tr", "profile", "struct", "phase", "segs", "sector", "vsa_signals",
     "wave_cum", "wave_segs", "up_mask", "caption", "symbol", "scale",
     "news_markers",
 }
@@ -146,6 +146,19 @@ def test_kline_data_auto_segs_and_passthrough():
     assert d["vsa_signals"] is vsa
     text, color = d["caption"]
     assert "板块" in text and "汽车整车" in text
+
+
+def test_kline_data_passes_struct():
+    """struct (辅助画线) 原样透传, 缺省时为 None。"""
+    df = _df()
+    struct = {"creek": {"price": 81.0, "tests": 2}, "ice": None,
+              "s_r": [{"price": 52.0, "role": "S", "tests": 3,
+                       "dist_pct": 30.0}], "events": []}
+    d = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None,
+                         struct=struct)
+    assert d["struct"] is struct
+    d2 = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None)
+    assert d2["struct"] is None
 
 
 def test_kline_caption_neutral():
