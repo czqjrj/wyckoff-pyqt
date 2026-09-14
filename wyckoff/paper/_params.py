@@ -18,7 +18,17 @@ MAX_POSITIONS = 3
 # 每笔资金占比 (1/MAX_POSITIONS 等权)
 _POS_WEIGHT = 1.0 / MAX_POSITIONS
 # 单边成本 (含佣金+印花税+滑点, 参考 backtest.cost=0.004)
+# 全面适配A股后: 撮合改用下方明细费率 (佣金/印花税/过户费), 该扁平率仅作
+# 旧口径兼容/无明细设置时的兜底, 与 backtest.py 等 flat cost 参数保持一致。
 COST = 0.004
+# ── 交易成本拆分 (A股, 见 market_rules.buy_fee/sell_fee) ──
+# 佣金率 万2.5 双边, 单笔最低 5 元; 印花税 0.05% 卖出单边; 过户费 0.001% 双向
+COMMISSION_RATE = 0.00025
+MIN_COMMISSION = 5.0
+STAMP_TAX_RATE = 0.0005
+TRANSFER_FEE_RATE = 0.00001
+# 涨跌停成交约束: 涨停封板买不进 / 跌停封板卖不出 (顺延至下一可成交 bar)
+LIMIT_FILL = True
 # 买入滑点 (价格摩擦, 占成交价比例)
 SLIP_BUY = 0.001
 SLIP_SELL = 0.001

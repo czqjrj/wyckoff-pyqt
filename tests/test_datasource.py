@@ -22,7 +22,7 @@ def _dfn(n, start="2024-01-01"):
     })
 
 
-def _fake_full(symbol, datalen, scale):
+def _fake_full(symbol, datalen, scale, adjust="qfq"):
     return _dfn(7000, start="1990-01-01")
 
 
@@ -95,7 +95,7 @@ def test_fetch_kline_uses_cache(monkeypatch):
     """缓存命中时不再调用源, 且返回长度一致。"""
     calls = {"n": 0}
 
-    def fake(symbol, datalen, scale):
+    def fake(symbol, datalen, scale, adjust="qfq"):
         calls["n"] += 1
         return _fake_full(symbol, datalen, scale)
 
@@ -115,7 +115,7 @@ def test_fetch_kline_persists_to_sqlite(monkeypatch):
     不再请求网络, 且长度/内容一致。"""
     calls = {"n": 0}
 
-    def fake(symbol, datalen, scale):
+    def fake(symbol, datalen, scale, adjust="qfq"):
         calls["n"] += 1
         return _fake_full(symbol, datalen, scale)
 
@@ -138,7 +138,7 @@ def test_fetch_kline_sqlite_insufficient_refetches(monkeypatch):
     """SQLite 缓存根数不足所选时间段 (跨 datalen 会话) 时视为失效重拉, 防"时间段没起作用"。"""
     calls = {"n": 0}
 
-    def fake(symbol, datalen, scale):
+    def fake(symbol, datalen, scale, adjust="qfq"):
         calls["n"] += 1
         return _fake_full(symbol, datalen, scale)
 
@@ -322,10 +322,10 @@ def test_fetch_kline_records_source_health(monkeypatch):
     datasource.reset_source_health()
     datasource._SOURCE_LOG.clear()
 
-    def fake_ok(symbol, datalen, scale):
+    def fake_ok(symbol, datalen, scale, adjust="qfq"):
         return _dfn(50)
 
-    def fake_bad(symbol, datalen, scale):
+    def fake_bad(symbol, datalen, scale, adjust="qfq"):
         raise RuntimeError("源不可用")
 
     monkeypatch.setattr(datasource, "_fetch_kline_sina", fake_bad)

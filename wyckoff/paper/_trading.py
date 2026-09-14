@@ -108,10 +108,13 @@ def _enqueue_buy(st, code, name, type_, conf, price, sector=None, strategy=""):
 
 
 def fill_buy(st, order, event_type: str = None):
-    """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。"""
+    """口头成交: 扣现金、建仓。现金不足时不成交, 返回 (None, 原因)。
+
+    全面适配A股: 费用按明细拆分 (佣金+过户费, 见 paper.fee_buy), 替代扁平 cost。
+    """
     price = order["price"]
     qty = order["qty"]
-    cost = qty * price * paper._CUR["cost"]
+    cost = paper.fee_buy(qty * price)
     spend = qty * price + cost
     if st.get("cash", 0) < spend:
         return None, "现金不足"
@@ -226,6 +229,10 @@ def step(st, df_by_code, trading=True):
         if paper._t1_blocked(pos, df):
             # A股 T+1: 当日买入的证券次一交易日方可卖出, 本周期跳过卖出判定
             continue
+        if paper._limit_blocked(pos["symbol"], "sell", df):
+            # 涨跌停成交约束: 最新 bar 跌停封板 → 按市价卖不出, 顺延至下一可成交 bar
+            # (止损/破位/止盈/到期 全部一并冻结, 避免按跌停价假成交)
+            continue
         if not trading:
             # 非交易时段: 只 mark-to-market (上面已更新 last), 冻结卖出判定
             continue
@@ -247,6 +254,9 @@ def step(st, df_by_code, trading=True):
         for o in list(st["pending"]):
             df = df_by_code.get(o["symbol"])
             if df is not None and len(df):
+                if paper._limit_blocked(o["symbol"], "buy", df):
+                    # 涨停封板买不进: 保留 pending, 下一 bar 顺延
+                    continue
                 close = float(df["close"].iloc[-1])
                 o["price"] = round(close * (1 + SLIP_BUY), 3)
                 o["day"] = str(df["day"].iloc[-1])
@@ -299,11 +309,14 @@ def _rebalance_portfolio(st, df_by_code):
             short = min(short, paper._CUR["max_single_conc"] * equity - cur_mv)
             if short <= 0:
                 continue
+        # 涨跌停成交约束: 最新 bar 涨停封板 → 加仓买不进, 顺延
+        if paper._limit_blocked(sym, "buy", df_by_code.get(sym)):
+            continue
         cost = last * (1 + SLIP_BUY)
         qty = int(short // (cost) // 100 * 100)  # 整手(百股)
         if qty <= 0:
             continue
-        fee = qty * cost * paper._CUR["cost"]
+        fee = paper.fee_buy(qty * cost)
         spend = qty * cost + fee
         if st["cash"] < spend:
             continue
@@ -339,17 +352,22 @@ def _rebalance_portfolio(st, df_by_code):
 
 
 def close_position(st, pos, sell_price, reason, event_type=None):
-    """平仓: 回收现金、记录已平仓与净值。"""
+    """平仓: 回收现金、记录已平仓与净值。
+
+    全面适配A股: 卖出费用按明细拆分 (佣金+过户费+印花税), 买入按佣金+过户费,
+    替代扁平成本; 净收益口径与持仓成本台账一致。
+    """
     from wyckoff.strategies.sell_strategy import evaluate_sell_reason
     # 基于事件类型的卖出策略
     reason = evaluate_sell_reason(event_type, reason)
     price = round(sell_price, 3)
-    gross = price * pos["qty"]  # 不含卖出成本的口径内部用
-    fee = gross * paper._CUR["cost"]
+    gross = price * pos["qty"]
+    fee = paper.fee_sell(gross)
     proceeds = gross - fee
     st["cash"] += proceeds
-    outlay = pos["buy_px"] * pos["qty"] * paper.net_cost_rate()
-    ret_total = (proceeds - outlay) / outlay
+    outlay = pos["buy_px"] * pos["qty"]  # 不含买入费用的出厂口径
+    buy_fee = float(pos.get("cost", 0) or 0) or paper.fee_buy(outlay)
+    ret_total = (proceeds - outlay - buy_fee) / (outlay + buy_fee) if (outlay + buy_fee) else 0.0
     st["closed"].append({
         "symbol": pos["symbol"], "name": pos.get("name", ""),
         "type": pos["type"], "conf": pos.get("conf", 50),

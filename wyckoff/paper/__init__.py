@@ -37,6 +37,11 @@ except Exception:  # pragma: no cover
     np = None
 
 from .. import paper_log, paper_strategy_accuracy
+from ..market_rules import (
+    buy_fee as _mr_buy_fee,
+    limit_blocked as _mr_limit_blocked,
+    sell_fee as _mr_sell_fee,
+)
 from ..paths import PAPER_FILE
 from ..settings_keys import S
 from ..strategies.constants import (
@@ -168,6 +173,13 @@ def apply_paper_params(settings=None):
         "take_profit": float(_get(S.Paper.TAKE_PROFIT, TAKE_PROFIT)),
         "cost": float(_get(S.Paper.COST, COST)),
         "min_conf": int(_get(S.Paper.MIN_CONF, MIN_CONF)),
+        # ── 交易成本拆分 (A股明细费率; 未单独配置时沿用模块常量) ──
+        "comm_rate": float(_get(S.Paper.COMMISSION_RATE, COMMISSION_RATE)),
+        "min_comm": float(_get(S.Paper.MIN_COMMISSION, MIN_COMMISSION)),
+        "stamp_rate": float(_get(S.Paper.STAMP_TAX_RATE, STAMP_TAX_RATE)),
+        "transfer_rate": float(_get(S.Paper.TRANSFER_FEE_RATE, TRANSFER_FEE_RATE)),
+        # 涨跌停成交约束: 涨停封板买不进 / 跌停封板卖不出 (顺延)
+        "limit_fill": bool(_get(S.Paper.LIMIT_FILL, LIMIT_FILL)),
         # 风控参数
         "max_drawdown": float(_get("paper_max_drawdown", MAX_DRAWDOWN_PCT)),
         "max_risk_pct": float(_get("paper_max_risk_pct", MAX_RISK_PCT)),
@@ -225,6 +237,11 @@ _CUR = {
     "take_profit": TAKE_PROFIT,
     "cost": COST,
     "min_conf": MIN_CONF,
+    "comm_rate": COMMISSION_RATE,
+    "min_comm": MIN_COMMISSION,
+    "stamp_rate": STAMP_TAX_RATE,
+    "transfer_rate": TRANSFER_FEE_RATE,
+    "limit_fill": LIMIT_FILL,
     "max_drawdown": MAX_DRAWDOWN_PCT,
     "max_risk_pct": MAX_RISK_PCT,
     "max_sector_conc": MAX_SECTOR_CONCENTRATION,
@@ -257,6 +274,34 @@ _CUR = {
     "wxpusher_topic_ids": PUSH_WXPUSHER_TOPIC_IDS,
     "wxpusher_uids": PUSH_WXPUSHER_UIDS,
 }
+
+
+# ── 交易成本 (A股明细拆分, 替代扁平 cost) ───────────────────
+def fee_buy(amount) -> float:
+    """买入费用 = 佣金(单笔最低5元) + 过户费 (A股明细口径)。"""
+    return _mr_buy_fee(amount, _CUR.get("comm_rate", COMMISSION_RATE),
+                       _CUR.get("min_comm", MIN_COMMISSION),
+                       _CUR.get("transfer_rate", TRANSFER_FEE_RATE))
+
+
+def fee_sell(amount) -> float:
+    """卖出费用 = 佣金(单笔最低5元) + 过户费 + 印花税(卖出单边)。"""
+    return _mr_sell_fee(amount, _CUR.get("comm_rate", COMMISSION_RATE),
+                        _CUR.get("min_comm", MIN_COMMISSION),
+                        _CUR.get("transfer_rate", TRANSFER_FEE_RATE),
+                        _CUR.get("stamp_rate", STAMP_TAX_RATE))
+
+
+def _limit_blocked(code, side, df=None) -> bool:
+    """最新 bar 涨跌停封板无法成交 (涨跌停成交约束); 未启用/无行情 → False。"""
+    if not _CUR.get("limit_fill", True):
+        return False
+    if df is None:
+        try:
+            df = _next_open(code)
+        except Exception:
+            return False
+    return _mr_limit_blocked(df, side, code)
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (见 docs/winrate_improve_eval.md §五)
 # 采用完整强梯队 {Spring,Shakeout,UTAD,LPSY,ST,LPS,SC} (沿 config.STRONG_TIER_TYPES),
@@ -482,6 +527,15 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
             #   回撤上限 / 单笔风险预算 / 行业集中度 / 单股集中度 / 资金利用率
             if _risk_blocks_entry(st, e, px):
                 continue
+            # 涨跌停成交约束: 最新 bar 涨停封板 → 按市价买不进, 顺延该候选
+            if _CUR.get("limit_fill", True):
+                try:
+                    _df_l = add_indicators(
+                        fetch_kline(code, datalen=90, scale=240), symbol=code)
+                    if _mr_limit_blocked(_df_l, "buy", code):
+                        continue
+                except Exception:
+                    pass
             # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
             # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
             stop_pct = take_pct = None

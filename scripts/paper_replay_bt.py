@@ -514,6 +514,9 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                     if dfw is not None and len(dfw)
                     else pos.get("last", pos["buy_px"])
                 )
+                # 涨跌停成交约束: D 日跌停封板 → 卖不出, 空头信号卖出顺延
+                if paper._limit_blocked(pos["symbol"], "sell", dfw):
+                    continue
                 qlib_veto_hi = float(params.get("qlib_veto_hi") or 0.60)
                 qlib_on = bool(params.get("qlib_veto")) and prob_map
                 if qlib_on and not pos.get("qlib_veto_used"):
@@ -612,10 +615,23 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             ]
         cands.sort(key=lambda x: -x["conf"])
 
+        def _fill_blocked(code, side):
+            """涨跌停成交约束: D 日该股最新 K 封板 → 返回 True (顺延不成交)。"""
+            idx = code_to_idx.get(code)
+            if idx is None:
+                return False
+            r = stocks[idx]
+            j = day_to_j[idx].get(D)
+            if j is None:
+                return False
+            return paper._limit_blocked(code, side, r["df"].iloc[: j + 1])
+
         def _try_fill(cand):
             if len(st["positions"]) >= cfg["max_pos"]:
                 return
             if paper.has_position(st, cand["code"]):
+                return
+            if _fill_blocked(cand["code"], "buy"):
                 return
             cc = params.get("chain_cap") or 0
             if cc and cand["chain"]:

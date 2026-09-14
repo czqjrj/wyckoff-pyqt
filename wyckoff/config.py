@@ -373,6 +373,8 @@ DEFAULT_SETTINGS = {
     "default_load": "600104",
     "default_scale": "日线",
     "default_period": "近3年",
+    # K线复权口径: qfq=前复权(默认) / hfq=后复权 / none=不复权
+    "data_adjust": "qfq",
     "watch_width": 190,
     "right_width": 560,
     "font_family": "Noto Sans CJK SC",

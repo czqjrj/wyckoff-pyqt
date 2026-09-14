@@ -928,6 +928,45 @@ class PaperWindow(QDialog):
             float(self._settings.get(S.Paper.INIT_CASH, 1_000_000)))
         self.sp_cash.setSuffix(" 元")
 
+        # ── 交易成本拆分 (A股: 佣金 / 最低佣金 / 印花税 / 过户费) ──
+        self.sp_comm = QDoubleSpinBox()
+        self.sp_comm.setRange(0, 1.0)
+        self.sp_comm.setSingleStep(0.005)
+        self.sp_comm.setDecimals(3)
+        self.sp_comm.setSuffix(" %")
+        self.sp_comm.setValue(
+            float(self._settings.get(S.Paper.COMMISSION_RATE, 0.00025)) * 100)
+
+        self.sp_mincomm = QDoubleSpinBox()
+        self.sp_mincomm.setRange(0, 1000)
+        self.sp_mincomm.setSingleStep(0.5)
+        self.sp_mincomm.setDecimals(2)
+        self.sp_mincomm.setSuffix(" 元")
+        self.sp_mincomm.setValue(
+            float(self._settings.get(S.Paper.MIN_COMMISSION, 5.0)))
+
+        self.sp_stamp = QDoubleSpinBox()
+        self.sp_stamp.setRange(0, 1.0)
+        self.sp_stamp.setSingleStep(0.01)
+        self.sp_stamp.setDecimals(3)
+        self.sp_stamp.setSuffix(" %")
+        self.sp_stamp.setValue(
+            float(self._settings.get(S.Paper.STAMP_TAX_RATE, 0.0005)) * 100)
+
+        self.sp_transfer = QDoubleSpinBox()
+        self.sp_transfer.setRange(0, 0.1)
+        self.sp_transfer.setSingleStep(0.001)
+        self.sp_transfer.setDecimals(3)
+        self.sp_transfer.setSuffix(" %")
+        self.sp_transfer.setValue(
+            float(self._settings.get(S.Paper.TRANSFER_FEE_RATE, 0.00001)) * 100)
+
+        self.ck_limit_fill = QCheckBox("涨跌停成交约束")
+        self.ck_limit_fill.setChecked(
+            bool(self._settings.get(S.Paper.LIMIT_FILL, True)))
+        self.ck_limit_fill.setToolTip(
+            "A股成交规则: 涨停封板买不进 / 跌停封板卖不出, 撮合顺延 (不取消)")
+
         self.ck_trailing = QCheckBox("追踪止损")
         self.ck_trailing.setChecked(
             bool(self._settings.get(S.Paper.TRAILING_STOP, False)))
@@ -990,6 +1029,23 @@ class PaperWindow(QDialog):
         grid.addWidget(QLabel("回落%"), 2, 2)
         grid.addWidget(self.sp_trail_back, 2, 3)
         grid.addWidget(self.ck_weak, 2, 4, 1, 8)
+        # 交易成本拆分行 (A股明细费率, 替代扁平「单边成本」)
+        grid.addWidget(QLabel("佣金率"), 3, 0)
+        grid.addWidget(self.sp_comm, 3, 1)
+        grid.addWidget(QLabel("最低佣金"), 3, 2)
+        grid.addWidget(self.sp_mincomm, 3, 3)
+        grid.addWidget(QLabel("印花税"), 3, 4)
+        grid.addWidget(self.sp_stamp, 3, 5)
+        grid.addWidget(QLabel("过户费"), 3, 6)
+        grid.addWidget(self.sp_transfer, 3, 7)
+        grid.addWidget(self.ck_limit_fill, 3, 8, 1, 5)
+        for w, tip in (
+            (self.sp_comm, "佣金率 (双边, 现价显示为 %)"),
+            (self.sp_mincomm, "单笔佣金最低收费 (元)"),
+            (self.sp_stamp, "印花税: 仅卖出单边收取 (0.05% = 2023-08-28 起)"),
+            (self.sp_transfer, "过户费: 双向收取 (0.001%)"),
+        ):
+            w.setToolTip(tip + "; 撮合按明细拆分计算, 替代「单边成本」扁平率")
         for w in fields:
             w[1].setToolTip({
                 self.sp_maxpos: "同时持有的最大股票数 (1~5)",
@@ -997,17 +1053,17 @@ class PaperWindow(QDialog):
                 self.sp_hold: "持有 K 根后到期强制平仓",
                 self.sp_stop: "固定止损兜底幅度 (追踪未激活时控制下行风险)",
                 self.sp_tp: "止盈/移动止盈激活线",
-                self.sp_cost: "单边成本 (佣金+印花税+滑点)",
+                self.sp_cost: "单边成本 (佣金+印花税+滑点), 旧口径兜底",
                 self.sp_cash: "模拟盘初始资金 (更改后需重置账户)",
             }[w[1]])
         hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+15%·回落 8% / "
                       "弱市过滤开")
         hint.setStyleSheet(f"color: {theme.C_MUTED};")
-        grid.addWidget(hint, 3, 0, 1, len(fields) * 2 + 1)
+        grid.addWidget(hint, 4, 0, 1, len(fields) * 2 + 1)
 
         btn = _ghost_btn("保存到设置")
         btn.clicked.connect(self._save_config)
-        grid.addWidget(btn, 3, len(fields) * 2)
+        grid.addWidget(btn, 4, len(fields) * 2)
         return group
 
     def _collect_config(self):
@@ -1024,6 +1080,12 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.TRAIL_ACTIVATE_PCT] = self.sp_trail_act.value()
         self._settings[S.Paper.TRAIL_BACK_PCT] = self.sp_trail_back.value()
         self._settings[S.Paper.WEAK_FILTER] = self.ck_weak.isChecked()
+        # 交易成本拆分 (存储为费率小数)
+        self._settings[S.Paper.COMMISSION_RATE] = self.sp_comm.value() / 100
+        self._settings[S.Paper.MIN_COMMISSION] = self.sp_mincomm.value()
+        self._settings[S.Paper.STAMP_TAX_RATE] = self.sp_stamp.value() / 100
+        self._settings[S.Paper.TRANSFER_FEE_RATE] = self.sp_transfer.value() / 100
+        self._settings[S.Paper.LIMIT_FILL] = self.ck_limit_fill.isChecked()
         # 自动执行模式 (0=关闭 / 900=15m / 1800=30m)
         self._settings[S.Paper.SCAN_INTERVAL] = (
             0, 900, 1800)[self.auto_on.currentIndex()]

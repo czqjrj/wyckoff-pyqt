@@ -554,6 +554,28 @@ class BacktestPage(SettingsPage):
         grid.addWidget(self.sp_bt_c, row, 1)
         row += 1
 
+        # 数据口径与成交约束 (A股规则)
+        self.cb_adjust = QComboBox()
+        self.cb_adjust.addItem("前复权 (默认)", "qfq")
+        self.cb_adjust.addItem("后复权", "hfq")
+        self.cb_adjust.addItem("不复权", "none")
+        idx = self.cb_adjust.findData(self._s.get("data_adjust", "qfq"))
+        self.cb_adjust.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cb_adjust.setToolTip("K线复权口径 (A股除权除息适配)。\n"
+                                  "前复权贴近当前价格形态; 后复权保留真实历史涨幅; "
+                                  "不复权用原始价。切换后需重新加载行情。")
+        grid.addWidget(QLabel("K线复权:"), row, 0)
+        grid.addWidget(self.cb_adjust, row, 1)
+        row += 1
+
+        self.cb_limit_fill = QCheckBox(
+            "涨跌停成交约束: 涨停封板买不进 / 跌停封板卖不出 (顺延)")
+        self.cb_limit_fill.setChecked(bool(self._s.get("paper_limit_fill", True)))
+        self.cb_limit_fill.setToolTip("A股成交规则: 涨停封板时按市价无法买入, "
+                                      "跌停封板时无法卖出; 撮合顺延至下一可成交 bar。")
+        grid.addWidget(self.cb_limit_fill, row, 0, 1, 2)
+        row += 1
+
         # 分析灵敏度
         group, grid = self.add_group("分析灵敏度")
         row = 0
@@ -627,6 +649,8 @@ class BacktestPage(SettingsPage):
             "bt_horizon": self.sp_bt_h.value(),
             "bt_min_n": self.sp_bt_n.value(),
             "bt_cost": self.sp_bt_c.value(),
+            "data_adjust": self.cb_adjust.currentData(),
+            "paper_limit_fill": self.cb_limit_fill.isChecked(),
             "pivot_sensitivity": self.cb_sensitivity.currentData(),
             "pnf_box_mode": self.cb_box_mode.currentData(),
             "pnf_atr_factor": self.sp_atr_factor.value(),

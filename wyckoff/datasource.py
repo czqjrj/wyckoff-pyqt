@@ -1,12 +1,15 @@
 """行情数据获取 (K线 / 实时 / 名称), 带两级缓存与多数据源容灾。
 
 默认走新浪财经接口; 失败时自动依次切换到东方财富、腾讯行情 (见 F3)。
-所有 K 线统一返回同构 DataFrame: day/open/high/low/close/volume (单位为股),
-且全部为**前复权**口径: 新浪返回不复权后用其复权因子表折算, 东财(fqt=1)与
-腾讯(qfq)本身即前复权。三源口径一致, 保证跨会话/跨源分析结果可复现。
+所有 K 线统一返回同构 DataFrame: day/open/high/low/close/volume (单位为股)。
+复权口径: 全面适配A股后支持 qfq 前复权(默认) / hfq 后复权 / none 不复权
+(见 set_adjust / fetch_kline(adjust=)), 各口径按可用源集合自动路由:
+qfq 走新浪(前复权)+东财+腾讯+阿克share, hfq 与 none 排除新浪(不复权口径无法
+折算后复权、复权因子存在漂移), 走东财/阿克share (+腾讯hfq)。跨口径缓存隔离。
 
 缓存两级: 进程内内存 (5min TTL) 之上叠加 SQLite 持久缓存 (见 sqldb.py,
 K线 4h / 复权因子 7d), 重启应用不重抓历史, 批量扫描/回测大量复用。
+SQLite 持久层仅按 qfq 口径落盘 (主键无复权维度), hfq/none 仅内存缓存。
 """
 import json
 import re
@@ -29,7 +32,24 @@ _KLINE_CACHE_TTL = 300  # 5分钟
 # 冷扫描后立刻被挤出, 二级重探全量回源 SQLite。提到 2048 (每条约 24KB ≈ 48MB,
 # 16G 内存可接受), 显著提高扫描-再探命中率。
 _KLINE_CACHE_MAX = 2048
+
+# 全局 K 线复权口径: "qfq"前复权(默认) / "hfq"后复权 / "none"不复权。
+# fetch_kline(adjust=None) 沿用此值; UI 设置解析后经 set_adjust 切换。
+_DEFAULT_ADJUST = "qfq"
 _KLINE_LOCK = Lock()
+
+
+def set_adjust(adjust: str) -> str:
+    """切换全局 K 线复权口径 ("qfq"/"hfq"/"none"), 并清空内存 K 线缓存,
+    避免新旧口径混串。非法值抛 ValueError。返回归一化后的口径。"""
+    global _DEFAULT_ADJUST
+    adj = (adjust or "").lower()
+    if adj not in ("qfq", "hfq", "none"):
+        raise ValueError(f"不支持的复权口径: {adjust!r}")
+    _DEFAULT_ADJUST = adj
+    with _KLINE_LOCK:
+        _KLINE_CACHE.clear()
+    return adj
 
 # SQLite 持久缓存 TTL: 内存未命中时回退到落盘的行情数据, 跨会话复用。
 # 比内存 TTL 长得多 (K线 4h, 复权因子 7d), 兼顾"重启不重抓历史"与"数据不过期失真"。
@@ -110,7 +130,8 @@ def _normalize_kline_df(rows) -> pd.DataFrame:
 
 
 # ── 新浪 (主源) ──
-def _fetch_kline_sina(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
+def _fetch_kline_sina(symbol: str, datalen: int, scale: int, adjust: str = "qfq") -> pd.DataFrame:
+    """新浪 K 线。仅前复权口径可用 (新浪不复权无法折算后复权/不复权价格)。"""
     url = "https://quotes.sina.cn/cn/api/jsonp_v2.php/data/CN_MarketDataService.getKLineData"
     params = {"symbol": symbol, "scale": str(scale), "datalen": str(datalen), "ma": "no"}
     r = http_session().get(url, params=params, headers=SINA_HEADERS, timeout=_HTTP_TIMEOUT)
@@ -122,7 +143,8 @@ def _fetch_kline_sina(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
         raise RuntimeError(f"未获取到 {symbol} 的行情数据, 请检查代码是否正确")
     df = _normalize_kline_df([[d["day"], d["open"], d["high"], d["low"],
                                d["close"], d["volume"]] for d in data])
-    _apply_sina_qfq(symbol, df)
+    if adjust == "qfq":
+        _apply_sina_qfq(symbol, df)
     return df
 
 
@@ -180,13 +202,15 @@ def _em_secid(symbol: str) -> str:
     return f"1.{code}" if symbol.startswith("sh") else f"0.{code}"
 
 
-def _fetch_kline_eastmoney(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
+def _fetch_kline_eastmoney(symbol: str, datalen: int, scale: int, adjust: str = "qfq") -> pd.DataFrame:
     klt = _KLT_MAP.get(scale)
     if klt is None:
         raise RuntimeError(f"东方财富不支持 {scale} 分钟周期")
+    # 复权口径: fqt 1=前复权(默认) / 2=后复权 / 0=不复权
+    fqt = {"hfq": "2", "none": "0"}.get(adjust, "1")
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     params = {
-        "secid": _em_secid(symbol), "klt": str(klt), "fqt": "1",
+        "secid": _em_secid(symbol), "klt": str(klt), "fqt": fqt,
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56",
         "beg": "0", "end": "20500101", "lmt": str(datalen),
@@ -210,16 +234,18 @@ def _fetch_kline_eastmoney(symbol: str, datalen: int, scale: int) -> pd.DataFram
 _TX_PERIOD = {240: "day", 120: "m120", 60: "m60", 30: "m30", 15: "m15"}
 
 
-def _fetch_kline_tencent(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
+def _fetch_kline_tencent(symbol: str, datalen: int, scale: int, adjust: str = "qfq") -> pd.DataFrame:
     period = _TX_PERIOD.get(scale)
     if period is None:
         raise RuntimeError(f"腾讯行情不支持 {scale} 分钟周期")
+    # 复权口径: qfq/hfq 走对应因子段, none 不在腾讯可用集合内 (调用侧已排除)
+    fq = "hfq" if adjust == "hfq" else "qfq"
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-    params = {"param": f"{symbol},{period},,,{datalen},qfq"}
+    params = {"param": f"{symbol},{period},,,{datalen},{fq}"}
     headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
     r = http_session().get(url, params=params, headers=headers, timeout=_HTTP_TIMEOUT)
     node = (r.json().get("data") or {}).get(symbol) or {}
-    klines = node.get(period) or node.get("qfq" + period) or node.get("day") or []
+    klines = node.get(period) or node.get(fq + period) or node.get("day") or []
     if not klines:
         raise RuntimeError(f"腾讯未返回 {symbol} 数据")
     rows = []
@@ -236,11 +262,12 @@ def _fetch_kline_tencent(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
 _AK_PERIOD = {240: "daily", 60: "60min", 30: "30min", 15: "15min"}
 
 
-def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
+def _fetch_kline_akshare(symbol: str, datalen: int, scale: int, adjust: str = "qfq") -> pd.DataFrame:
     """使用 akshare 获取 K 线数据, 作为第三级容灾源。
 
-    日线主用新浪口径 stock_zh_a_daily (前复权, 与主源新浪同源同口径, 东财接口
-    被限/变动时仍可用), 失败回退东财口径 stock_zh_a_hist; 分钟级仅 hist 支持。
+    日线前复权主用新浪口径 stock_zh_a_daily (与主源新浪同源同口径且不乘手→股,
+    东财接口被限/变动时仍可用); 后复权/不复权及分钟级用东财口径 stock_zh_a_hist
+    (成交量单位=手, 需 ×100 归一到股, 与东财/腾讯路径一致)。
     指数代码 (sh000*/sz399*) stock_zh_a_daily 不适用, 直接走 hist。
     """
     period = _AK_PERIOD.get(scale)
@@ -253,7 +280,8 @@ def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     code = symbol[-6:]   # stock_zh_a_hist 只认 6 位代码; stock_zh_a_daily 需带 sh/sz 前缀
     is_index = symbol.startswith(("sh000", "sz399"))
     df = None
-    if period == "daily" and not is_index:
+    from_hist = False
+    if period == "daily" and not is_index and adjust == "qfq":
         try:
             # 新浪口径, 前复权; 必须给显式日期范围 (空串会触发 DatetimeIndex 切片异常)
             df = ak.stock_zh_a_daily(symbol=symbol, start_date="19900101",
@@ -261,9 +289,11 @@ def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
         except Exception:
             df = None
     if df is None or df.empty:
+        ak_adj = "hfq" if adjust == "hfq" else ("qfq" if adjust == "qfq" else "")
         df = ak.stock_zh_a_hist(symbol=code, period=period,
                                 start_date="19900101", end_date="21000101",
-                                adjust="qfq")
+                                adjust=ak_adj)
+        from_hist = True
     if df is None or df.empty:
         raise RuntimeError(f"阿克share未返回 {symbol} 数据")
     # 口径统一: akshare 两接口分别返回中文列 (日期/开盘/...) 或英文列 (date/open/...)
@@ -283,6 +313,9 @@ def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["close"])
+    # 东财 stock_zh_a_hist 成交量单位=手 → 股 (新浪 stock_zh_a_daily 已为股)
+    if from_hist and "volume" in df.columns:
+        df["volume"] = df["volume"] * 100
     # 降序→正序
     df = df.sort_values("day").reset_index(drop=True)
     # 截取 datalen 根
@@ -291,9 +324,9 @@ def _fetch_kline_akshare(symbol: str, datalen: int, scale: int) -> pd.DataFrame:
     return df
 
 
-def _kline_cache_get(symbol, scale, datalen):
+def _kline_cache_get(symbol, scale, datalen, adjust="qfq"):
     """内存 LRU 命中: 返回截断到 datalen 的副本, 未命中/过期/根数不足返回 None。"""
-    ck = (symbol, scale)
+    ck = (symbol, scale, adjust)
     with _KLINE_LOCK:
         cached = _KLINE_CACHE.get(ck)
         if cached is not None:
@@ -310,9 +343,9 @@ def _kline_cache_get(symbol, scale, datalen):
     return df.tail(datalen).copy()
 
 
-def _kline_cache_put(symbol, scale, full_df):
-    """写入内存 LRU (存全量, 读取时按需截断; 同股不同 datalen 共享一条)。"""
-    ck = (symbol, scale)
+def _kline_cache_put(symbol, scale, full_df, adjust="qfq"):
+    """写入内存 LRU (存全量, 读取时按需截断; 同股同复权不同 datalen 共享一条)。"""
+    ck = (symbol, scale, adjust)
     with _KLINE_LOCK:
         _KLINE_CACHE[ck] = (time.time(), full_df)
         _KLINE_CACHE.move_to_end(ck)
@@ -320,16 +353,27 @@ def _kline_cache_put(symbol, scale, full_df):
             _KLINE_CACHE.popitem(last=False)
 
 
-def _ordered_kline_sources():
-    """按健康度动态排序 K线源: 失败率高的源排后面。
-
+def _ordered_kline_sources(adjust="qfq"):
+    """按健康度动态排序 K线源; 复权口径不同, 可用源集合不同:
+    qfq: 新浪 → 东财 → 腾讯 → 阿克share (默认);
+    hfq: 东财 → 阿克share → 腾讯 (新浪不复权口径无法折算后复权, 排除);
+    none: 东财 → 阿克share (新浪存在复权漂移/腾讯无不复权因子, 排除)。
     样本 <3 次的源不参与重排 (视为中性), 避免偶发失败导致抖动;
-    无任何统计时保持默认顺序 (新浪 → 东财 → 腾讯 → 阿克share)。
+    无任何统计时保持默认顺序。
     """
-    sources = [("新浪", _fetch_kline_sina),
-               ("东方财富", _fetch_kline_eastmoney),
-               ("腾讯", _fetch_kline_tencent),
-               ("阿克share", _fetch_kline_akshare)]
+    if adjust == "hfq":
+        base_sources = [("东方财富", _fetch_kline_eastmoney),
+                        ("阿克share", _fetch_kline_akshare),
+                        ("腾讯", _fetch_kline_tencent)]
+    elif adjust == "none":
+        base_sources = [("东方财富", _fetch_kline_eastmoney),
+                        ("阿克share", _fetch_kline_akshare)]
+    else:
+        base_sources = [("新浪", _fetch_kline_sina),
+                        ("东方财富", _fetch_kline_eastmoney),
+                        ("腾讯", _fetch_kline_tencent),
+                        ("阿克share", _fetch_kline_akshare)]
+    sources = base_sources
     with _HEALTH_LOCK:
         snapshot = {n: dict(h) for n, h in _SOURCE_HEALTH.items()}
 
@@ -345,41 +389,49 @@ def _ordered_kline_sources():
     return sorted(sources, key=penalty)
 
 
-def fetch_kline(symbol: str, datalen: int = 700, scale: int = 240, use_cache: bool = True) -> pd.DataFrame:
+def fetch_kline(symbol: str, datalen: int = 700, scale: int = 240, use_cache: bool = True,
+                adjust: str = None) -> pd.DataFrame:
     """从行情接口获取K线 (scale: 240日线 / 120两小时 / 60一小时), 两级缓存。
     内存 5min 命中直接返回; 未命中回退到 SQLite 持久缓存 (重启后跨会话复用,
     需满足 datalen 根数否则视为失效重拉); 均未命中才请求网络
-    (新浪 → 东方财富 → 腾讯 自动切换, 源顺序按健康度动态调整)。
+    (源顺序按复权口径与健康度动态调整)。
     无论哪个源, 最终都只保留最近 datalen 根 K 线 (东方财富接口在 beg=0 时会忽略
     lmt 参数返回全部历史, 必须在此强制截断), 保证"时间段"选择真正生效。
+    adjust: "qfq"(默认)/"hfq"/"none"; None 沿用全局复权口径 _DEFAULT_ADJUST
+    (UI 设置解析后调 datasource.set_adjust 切换)。
     use_cache=False 时忽略缓存强制重新拉取 (并刷新内存/SQLite 缓存,
     供定时刷新/手动刷新用)。"""
-    key = (symbol, datalen, scale)
+    if not adjust:
+        adjust = _DEFAULT_ADJUST
+    key = (symbol, datalen, scale, adjust)
     if use_cache:
-        hit = _kline_cache_get(symbol, scale, datalen)
+        hit = _kline_cache_get(symbol, scale, datalen, adjust)
         if hit is not None:
             with _KLINE_LOCK:
                 source = _SOURCE_LOG.get(key, "新浪")
             return hit
-        dbhit = sqldb.kline_load(symbol, scale, _KLINE_DB_TTL)
-        if dbhit is not None:
-            df, source = dbhit
-            if len(df) >= datalen:
-                _kline_cache_put(symbol, scale, df)
-                with _KLINE_LOCK:
-                    _SOURCE_LOG[key] = source
-                return df.tail(datalen).reset_index(drop=True).copy()
+        # SQLite 持久层按 qfq 口径落盘 (kline_cache 主键无复权维度), 仅 qfq 命中
+        if adjust == "qfq":
+            dbhit = sqldb.kline_load(symbol, scale, _KLINE_DB_TTL)
+            if dbhit is not None:
+                df, source = dbhit
+                if len(df) >= datalen:
+                    _kline_cache_put(symbol, scale, df, adjust)
+                    with _KLINE_LOCK:
+                        _SOURCE_LOG[key] = source
+                    return df.tail(datalen).reset_index(drop=True).copy()
     last_err = None
-    for name, fn in _ordered_kline_sources():
+    for name, fn in _ordered_kline_sources(adjust):
         try:
-            df = fn(symbol, datalen, scale)
+            df = fn(symbol, datalen, scale, adjust)
             _health_hit(name, True)
             full_df = df.copy()
             out = df.tail(datalen).reset_index(drop=True)
-            _kline_cache_put(symbol, scale, full_df)
+            _kline_cache_put(symbol, scale, full_df, adjust)
             with _KLINE_LOCK:
                 _SOURCE_LOG[key] = name
-            sqldb.kline_save(symbol, scale, out, name)
+            if adjust == "qfq":
+                sqldb.kline_save(symbol, scale, out, name)
             return out
         except Exception as e:
             _health_hit(name, False, e)

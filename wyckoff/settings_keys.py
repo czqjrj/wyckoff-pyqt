@@ -27,6 +27,8 @@ class General(_Base):
     AUTO_SHOW_ENTRIES = "auto_show_entries"
     START_NO_ANALYSIS = "startup_no_analysis"
     THEME = "theme"
+    # K线复权口径: "qfq"=前复权(默认) / "hfq"=后复权 / "none"=不复权
+    DATA_ADJUST = "data_adjust"
 
 
 # ── 界面尺寸/字体 ──────────────────────────────────────────
@@ -87,6 +89,16 @@ class Paper(_Base):
     COST = "paper_cost"
     MIN_CONF = "paper_min_conf"
     SCAN_INTERVAL = "paper_scan_interval"
+    # ── 交易成本拆分 (A股: 佣金/印花税/过户费, 替代扁平单边成本) ──
+    # 佣金率 (双边, 万2.5=0.00025) 与单笔最低佣金 (5元)
+    COMMISSION_RATE = "paper_commission_rate"
+    MIN_COMMISSION = "paper_min_commission"
+    # 印花税: 卖出单边 0.05% (2023-08-28 起)
+    STAMP_TAX_RATE = "paper_stamp_tax_rate"
+    # 过户费: 双向 0.001%
+    TRANSFER_FEE_RATE = "paper_transfer_fee_rate"
+    # 涨跌停成交约束: True=涨停封板买不进 / 跌停封板卖不出 (顺延), False=不约束
+    LIMIT_FILL = "paper_limit_fill"
     # 板块权限: 未开通创业板/科创板时, 扫描/选股应排除对应代码。
     ENABLE_CHINEXT = "paper_enable_chinext"
     ENABLE_STAR = "paper_enable_star"
@@ -209,6 +221,7 @@ DEFAULTS = {
     General.AUTO_SHOW_ENTRIES: False,
     General.START_NO_ANALYSIS: True,
     General.THEME: "light",
+    General.DATA_ADJUST: "qfq",
     UI.FONT_FAMILY: "",
     UI.FONT_SIZE: 12,
     UI.WATCH_FONT_SIZE: 12,
@@ -251,6 +264,13 @@ DEFAULTS = {
     Paper.SCAN_INTERVAL: 1800,
     Paper.ENABLE_CHINEXT: False,
     Paper.ENABLE_STAR: False,
+    # 交易成本拆分 (A股真实费率, 供模拟盘撮合按明细计费)
+    Paper.COMMISSION_RATE: 0.00025,
+    Paper.MIN_COMMISSION: 5.0,
+    Paper.STAMP_TAX_RATE: 0.0005,
+    Paper.TRANSFER_FEE_RATE: 0.00001,
+    # 涨跌停成交约束默认开启
+    Paper.LIMIT_FILL: True,
     # 价值吸筹回退默认关闭 (实测为负贡献): 需用户显式 paper_enable_va=true 开启
     Paper.ENABLE_VA: False,
     # 威科夫左侧买点默认关闭 (命中率与右侧纪律叠加度低): 需显式 paper_enable_long_left=true

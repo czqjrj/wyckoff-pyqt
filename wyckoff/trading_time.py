@@ -15,10 +15,9 @@ import json
 import os
 import time
 
+from .market_rules import TRADING_SESSIONS  # noqa: F401  市场规则集中层 (单一来源)
 from .paths import DATA_DIR
 
-# A 股交易时段 ((起时,起分), (止时,止分)) 含边界: 上午 / 下午
-TRADING_SESSIONS = (((9, 30), (11, 30)), ((13, 0), (15, 0)))
 # 交易日历缓存 (akshare tool_trade_date_hist_sina), 每日刷新一次
 TRADE_DATES_CACHE = os.path.join(DATA_DIR, "wx_trade_dates.json")
 

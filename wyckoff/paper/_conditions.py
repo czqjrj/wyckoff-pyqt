@@ -409,6 +409,9 @@ def _fire_condition(st, c, last, df, side="buy", pos=None,
             break
 
     if side == "buy":
+        # 涨跌停成交约束: 最新 bar 涨停封板 → 买不进, 条件单保持 active 顺延
+        if paper._limit_blocked(c["symbol"], "buy", df):
+            return 0
         # 统一权益/3 等权口径: 传 st 让 _make_order 按 账户总权益/max_pos 分配,
         # 避免条件单路径走现金/3 导致"先买的大、后买的小"的顺序衰减与资金闲置。
         budget = c.get("amount") or st["cash"]
@@ -481,6 +484,9 @@ def _fire_condition(st, c, last, df, side="buy", pos=None,
             c["note"] = "无持仓可平"
             c["correct"] = None
             return
+        # 涨跌停成交约束: 最新 bar 跌停封板 → 卖不出, 止盈/止损/追踪保持 active 顺延
+        if paper._limit_blocked(pos["symbol"], "sell", df):
+            return 0
         sell_price = round(last * (1 - SLIP_SELL), 3)
         entry_price = float(pos["buy_px"])
         condition_ret = last / entry_price - 1

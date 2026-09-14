@@ -3,16 +3,7 @@ import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
-
-def _limit_pct(symbol) -> float:
-    """按板块返回近似涨跌停阈值 (含阈值内回旋余量):
-    创业板(30x)/科创板(68x) 20%, 北交所(8x/4x) 30%, 其余主板 10%。"""
-    code6 = (symbol or "")[-6:]
-    if code6.startswith(("30", "68")):
-        return 0.199
-    if code6.startswith(("8", "4")):
-        return 0.299
-    return 0.099
+from .market_rules import limit_pct as _limit_pct
 
 
 def _rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:

@@ -235,6 +235,12 @@ class MainWindow(QMainWindow):
             family=str(self.settings.get(S.UI.FONT_FAMILY, "") or ""),
             size=int(self.settings.get(S.UI.FONT_SIZE, 12) or 12),
             watch=int(self.settings.get(S.UI.WATCH_FONT_SIZE, 12) or 12))
+        # K线复权口径 (A股适配): 启动即应用设置中的口径, 使所有行情统一口径
+        try:
+            from wyckoff.datasource import set_adjust
+            set_adjust(str(self.settings.get(S.General.DATA_ADJUST, "qfq") or "qfq"))
+        except Exception:
+            pass
 
         self.setWindowTitle("Wyckoff 威科夫分析客户端")
         self.resize(1480, 900)

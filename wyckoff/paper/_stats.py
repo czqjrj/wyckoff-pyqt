@@ -9,9 +9,25 @@ import wyckoff.paper as paper
 from ._params import SLIP_BUY, SLIP_SELL
 
 
+def _fee_factors(amount: float = 100000.0):
+    """(买费率, 卖费率): 在代表性成交金额上的 A股明细费率。
+
+    佣金/过户费/印花税按月付明细计算后折算为单边费率, 供统计口径展示;
+    代表性金额取 10 万元, 规避最低佣金 5 元对小单的失真。
+    """
+    c = paper._CUR
+    b = paper.fee_buy(amount) / amount
+    s = paper.fee_sell(amount) / amount
+    return b, s
+
+
 def net_cost_rate():
-    """含买入费用(单边成本)的每股成本系数 = 1 + cost。"""
-    return 1.0 + paper._CUR["cost"]
+    """含买入费用(单边成本)的每股成本系数 = 1 + 代表性买入费率。
+
+    全面适配A股: 用明细费率 (佣金+过户费) 折算, 替代扁平 cost。
+    """
+    cb, _ = _fee_factors()
+    return 1.0 + cb
 
 
 def float_ret(buy_px, last):
@@ -19,13 +35,14 @@ def float_ret(buy_px, last):
 
     按当前价即时卖出 (扣卖滑点 + 卖出费用) 后的净收益,
     相对买入含费成本 (买入价含买滑点 + 买入费用)。
-    与 close_position 记录的实际净收益口径一致。
+    费率按代表性成交金额的明细费率折算 (统计口径)。
     """
     buy_px = float(buy_px)
     if buy_px <= 0:
         return 0.0
-    sell_net = float(last) * (1 - SLIP_SELL) * (1 - paper._CUR["cost"])
-    cost = buy_px * net_cost_rate()
+    cb, cs = _fee_factors()
+    sell_net = float(last) * (1 - SLIP_SELL) * (1 - cs)
+    cost = buy_px * (1 + cb)
     return sell_net / cost - 1
 
 

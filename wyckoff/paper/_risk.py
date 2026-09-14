@@ -155,7 +155,7 @@ def _risk_blocks_entry(st, cand, price) -> bool:
             except Exception:
                 pass
             return True
-    ok, msg = check_capital_usage(st, entry * qty + entry * qty * paper._CUR["cost"])
+    ok, msg = check_capital_usage(st, entry * qty + paper.fee_buy(entry * qty))
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
         try:
