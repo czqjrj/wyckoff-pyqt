@@ -13,7 +13,7 @@ _KEYS = {
     "df", "title", "pivots", "events", "waves", "draw_waves", "locks",
     "tr", "profile", "struct", "phase", "segs", "sector", "vsa_signals",
     "wave_cum", "wave_segs", "up_mask", "caption", "symbol", "scale",
-    "news_markers",
+    "news_markers", "sd", "pnf_t",
 }
 
 
@@ -159,6 +159,21 @@ def test_kline_data_passes_struct():
     assert d["struct"] is struct
     d2 = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None)
     assert d2["struct"] is None
+
+
+def test_kline_data_passes_sd_and_pnf_t():
+    """sd (供求定律) / pnf_t (因果定律·P&F横向计数) 原样透传, 缺省为 None。"""
+    df = _df()
+    sd = {"demand": 1234567.0, "supply": 987654.0, "ratio": 1.25}
+    pnf_t = {"columns": 9, "count_line": 40.5, "cause": 6.0,
+             "横向计数上方目标_保守": 52.0,
+             "横向计数下方目标_保守": 30.0}
+    d = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None,
+                         sd=sd, pnf_t=pnf_t)
+    assert d["sd"] is sd
+    assert d["pnf_t"] is pnf_t
+    d2 = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None)
+    assert d2["sd"] is None and d2["pnf_t"] is None
 
 
 def test_kline_caption_neutral():

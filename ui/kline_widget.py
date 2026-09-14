@@ -78,7 +78,7 @@ _VOL_MA_LINES = [
 ]
 
 _VSA_DRAW = {"CHOC", "UPT", "TRU", "TRD", "DEM", "SUP", "ABS",
-             "TEST", "ETR", "ETF", "BC", "SV"}
+             "TEST", "ETR", "ETF", "BC", "SV", "EVR", "ER", "EF"}
 
 # 图层显隐定义: key → 右键菜单显示名。set_layer_visible 控制可见性,
 # 状态由主窗口持久化到 settings["kline_layers"]。
@@ -512,7 +512,8 @@ class KlineWidget(BasePlotWidget):
                  draw_waves=True, locks=None, tr=None, profile=None, phase=None,
                  segs=None, sector=None, vsa_signals=None, wave_cum=None,
                  wave_segs=None, up_mask=None, caption=None, symbol=None,
-                 scale=240, news_markers=None, struct=None, **extra):
+                 scale=240, news_markers=None, struct=None, sd=None,
+                 pnf_t=None, **extra):
         # 批量更新: 三栏图表构建期间禁用重绘 (减少中间状态闪烁)
         self.setUpdatesEnabled(False)
         try:
@@ -560,7 +561,7 @@ class KlineWidget(BasePlotWidget):
                               [list(w) for w in (waves or [])],
                               bool(draw_waves), locks or [], tr, profile,
                               segs or [], sector, vsa_signals or [],
-                              news_markers or [], struct)
+                              news_markers or [], struct, sd, pnf_t)
             self._build_volume(df, wave_segs or [])
             self._build_cum(df, wave_cum, wave_segs, caption)
 
@@ -697,7 +698,7 @@ class KlineWidget(BasePlotWidget):
     # ── 主图: 蜡烛 + 均线 + 波段 + 事件 + 锁 + VSA ──
     def _build_price(self, df, title, pivots, events, waves, draw_waves,
                      locks, tr, profile, segs, sector, vsa_signals,
-                     news_markers=None, struct=None):
+                     news_markers=None, struct=None, sd=None, pnf_t=None):
         x = np.arange(self._n)
         plot = self.price_plot
         plot.setTitle(title or "", color=theme.C_TEXT, size=f"{self._fs(3)}pt")
@@ -900,6 +901,33 @@ class KlineWidget(BasePlotWidget):
             self._text(plot, x_end, self._full_y[1],
                        f"板块 {sector['name']} · 近20日主力 {s20:+.2f}亿",
                        sc, anchor=(1, 1), delta=-1, bold=True,
+                       fill=_brush_alpha(theme.C_PANEL, 0.9))
+
+        # 威科夫定律摘要卡: 供求定律 / 因果定律(点数图横向计数) — 板块卡下方堆叠
+        _law_span = self._full_y[1] - self._full_y[0]
+        if sd and sd.get("ratio") is not None:
+            _sd_r = float(sd["ratio"])
+            _sd_tone = ("买方主导" if _sd_r >= 1.2 else
+                        "卖方主导" if _sd_r <= 0.8 else "供需均衡")
+            _sd_color = theme.C_UP if _sd_r >= 1.0 else theme.C_DOWN
+            self._text(plot, x_end, self._full_y[1] - _law_span * 0.045,
+                       f"供求: 需 {sd['demand'] / 1e6:.1f} · 供 {sd['supply'] / 1e6:.1f}"
+                       f" 万手 · 比 {_sd_r:.2f} ({_sd_tone})",
+                       _sd_color, anchor=(1, 1), delta=-1, bold=True,
+                       fill=_brush_alpha(theme.C_PANEL, 0.9))
+        if pnf_t and pnf_t.get("columns"):
+            _last_p = float(df["close"].iloc[-1])
+            _ceu = pnf_t.get("横向计数上方目标_保守")
+            _ced = pnf_t.get("横向计数下方目标_保守")
+            _txt = (f"因果(P&F): {pnf_t['columns']}列 · 计数线 {pnf_t['count_line']:.2f}"
+                    f" · 守恒 {pnf_t['cause']:.2f}")
+            if _ceu:
+                _txt += f" → 上方 +{(_ceu / _last_p - 1) * 100:.1f}%"
+                if _ced:
+                    _txt += f" / 下方 -{(1 - _ced / _last_p) * 100:.1f}%"
+            self._text(plot, x_end, self._full_y[1] - _law_span * 0.09,
+                       _txt, theme.C.get("pnf_target", "#7c3aed"),
+                       anchor=(1, 1), delta=-1, bold=True,
                        fill=_brush_alpha(theme.C_PANEL, 0.9))
 
         # 最新收盘价: 水平虚线 + 右侧留白区的价格标签 (红涨绿跌)

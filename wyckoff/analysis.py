@@ -727,6 +727,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                 vsa_signals=vsa_signals,
                 news_sentiment=news_sentiment,
                 struct=struct_lines,
+                sd=sd, pnf_t=pnf_t,
                 symbol=symbol, scale=int(scale)))
         fig = None
     else:
@@ -736,7 +737,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                          tr=tr, profile=profile,
                          phase=phase.split(" ")[0], segs=segs, sector=sector,
                          vsa_signals=vsa_signals,
-                         struct=struct_lines)
+                         struct=struct_lines, sd=sd, pnf_t=pnf_t)
     hist = pnf_history_targets(pnf_cols, box)
     if pnf_engine == "pyqtgraph":
         from .pnf import build_pnf_data
