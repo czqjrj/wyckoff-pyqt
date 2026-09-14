@@ -26,12 +26,13 @@ import numpy as np
 import pandas as pd
 
 from ._shared import atomic_write_json
-from .config import STRONG_TIER_TYPES, event_dir, vsa_dir
+from .config import (STRONG_TIER_TYPES, WEAK_EVENT_TYPES, event_dir,
+                     vsa_dir)
 from .datasource import fetch_kline
 from .events import detect_all
 from .indicators import add_indicators, find_pivots
 from .paths import SIGNAL_ACCURACY_FILE
-from .vsa import vsa_classify
+from .vsa import VSA_NOISE_TYPES, vsa_classify
 
 # 评估周期 (根)
 HORIZONS = (5, 10, 20, 40)
@@ -222,6 +223,11 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
             vsa_signals = vsa_classify(df, scale=scale)
     recs = []
     for e in events:
+        # 弱事件 (SOS/JOC/BC/AR/PSY): 实测方向命中贴近/劣于随机 → 不记入信号库
+        # (see docs/accuracy_report 事件章节), 避免占样本盘 42% 的随机信号
+        # 稀释 winsorized 命中率与置信度排序。检测输出仍保留 (图表标注)。
+        if e.get("type") in WEAK_EVENT_TYPES:
+            continue
         recs.append(dict(symbol=symbol, code=str(code)[-6:], name=name, scale=scale,
                          datalen=datalen, kind="event", type=e.get("type", "?"),
                          idx=e.get("idx"), date=str(e.get("date")),
@@ -232,6 +238,10 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
                          eval_fails=0, results={}))
     for s in vsa_signals:
         vtype = s.get("label", "?")
+        # 噪声型 VSA 标签 (NS/ND/BC/TRU/SUP) 命中贴近随机 → 不记入信号库,
+        # 避免占半池的随机信号污染胜率统计/置信度排序 (docs/accuracy_report VSA 章节)。
+        if s.get("noise") or vtype in VSA_NOISE_TYPES:
+            continue
         # VSA 置信度: 用历史方向化命中率 (L1 贝叶斯收缩值) 作实证先验,
         # 缺失样本回退 50 (中性)。修复旧版恒 0 → 无法排序/过滤的问题。
         vconf = round(win_rate_of("vsa", vtype, 20) * 100)

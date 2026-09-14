@@ -15,8 +15,9 @@ Qlib因子作为量化模型预测补充, 通过因子评分对技术面信号�
 import json
 import os
 
-from .config import VSA_BEAR, VSA_BULL, W_RECENT, event_dir
+from .config import VSA_BEAR, VSA_BULL, W_RECENT, WEAK_EVENT_TYPES, event_dir
 from .paths import DATA_DIR
+from .vsa import VSA_NOISE_TYPES
 
 # 各维度权重 (K线结构最重, 威科夫事件次次, VSA与P&F辅助确认)
 W_KLINE = 0.35
@@ -136,6 +137,11 @@ def _event_score(events, recent_window=None, max_idx=None, oos=False):
         d = event_dir(e.get("type", ""))
         if d == 0:
             continue
+        # 弱事件 (SOS/JOC/BC/AR/PSY): 实测 20 根方向命中贴近/劣于随机 (36~52% vs 50%),
+        # 单独计分只会把半池噪声注入方向 → 完全不参与事件维度,
+        # 与 chart 上的 {STRONG_TIER_TYPES / WEAK_EVENT_TYPES} 划分对齐。
+        if e.get("type") in WEAK_EVENT_TYPES:
+            continue
         conf = e.get("conf", 50) / 100.0
         dist = max_idx - idx
         if dist < 0 or dist > recent_window:
@@ -185,6 +191,10 @@ def _vsa_score(vsa_signals, recent_window=None, max_idx=None, oos=False):
         if dist < 0 or dist > recent_window:
             continue
         lb = s.get("label", "")
+        # 噪声型 VSA 标签 (NS/ND/BC/TRU/SUP) 命中贴近随机 → 不参与融合评分,
+        # 避免半池随机信号左右方向 (docs/accuracy_report VSA 章节)。
+        if s.get("noise") or lb in VSA_NOISE_TYPES:
+            continue
         w = 1.0 + (recent_window - dist) / recent_window  # 近期更重
         before_ts = s.get("date") if oos else None
         if lb in VSA_BULL:

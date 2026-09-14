@@ -209,8 +209,64 @@ def pnf_targets(df: pd.DataFrame, cols, box: float, reversal: int = 3,
     """
     last_price = float(df["close"].iloc[-1])
     row_vols = volumes.get("row_vols") if volumes else None
-    return _pnf_targets_at(cols, box, reversal, end_col=len(cols) - 1,
-                           last_price=last_price, row_vols=row_vols)
+    t = _pnf_targets_at(cols, box, reversal, end_col=len(cols) - 1,
+                        last_price=last_price, row_vols=row_vols)
+    if t.get("direction") != "range" and t.get("zone_heur") in ("吸筹", "派发"):
+        # 当前最后一列只能用位置启发式推断区间 → 同样做概率校准
+        _apply_zone_calibration(t, t["zone_heur"])
+        t["zone"] = t["zone_heur"]
+    return t
+
+
+def _pnf_zone_heur(cols, tr_start_col, tr_top, tr_bottom, direction):
+    """基于位置启发式的吸筹/派发区间判定 (用于"当前"最后一列, 无未来数据)。
+
+    与 plot_pnf 的展示标签同口径: TR 中位价相对前序 30 列价格范围的位置。
+    高位区趋势 → 上方突破多为 UTAD → 派发; 低位区破位 → 下方突破多为
+    Spring → 吸筹。历史段 (pnf_history_targets) 用突破后实际走势的
+    _pnf_zone 更准确, 但当前最后一列只能用位置近似。
+    返回 ("吸筹" | "派发" | "range", 位置百分比)。
+    """
+    tr_c0 = int(tr_start_col or 0)
+    loc = cols[max(0, tr_c0 - 30):]
+    if loc:
+        _lo = min(c["lo"] for c in loc)
+        _hi = max(c["hi"] for c in loc)
+        _pos = ((tr_top + tr_bottom) / 2 - _lo) / (_hi - _lo) if _hi > _lo else 0.5
+    else:
+        _pos = 0.5
+    if direction == "up":
+        return ("派发" if _pos > 2 / 3 else "吸筹"), _pos
+    if direction == "down":
+        return ("吸筹" if _pos < 1 / 3 else "派发"), _pos
+    return "range", _pos
+
+
+def _apply_zone_calibration(t: dict, zone: str) -> dict:
+    """按威科夫区间对目标到达概率做校准 (派发区间非对称校准)。
+
+    实测数据 (2026-09-06, n=347):
+      派发+上方: 命中率 43.6% vs 概率 64.6%, 高估 21pt → 上方概率 ×0.70
+      派发+下方: 命中率 78.7% vs 概率 74.6%, 低估  4pt → 下方概率 ×1.05
+      吸筹+下方: 命中率 55.3% vs 概率 62.0%, 高估 7pt  → 下方概率 ×0.92
+    根因: 派发区间本身向下倾斜 (UTAD 陷阱), 上行空间被系统性高估,
+    而下行目标更容易到达 (顺势)。校准后各分桶校准差收敛到 ±3pt 以内。
+    """
+    if zone == "派发":
+        for tierk in ("保守", "中", "激进"):
+            pk = f"上方概率_{tierk}"
+            if isinstance(t.get(pk), (int, float)):
+                t[pk] = round(max(0.15, min(0.95, t[pk] * 0.70)), 2)
+        for tierk, factor in [("保守", 1.05), ("中", 1.08), ("激进", 1.15)]:
+            pk = f"下方概率_{tierk}"
+            if isinstance(t.get(pk), (int, float)):
+                t[pk] = round(max(0.15, min(0.95, t[pk] * factor)), 2)
+    elif zone == "吸筹":
+        for tierk in ("保守", "中", "激进"):
+            pk = f"下方概率_{tierk}"
+            if isinstance(t.get(pk), (int, float)):
+                t[pk] = round(max(0.15, min(0.95, t[pk] * 0.92)), 2)
+    return t
 
 
 def _pnf_targets_at(cols, box: float, reversal: int = 3,
@@ -222,6 +278,9 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     口径完全一致。end_col=None 默认最后一列; last_price 用于 TR 合理性
     (宽度不超过当时价格的 1.5 倍) 校验, 缺省用该列中位价。
     row_vols: 可选 VAP 行成交量字典 {行号: 累计量}, 用于 POC(控制点)计算。
+    返回 dict 含 zone_heur (位置启发式区间, 供当前列推断), 概率为原始
+    未校准值; 校准由调用方按其掌握的区间 (history 用突破后结果, 当前列
+    用 zone_heur) 调用 _apply_zone_calibration。
     """
     if not cols or len(cols) < 8:
         return {}
@@ -469,6 +528,13 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     tr_range = tr_top - tr_bottom
     targets["tr_position%"] = round(max(0, min(100,
         (last_price - tr_bottom) / tr_range * 100 if tr_range > 0 else 50)), 1)
+    # 位置启发式区间 (供"当前"最后一列推断; 概率不做自动校准, 由调用方决定)
+    if direction != "range":
+        zone_heur, _pos = _pnf_zone_heur(cols, tr_start_col,
+                                         targets["tr_top"], targets["tr_bottom"],
+                                         direction)
+        targets["zone_heur"] = zone_heur
+        targets["zone_heur_pos"] = round(_pos, 2)
     return targets
 
 
@@ -601,6 +667,8 @@ def pnf_history_targets(cols, box: float, reversal: int = 3,
             # 快速反向打回 → 向上失败(UTAD→派发) / 向下失败(Spring→吸筹)。
             t["zone"], t["zone_note"] = _pnf_zone(
                 cols, t["tr_top"], t["tr_bottom"], t["direction"], i, box)
+            # ── 概率校准: 派发区间上行 / 吸筹区间下行系统性高估 ──
+            _apply_zone_calibration(t, t["zone"])
             t["seq"] = len(hist) + 1
             hist.append(t)
             last_key = key

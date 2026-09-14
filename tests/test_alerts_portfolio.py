@@ -69,14 +69,14 @@ def test_signals_csv_export(tmp_path):
         "low": np.linspace(9, 14, 60), "close": np.linspace(10.5, 15.5, 60),
         "volume": np.random.rand(60) * 1e6,
     })
-    ev = [{"idx": 5, "type": "SOS", "conf": 80, "price": 12.0,
+    ev = [{"idx": 5, "type": "Spring", "conf": 80, "price": 12.0,
            "date": df["day"].iloc[5].strftime("%Y-%m-%d %H:%M:%S")}]
     sa.record_signals(df, "sh600104", "600104", 240, 60,
                       events=ev, vsa_signals=[], name="测试", cooldown_bars=0)
     out = str(tmp_path / "sig.csv")
     p = sa.export_signals_csv(sa.load_signals(), out)
     txt = open(p, encoding="utf-8-sig").read()
-    assert "600104" in txt and "SOS" in txt and "ret_20" in txt
+    assert "600104" in txt and "Spring" in txt and "ret_20" in txt
 
 
 def test_accuracy_csv_export(tmp_path, monkeypatch):

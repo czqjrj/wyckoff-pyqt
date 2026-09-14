@@ -85,6 +85,17 @@ def thresholds(scale: int) -> dict:
     _loaded[scale] = base
     return base
 
+# 噪声型 VSA 标签 (实测方向化命中率贴近/劣于随机, 见 wx_signal_accuracy.json):
+#   ND 53.0% (n=1247) · BC 50.5% (n=1002) · TRU 49.3% (n=945)
+#   NS 47.7% (n=1296) · SUP 46.7% (n=317)   —— 20根方向命中 vs 50% 随机线无统计差异。
+# 合计占全量 VSA 样本 (8653) 的 55.6%。这些标签保留检测输出 (图表仍标注着色),
+# 但不再:
+#   1) 记入 signal_accuracy 信号库 (record_signals 跳过 noise)
+#   2) 参与 fusion VSA 维度评分 (_vsa_score 跳过 noise)
+#   3) 作为候选入池/独立交易依据
+# 避免 半池随机信号 污染置信度排序与融合方向 (docs/accuracy_report.md VSA 章节)。
+VSA_NOISE_TYPES = frozenset({"NS", "ND", "BC", "TRU", "SUP"})
+
 # 信号优先级 (数值越大越优先; 见 FibAlgo "Signal Prioritization" 设计)
 _PRIORITY = {
     "CHOC": 100,   # 性质变化 = 阶段转换, 最强
@@ -342,6 +353,8 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
         rw_val = float(rng[i] / roll[i]) if np.isfinite(roll[i]) and roll[i] > 1e-9 else 1.0
         out.append({"idx": i, "date": row["day"], "label": lb,
                     "color": VSA_COLOR[lb],
+                    # 噪声型标签: 命中贴近随机, 供上游过滤 (信号库/融合评分)
+                    "noise": lb in VSA_NOISE_TYPES,
                     "desc": f"量{vr[i]:.1f}x {_DESC.get(lb, lb)}",
                     "features": {
                         "vr": round(float(vr[i]), 4),

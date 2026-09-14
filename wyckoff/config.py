@@ -268,6 +268,17 @@ VSA_NEUTRAL = {"ER", "EF", "ABS", "CHOC", "EVR", "N"}
 STRONG_TIER_TYPES = frozenset(
     {"Spring", "Shakeout", "UTAD", "LPSY", "ST", "LPS", "SC"})
 
+# 噪声型事件标签 (实测方向化命中率贴近/劣于随机, 见 wx_signal_accuracy.json):
+#   PSY 36.2% (n=94) · JOC 40.0% (n=95) · SOS 46.6% (n=275)
+#   BC  47.5% (n=354) · AR  51.9% (n=632)  —— 20根方向命中 vs 50% 随机线无统计差异。
+# 合计占全量事件样本 (3800+) 的 42%。这些标签保留检测输出 (图表仍标注),
+# 但不再:
+#   1) 记入 signal_accuracy 信号库 (record_signals 跳过)
+#   2) 参与 fusion 事件维度评分 (_event_score 跳过)
+#   3) 作为候选入池/独立交易依据
+# 避免 半池随机信号 污染置信度排序与融合方向 (docs/accuracy_report.md 事件章节)。
+WEAK_EVENT_TYPES = frozenset({"PSY", "JOC", "SOS", "AR", "BC"})
+
 
 def vsa_dir(lab):
     """VSA 标签方向: 1=多头(标称看多, 上涨即对), -1=空头(标称看空, 下跌即对),

@@ -67,6 +67,25 @@ def test_cooldown_merges_flood(tmp_path, monkeypatch):
     assert len(sa.load_signals()) == 3
 
 
+def test_weak_events_not_recorded(tmp_path, monkeypatch):
+    """弱事件 (PSY/JOC/SOS/AR/BC) 命中贴近随机 → 不记入信号库。"""
+    _isolated(tmp_path, monkeypatch)
+    df = _df()
+    ev = [_ev(i, typ=t) for i, t in
+          enumerate(["PSY", "PSY", "JOC", "SOS", "AR", "BC"])]
+    n = sa.record_signals(df, "sh600104", "600104", 240, 100,
+                          events=ev, vsa_signals=[], name="测试")
+    assert n == 0  # 全部弱事件被过滤
+    # 强事件仍正常入库
+    sa.record_signals(df, "sh600104", "600104", 240, 100,
+                      events=[_ev(10, typ="Spring")], vsa_signals=[],
+                      name="测试")
+    recs = sa.load_signals()
+    types = [r["type"] for r in recs]
+    assert types == ["Spring"]
+    assert not any(t in ("PSY", "JOC", "SOS", "AR", "BC") for t in types)
+
+
 def test_cooldown_keeps_far_signals(tmp_path, monkeypatch):
     """间隔超过冷却窗的同类型信号各自独立。"""
     _isolated(tmp_path, monkeypatch)
@@ -114,16 +133,16 @@ def test_win_rates_and_min_sample(tmp_path, monkeypatch):
     """胜率表: 样本不足的类型不回退到默认基线, 且 n<10 不参与。"""
     _isolated(tmp_path, monkeypatch)
     df = _df()
-    # 造 12 个 SOS 信号 (关闭冷却窗, 留足未来行情), 全部未来上涨 → 胜率 1.0
+    # 造 12 个 Spring 信号 (关闭冷却窗, 留足未来行情), 全部未来上涨 → 胜率 1.0
     ev = []
     for i in range(0, 12):
         idx = i * 7  # 0,7,...,77; +20根未来行情仍在 100 根窗口内
-        ev.append({"idx": idx, "type": "SOS", "conf": 80, "price": 12.0,
+        ev.append({"idx": idx, "type": "Spring", "conf": 80, "price": 12.0,
                    "date": df["day"].iloc[idx].strftime("%Y-%m-%d %H:%M:%S")})
     sa.record_signals(df, "sh600104", "600104", 240, 100,
                       events=ev, vsa_signals=[], name="测试", cooldown_bars=0)
     rates = sa.load_win_rates(horizon=20, force=True)
-    key = ("event", "SOS")
+    key = ("event", "Spring")
     assert key in rates
     assert rates[key]["n"] == 12
     assert abs(rates[key]["win"] - 1.0) < 1e-6
@@ -141,12 +160,12 @@ def test_l1_bayes_shrink_and_ci(tmp_path, monkeypatch):
     ev = []
     for i in range(0, 12):
         idx = i * 7
-        ev.append({"idx": idx, "type": "SOS", "conf": 80, "price": 12.0,
+        ev.append({"idx": idx, "type": "Spring", "conf": 80, "price": 12.0,
                    "date": df["day"].iloc[idx].strftime("%Y-%m-%d %H:%M:%S")})
     sa.record_signals(df, "sh600104", "600104", 240, 100,
                       events=ev, vsa_signals=[], name="测试", cooldown_bars=0)
     rates = sa.load_win_rates(horizon=20, force=True)
-    s = rates[("event", "SOS")]
+    s = rates[("event", "Spring")]
     # 收缩值在 原始1.0 与 p0 (全池=1.0→钳到0.6) 之间 → 明显低于 1.0
     assert 0.0 < s["shrunk"] < 0.85
     # Wilson CI 单调包含 win
@@ -173,13 +192,13 @@ def test_win_rate_of_uses_shrunk_for_small_sample(tmp_path, monkeypatch):
     ev = []
     for i in range(0, 5):
         idx = i * 10
-        ev.append({"idx": idx, "type": "SOS", "conf": 80, "price": 12.0,
+        ev.append({"idx": idx, "type": "Spring", "conf": 80, "price": 12.0,
                    "date": df["day"].iloc[idx].strftime("%Y-%m-%d %H:%M:%S")})
     sa.record_signals(df, "sh600104", "600104", 240, 100,
                       events=ev, vsa_signals=[], name="测试", cooldown_bars=0)
     rates = sa.load_win_rates(horizon=20, force=True)
-    s = rates[("event", "SOS")]
-    got = sa.win_rate_of("event", "SOS", horizon=20)
+    s = rates[("event", "Spring")]
+    got = sa.win_rate_of("event", "Spring", horizon=20)
     assert got == s["shrunk"]  # 用收缩值 (5全涨 → 收缩到 0.6~0.7), 而非 1.0
 
 

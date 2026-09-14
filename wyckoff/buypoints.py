@@ -61,6 +61,7 @@ STOP_BUF = 0.985             # 止损在锚点下方 1.5%
 DIP_WIN = 30                 # 中继: 突破前整理回踩窗口
 MID_RISE = 0.08              # 中继: 40 根内累计涨幅 ≥8% 视为上升途中
 ACTIONABLE_LOOK = 10         # 扫描/实盘: 买点 bar 距当前 ≤10 根仍可执行
+LB_MAX = 15                  # 单期返回的左侧买点候选上限 (与 strategies.constants 对齐)
 CONFIRM_WIN = 4              # 确认: 锚点后 windows 内收盘收复验证
 
 # 结构性突破/回踩 (不依赖事件检测, 覆盖 SOS/JOC/LPS/BU 稀疏的短板)

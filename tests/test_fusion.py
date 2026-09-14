@@ -87,10 +87,37 @@ def test_event_score_decay():
 
 def test_vsa_score_direction():
     bull = [{"idx": 110, "label": "SPR"}, {"idx": 100, "label": "SPR"}]
-    bear = [{"idx": 110, "label": "ND"}, {"idx": 100, "label": "ND"}]
+    bear = [{"idx": 110, "label": "ETF"}, {"idx": 100, "label": "ETF"}]
     assert _vsa_score(bull, max_idx=120) > 0
     assert _vsa_score(bear, max_idx=120) < 0
     assert _vsa_score([]) == 0
+
+
+def test_vsa_noise_filtered():
+    from wyckoff.vsa import VSA_NOISE_TYPES
+    # 噪声型标签 (NS/ND/BC/TRU/SUP) 不应参与融合评分
+    noise_sigs = [{"idx": 100, "label": lb} for lb in VSA_NOISE_TYPES]
+    assert _vsa_score(noise_sigs, max_idx=120) == 0.0
+    # 非噪声标签仍正常评分
+    real_sigs = [{"idx": 100, "label": "SV"}]
+    assert _vsa_score(real_sigs, max_idx=120) != 0.0
+
+
+def test_weak_events_excluded_from_score():
+    from wyckoff.config import WEAK_EVENT_TYPES, STRONG_TIER_TYPES
+    from wyckoff.config import event_dir
+    # 弱事件 (PSY/JOC/SOS/AR/BC) 命中贴近随机 → 不参与事件维度评分
+    weak = [{"idx": 100, "type": t, "conf": 100} for t in WEAK_EVENT_TYPES]
+    assert _event_score(weak, max_idx=120) == 0.0
+    # 弱事件中含 BULL 方向标签 (BC) 时同样被剔除, 不注入伪多头
+    weak_bull = [{"idx": 100, "type": t, "conf": 100}
+                 for t in WEAK_EVENT_TYPES if event_dir(t) > 0]
+    assert weak_bull and _event_score(weak_bull, max_idx=120) == 0.0
+    # 强梯队有方向的事件都必须能打进融合评分 (过滤仅限弱事件)
+    for t in STRONG_TIER_TYPES:
+        if event_dir(t) != 0:
+            assert _event_score([{"idx": 100, "type": t, "conf": 100}],
+                                max_idx=120) != 0.0
 
 
 def test_pnf_score_states():
