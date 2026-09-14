@@ -42,8 +42,11 @@ NO_NET_ENV = "WYCKOFF_NO_NET"
 TYPES = ("settings", "watchlist", "notes", "portfolio", "candidates", "paper")
 
 # ── 设置键白名单: 只同步私有偏好域, AI 凭据/运行时记忆等不上库 ──
+# 含 Paper (模拟盘策略参数/推送渠道), 凭据类键 (key/token/secret/password)
+# 由 _sensitive 单独过滤, 永不跨设备上传。非敏感推送 ID (corp_id/agent_id/
+# topic_ids/uids 等) 属于普通偏好, 随白名单同步。
 SETTINGS_WHITELIST = set()
-for _cls in (SK.General, SK.UI, SK.Chart, SK.Watch, SK.Auto):
+for _cls in (SK.General, SK.UI, SK.Chart, SK.Watch, SK.Auto, SK.Paper):
     SETTINGS_WHITELIST.update(_c.value for _c in _cls)
 
 _SENSITIVE_HINT = ("key", "token", "secret", "password", "passwd", "credential")

@@ -45,7 +45,10 @@ def test_settings_whitelist_extracts_domains(tmp_path):
     assert "ai_api_key" not in state
     assert "calib_repo_url" not in state
     for k in m.SETTINGS_WHITELIST:
-        assert state.get(k) == f"v-{k}"
+        if m._sensitive(k):
+            assert k not in state, f"敏感键 {k} 不得进同步"
+        else:
+            assert state.get(k) == f"v-{k}"
 
 
 def test_watchlist_union_and_delete(tmp_path):
@@ -374,3 +377,54 @@ def test_cloud_pull_paper_overwrites_polluted_local(tmp_path, monkeypatch):
     shad = m._load_shadow()["paper"]
     assert shad["paper"]["v"] == remote_v
     assert shad["paper"]["ts"] == 12345.0
+
+
+def test_paper_settings_synced_sensitive_excluded(tmp_path):
+    """模拟盘设置进入同步白名单, 但凭据类键 (token/key/secret) 永不跨设备同步。"""
+    m = _reload_modules(tmp_path)
+    # 本地配好的模拟盘设置 + 一个敏感凭据
+    s = {"paper_limit_fill": True, "paper_max_pos": 4,
+         "paper_commission_rate": 0.00025,
+         "paper_wxpusher_topics": "n/a"}
+    s["paper_wxpusher_app_token"] = "AT_supersecret"
+    s["paper_server_chan_key"] = "SCKEY_supersecret"
+    _write(tmp_path, "wyckoff_settings.json", s)
+
+    assert "paper_limit_fill" in m.SETTINGS_WHITELIST, "模拟盘策略设置应在白名单内"
+    assert "paper_max_pos" in m.SETTINGS_WHITELIST
+    assert m._sensitive("paper_wxpusher_app_token"), "token 类键必须被敏感规则排除"
+
+    state = m._read_settings_state()
+    assert state.get("paper_limit_fill") is True
+    assert state.get("paper_max_pos") == 4
+    assert state.get("paper_commission_rate") == 0.00025
+    assert "paper_wxpusher_app_token" not in state, "APP_TOKEN 不得上库"
+    assert "paper_server_chan_key" not in state, "Server酱 KEY 不得上库"
+    assert "paper_wxpusher_topics" not in state, "白名单外的键不得上库"
+
+
+def test_paper_settings_distributed_via_cloud(tmp_path, monkeypatch):
+    """云端下发的模拟盘设置 (用户改过、非默认) 能被拉回本地应用。"""
+    import wyckoff.cloud_db as cdb
+
+    m = _reload_modules(tmp_path)
+    # 本地默认 (未改过) → 首同步打保守 ts=0, 云端配置胜出
+    st = m._collect_type("settings")
+    assert st.get("paper_max_pos", {}).get("ts") == 0.0, \
+        "默认模拟盘参数首同步应为保守时间戳"
+
+    # 云端有用户改过的模拟盘配置
+    remote = {"paper_max_pos": {"v": 5, "ts": 9999.0},
+              "paper_wxpusher_app_token": {"v": "AT_remote",
+                                           "ts": 9999.0}}
+    merged = m._merge_items(st, remote)
+    assert merged["paper_max_pos"]["v"] == 5, "云端策略参数应覆盖本地默认"
+    assert merged["paper_wxpusher_app_token"]["v"] == "AT_remote", \
+        "token 出现在云端凭据? 应被上层敏感过滤拦截"
+
+    rc = m.apply_profile(
+        {"schema": m.SCHEMA,
+         "types": {"settings": {"items": {
+             "paper_max_pos": {"v": 5, "ts": 9999.0}}}}})
+    assert rc["changed"] is True
+    assert m._read_settings_state().get("paper_max_pos") == 5
