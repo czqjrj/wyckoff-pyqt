@@ -137,24 +137,31 @@ def _has_prereq(events, e, prereq, window, conf_thr=40, vol_ma20=None):
 
 def _progress(events, kind, vol_ma20=None):
     """按因果链推进结构阶段: 事件逐个出现, 只有满足前置约束的高等级事件
-    才推进 cur (越序/孤立事件被拦截, 不参与阶段判断)。
+    才推进 cur (越序/孤立事件被拦截, 不参与阶段判断)。同级别重复事件不再推进
+    (威科夫 Phase D 可多个 LPS/BU), 但计入 repeats 供详情描述"多重底面/多重遇阻"。
 
-    返回 (cur, blocked) — blocked 为被前置约束拦下的 (事件类型, 所需前置) 摘要。
-    """
+    返回 (cur, blocked, repeats) — blocked 为被前置约束拦下的 (事件类型, 所需前置)
+    摘要; repeats 为"当前级别"的重复事件 {type: 额外次数} (首个推进不计)。"""
     prereq, marker, _, _ = _prereqs_for(kind)
     order = sorted(events, key=lambda x: x["idx"])
     cur = 0
     blocked = []
+    repeats = {}
     for e in order:
         st = marker.get(e.get("type", ""), -1)
-        if st <= cur or e.get("conf", 100) < 40:
+        if st < 1 or e.get("conf", 100) < 40:
+            continue
+        if st == cur:
+            repeats[e["type"]] = repeats.get(e["type"], 0) + 1
+            continue
+        if st < cur:
             continue
         need, win = prereq.get(e["type"], ((), 0))
         if not _has_prereq(order, e, need, win, vol_ma20=vol_ma20):
             blocked.append((e["type"], need))
             continue
         cur = st
-    return cur, blocked
+    return cur, blocked, repeats
 
 
 def structure_progress(events: list, df, phase: str = None):
@@ -166,6 +173,14 @@ def structure_progress(events: list, df, phase: str = None):
     与旧版 (事件序号取最大) 的区别: 结构进度要求因果前置 —— Spring 需先有
     SC/ST, LPS/BU 需先有 SOS/JOC, UTAD 需先有 BC。无前置的高等级孤立事件
     会被拦截并计入进度文本 (blocked), 让"为什么阶段没推进"可解释。
+
+    窗口对齐 (P2-5): 固定尾窗口 (W_PIVOT_LONG) 可能跨越两个不同基地 (两个
+    SC/BC), 把跨基地事件错误链式推进。以当前基地起点事件 (吸筹=最近的 SC,
+    派发=最近的 BC) 为锚收紧事件窗口, 锚之前的基地事件不再参与推进。
+
+    重复事件 (P2-6): 同级别重复的 LPS/BU (吸筹 Phase D) 与 LPSY/SOW (派发
+    Phase D) 不推进进度, 但计入详情文案 —— 多重底面/多重遇阻是威科夫的
+    经典确认, 缺失会让 D 段看起来"只有一个信号"。
     """
     recent = [e for e in events if e["idx"] >= len(df) - W_PIVOT_LONG]
     kind = _kind_by_phase(phase)
@@ -173,6 +188,15 @@ def structure_progress(events: list, df, phase: str = None):
         n = len(df)
         start = n - 200
         kind = _kind_by_events(recent, start, max(1, n - start))
+
+    # ── 事件窗口锚定到当前基地起点 (防跨基地链式推进) ──
+    if kind in ("acc", "dist"):
+        anchor_t = "SC" if kind == "acc" else "BC"
+        anchor = max((e["idx"] for e in recent
+                      if e.get("type") == anchor_t and e.get("conf", 100) >= 40),
+                     default=None)
+        if anchor is not None:
+            recent = [e for e in recent if e["idx"] >= anchor]
 
     # ── 基于波动率自适应前置窗口 ────────────────────────────────
     # 计算最近 20 根 K 线的波动率中位数 (ATR/收盘价 * 100)
@@ -199,7 +223,7 @@ def structure_progress(events: list, df, phase: str = None):
     vol_ma20 = vol_pct / 100.0
     # ─────────────────────────────────────────────────────────────
 
-    cur, blocked = _progress(recent, kind, vol_ma20=vol_ma20)
+    cur, blocked, repeats = _progress(recent, kind, vol_ma20=vol_ma20)
     _, _, phases, kind_txt = _prereqs_for(kind)
     letter, name, note = phases[cur]
 
@@ -207,4 +231,16 @@ def structure_progress(events: list, df, phase: str = None):
     if blocked:
         descs = ", ".join(f"{t}(需前置 {'/'.join(p) if p else '—'})" for t, p in blocked)
         detail += f"\n注意: {descs} 因缺少前置铺垫未推进(孤立/越序事件)"
+    # 同级别重复事件强化: Phase D 多重 LPS/BU → 多次验底; 多重 LPSY/SOW → 多次遇阻
+    if cur >= 3 and repeats:
+        if kind == "acc":
+            mul = {t: c for t, c in repeats.items() if t in ("LPS", "BU")}
+            if mul:
+                sx = ", ".join(f"{t}×{c + 1}" for t, c in sorted(mul.items()))
+                detail += f"\n多重后段确认: {sx} → 底部多次验底回踩, 结构可靠性↑"
+        else:
+            mul = {t: c for t, c in repeats.items() if t in ("LPSY", "SOW")}
+            if mul:
+                sx = ", ".join(f"{t}×{c + 1}" for t, c in sorted(mul.items()))
+                detail += f"\n多重后段确认: {sx} → 顶部多次遇阻回落, 派发深化"
     return letter, name, detail

@@ -13,6 +13,10 @@ from .config import (
     BOTTOM_REC_LO,
     DIST_RANGE_EV,
     RANGE_BAND,
+    RANGE_BAND_BASE,
+    RANGE_BAND_MAX,
+    RANGE_BAND_MIN,
+    RANGE_BAND_SLOPE,
     RANGE_EVENT_WEIGHT,
     RANGE_MERGE_GAP,
     RANGE_MIN_BARS,
@@ -53,11 +57,17 @@ def _vol_pct_median(df, window: int = 20) -> float:
     return float(atr_pct)
 
 
-def _adapt_min_rec(vol_pct: float, base: float = 0.03, alpha: float = 0.5) -> float:
-    """基于波动率自适应回升阈值: base(3%) + 波动系数。
-    波动率 10% 时: 3% + 10%*0.5 = 3.5%; 波动率 40% 时: 3% + 40%*0.5 = 5%.
-    上限不超过 6% (避免高波动市放宽过度)。"""
-    return min(0.06, base + vol_pct * alpha)
+def _adapt_min_rec(vol_pct: float, base: float = 0.03, alpha: float = 0.5,
+                   floor: float = 0.05) -> float:
+    """基于波动率自适应回升阈值: 输入 vol_pct 为 ATR% 百分比数值 (与
+    _vol_pct_median 输出一致), 返回小数阈值。
+    波动率 2~4% 时 → 下限 floor=0.05; 波动率 8% 时 → 0.03+0.08*0.5 = 7% → 6%
+    (上限 6%, 避免高波动市放宽过度)。
+    修复两处: (1) 旧实现把百分比数值直接当小数运算 (0.03+2.0*0.5=1.03), 恒被
+    6% 封顶, 自适应从未生效 —— 与 structure.py 的 vol_ma20 (百分比/100) 口径
+    统一; (2) 参数扫描显示 3~4% 的弱回升/回落标成吸筹/派发会稀释方向命中
+    (dist 命中 55%→59%), 故低波动股不放松到 0.04 以下, 保留下限 0.05。"""
+    return min(0.06, max(floor, base + (vol_pct / 100.0) * alpha))
 
 
 def _bottom_turning(df, pivots, events, rtypes, low_win=60, min_rec=0.04,
@@ -339,14 +349,22 @@ def _is_range(df, a, e, band, min_bars, min_crosses=4):
 
 
 def _detect_ranges(df, pivots, band=None, tol=None, min_bars=None, min_touches=None,
-                   merge_gap=None, probe_win=None):
+                   merge_gap=None, probe_win=None, vol_pct=None):
     """枢轴触点法区间检测。沿枢轴行走: 区间内不允许创新低/新高(容差 tol)或带宽超限
     (含原始bar高低价核对, 防下跌途中无枢轴漏检); 验收要求双侧枢轴各≥min_touches次、
     长度≥min_bars、合并时并集带宽不超限。
 
+    带宽 (band) 默认按波动率自适应 (vol_pct 为 ATR% 波动率): 高波动股放宽带宽
+    (否则常态波动就把区间切断), 低波动股收窄 (防止趋势带被当成箱体)。与
+    judge_phase/_mark_bottoms/_mark_tops 的自适应阈值同口径, 天然随周期缩放。
+    显式传入 band 时跳过自适应 (供离线参数扫描对比固定值)。
+
     刺破收回 (Spring/UTAD 假突破): 枢轴刺破前低/前高超出 tol 后, 若后续 probe_win
     根内有收盘收回参考水平, 则判定为弹簧/陷阱而不切断区间; 该刺破点仍计入触次数,
     但被排除出参照与带宽核算 (避免弹簧拉宽区间)。否则视为有效突破切断区间。"""
+    if band is None and vol_pct is not None and vol_pct > 0:
+        band = max(RANGE_BAND_MIN,
+                   min(RANGE_BAND_MAX, RANGE_BAND_BASE + vol_pct * RANGE_BAND_SLOPE))
     band = RANGE_BAND if band is None else band
     tol = RANGE_TOL if tol is None else tol
     min_bars = RANGE_MIN_BARS if min_bars is None else min_bars
@@ -636,6 +654,8 @@ def _has_accum_evidence(events, a, b):
 def _bottom_structure_ok(df, pivots, m, e):
     """末段筑底的结构确认 (无事件时用): 守住最近枢轴低点, 且收盘站上 MA20
     或 MA20 斜率向上。用于"回升未达 8%"的早期筑底, 避免把下跌中继当底。"""
+    if not pivots:
+        return False
     close = df["close"].values
     n = len(df)
     lows = [p for p in pivots if p["type"] == "low" and m <= p["idx"] <= n]
@@ -663,6 +683,8 @@ def _top_structure_ok(df, pivots, m, e):
     """末段筑顶的结构确认 (无事件时用): 不创新高 (收盘未超最近枢轴高点),
     且收盘跌破 MA20 或 MA20 斜率向下。用于"回落未达 8%"的早期筑顶, 避免把
     上升中继当顶。"""
+    if not pivots:
+        return False
     close = df["close"].values
     n = len(df)
     highs = [p for p in pivots if p["type"] == "high" and m <= p["idx"] <= n]
@@ -681,7 +703,7 @@ def _top_structure_ok(df, pivots, m, e):
 
 def _mark_tops(df, phases, events=None, pivots=None, min_bars=None,
                jmin_bars=None, rec_lo=None, rec_hi=None, look=None,
-               head=None):
+               head=None, vol_pct=None):
     """把"高点封顶 + 回落"的威科夫派发顶部标为派发带 (对 _mark_bottoms 的对称镜像)。
 
     两种情形:
@@ -690,13 +712,20 @@ def _mark_tops(df, phases, events=None, pivots=None, min_bars=None,
       (markup→distribution/markdown) → 跨边界找顶, 从顶部到回落 8% 标派发。
     校准 (docs/accuracy_report.md §三): 拉升带以局部高点收尾, 其后 20 根续跌占 81.9%
     —— 延伸的拉升末段标"拉升"是最大误判源, 顶部回落即应切派发。
+
+    rec_lo 未显式传入且 vol_pct 可用时 → 波动率自适应 (与 judge_phase._top_turning
+    同口径): 低波动股收窄至 ~3-4% 更敏感, 高波动股放宽至 ~6% (修复"实时面板
+    自适应 / 阶段带固定值"的口径分裂, 并随周期缩放)。显式传入则走固定值。
     """
     min_bars = TOP_MIN_BARS if min_bars is None else min_bars
     jmin_bars = TOP_JMIN_BARS if jmin_bars is None else jmin_bars
+    explicit = rec_lo is not None
     rec_lo = TOP_REC_LO if rec_lo is None else rec_lo
     rec_hi = TOP_REC_HI if rec_hi is None else rec_hi
     look = TOP_LOOK if look is None else look
     head = TOP_HEAD if head is None else head
+    if vol_pct is not None and vol_pct > 0 and not explicit:
+        rec_lo = _adapt_min_rec(vol_pct, base=0.03, alpha=0.5)
     need_events = events is not None
     hi = df["high"].values
     cl = df["close"].values
@@ -731,10 +760,12 @@ def _mark_tops(df, phases, events=None, pivots=None, min_bars=None,
                 if m > a:
                     out.append((a, m - 1, "markup"))
                 # 回落温和(≤20%)整段算派发; 回落过强则只把顶+初段回落算派发,
-                # 强回落部分归下跌
+                # 强回落部分归下跌。过短的回落启动点被拉长到至少 jmin_bars 根,
+                # 避免过短段被 phase_segments 的 min_len 过滤而丢失顶部标记。
                 if z is None or drop <= 0.20:
                     out.append((m, e, "distribution"))
                 else:
+                    z = min(e, max(z, m + jmin_bars - 1))
                     out.append((m, z, "distribution"))
                     out.append((z + 1, e, "markdown"))
                 i += 1
@@ -769,7 +800,7 @@ def _mark_tops(df, phases, events=None, pivots=None, min_bars=None,
 
 def _mark_bottoms(df, phases, events=None, pivots=None, min_bars=None,
                   jmin_bars=None, rec_lo=None, rec_hi=None, look=None,
-                  head=None):
+                  head=None, vol_pct=None):
     """把"低点防守 + 回升"的威科夫 Phase A 底部标为吸筹带。
 
     两种情形:
@@ -781,13 +812,20 @@ def _mark_bottoms(df, phases, events=None, pivots=None, min_bars=None,
     标准筑底要求 回升8~30% (情形A 需吸筹事件或价格结构确认, 情形B 依赖后续
     段本身已是吸筹/拉升, 无需再等事件); 情形A 允许回升 4~8% 的早期筑底,
     条件是守住枢轴低点且站上/走平 MA20。
+
+    rec_lo 未显式传入且 vol_pct 可用时 → 波动率自适应 (与 judge_phase._bottom_turning
+    同口径): 低波动股收窄至 ~3-4% 更敏感, 高波动股放宽至 ~6% (修复"实时面板
+    自适应 / 阶段带固定值"的口径分裂, 并随周期缩放)。显式传入则走固定值。
     """
     min_bars = BOTTOM_MIN_BARS if min_bars is None else min_bars
     jmin_bars = BOTTOM_JMIN_BARS if jmin_bars is None else jmin_bars
+    explicit = rec_lo is not None
     rec_lo = BOTTOM_REC_LO if rec_lo is None else rec_lo
     rec_hi = BOTTOM_REC_HI if rec_hi is None else rec_hi
     look = BOTTOM_LOOK if look is None else look
     head = BOTTOM_HEAD if head is None else head
+    if vol_pct is not None and vol_pct > 0 and not explicit:
+        rec_lo = _adapt_min_rec(vol_pct, base=0.03, alpha=0.5)
     need_events = events is not None
     lo = df["low"].values
     cl = df["close"].values
@@ -824,10 +862,12 @@ def _mark_bottoms(df, phases, events=None, pivots=None, min_bars=None,
                 if m > a:
                     out.append((a, m - 1, "markdown"))
                 # 回升温和(≤20%)整段算吸筹; 回升过强则只把底+初段回升算吸筹,
-                # 强回升部分归拉升
+                # 强回升部分归拉升。过短的回升启动点被拉长到至少 jmin_bars 根,
+                # 避免过短段被 phase_segments 的 min_len 过滤而丢失底部标记。
                 if z is None or rec <= 0.20:
                     out.append((m, e, "accumulation"))
                 else:
+                    z = min(e, max(z, m + jmin_bars - 1))
                     out.append((m, z, "accumulation"))
                     out.append((z + 1, e, "markup"))
                 i += 1
@@ -865,14 +905,21 @@ def _mark_bottoms(df, phases, events=None, pivots=None, min_bars=None,
 
 
 def phase_segments(df: pd.DataFrame, pivots, events=None, order=6, smooth=9, min_len=12,
-                   current_phase=None):
+                   current_phase=None, rec_lo=None, vol_pct=None, band=None):
     """把K线时间轴切成威科夫阶段带 (Markdown/Accumulation/Markup/Distribution)。
     枢轴触点法: 先检测横向震荡区间(双侧枢轴触次+带宽+中线穿越), 按进入方向定区间
     类型(吸筹/派发), 区间间与首尾段按净方向或突破区间轨定趋势类型(拉升/下跌)。
-    返回 [(start,end,key,label)]。"""
+    返回 [(start,end,key,label)]。
+
+    阈值自适应 (P0-2/P1-3/P1-4): 区间带宽 (band) 与拐点回升/回落阈值 (rec_lo)
+    默认按 df 的 ATR% 波动率自适应, 与 judge_phase 实时判段同口径, 天然随周期
+    缩放 (15分钟 ATR% 小→阈值收紧更敏感, 日线/周线 ATR% 大→放宽)。显式传入
+    rec_lo/vol_pct/band 可覆盖 (供离线参数扫描)。"""
     if df is None or len(df) < 80 or not pivots:
         return []
-    ranges = _detect_ranges(df, pivots)
+    if vol_pct is None:
+        vol_pct = _vol_pct_median(df, window=120)
+    ranges = _detect_ranges(df, pivots, band=band, vol_pct=vol_pct)
     segs = _build_phases(df, ranges, float(np.median(df["close"].values)), events)
     # 合并相邻同类型段后, 需对"合并后"的波段再做一致性校验 (子段各自合规不代表
     # 合并段合规), 翻转可能引发新的相邻合并, 故迭代至稳定。
@@ -896,11 +943,11 @@ def phase_segments(df: pd.DataFrame, pivots, events=None, order=6, smooth=9, min
     segs = _fix_breakout_type(df, segs)
     # 底部标吸筹: 所有下跌→拉升拐点 (受信任, 不再校验翻转; 提供事件表时需
     # 吸筹事件证据 (SC/ST/Spring/SOS 等) 才标记)
-    segs = _mark_bottoms(df, segs, events, pivots)
+    segs = _mark_bottoms(df, segs, events, pivots, rec_lo=rec_lo, vol_pct=vol_pct)
     # 顶部对称标派发: 拉升→回落拐点, 把拉升带末端的高点回落切为派发带
     # (校准: 拉升带后 20 根续跌占 81.9%, 延伸拉升末段标"拉升"是最大误判源)。
     # 与 _mark_bottoms 同构镜像: 提供事件表时需派发事件证据 (BC/UTAD/LPSY 等)。
-    segs = _mark_tops(df, segs, events, pivots)
+    segs = _mark_tops(df, segs, events, pivots, rec_lo=rec_lo, vol_pct=vol_pct)
     # 末段近期急跌: 把"拉升/吸筹"带里最近的下跌尾巴切出来 (如冲高后崩落)
     segs = _mark_recent_decline(df, segs)
     merged = []

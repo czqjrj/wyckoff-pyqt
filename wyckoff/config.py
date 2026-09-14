@@ -339,7 +339,11 @@ W_PIVOT_LONG = 200  # 长周期枢轴/结构确认窗口
 W_MA_LONG = 200     # 长期均线(年线)采样窗口
 
 # ── 阶段区间检测参数 (phases.py 统一入口) ──
-RANGE_BAND = 0.45       # 区间高/低比上限 (带宽约束)
+RANGE_BAND = 0.45       # 区间高/低比上限 (带宽约束, 无波动率信息时的默认)
+RANGE_BAND_MIN = 0.30   # 波动率自适应带宽下限 (低波动股收窄, 防把趋势当区间)
+RANGE_BAND_MAX = 0.60   # 波动率自适应带宽上限 (高波动股放宽, 防常态波动切断区间)
+RANGE_BAND_BASE = 0.25  # 带宽自适应基线
+RANGE_BAND_SLOPE = 0.03  # 带宽随 ATR% 波动率的斜率: band = base + ATR% * slope
 RANGE_TOL = 0.02        # 有效突破/刺破容差 (与 events.Spring 刺破阈值 2% 统一口径)
 RANGE_MIN_BARS = 25     # 区间最短根数
 RANGE_MIN_TOUCHES = 2   # 双侧枢轴最少触次数
@@ -353,16 +357,19 @@ ACC_RANGE_EV = {"SC": 1.0, "ST": 0.8, "Spring": 1.0, "PSY": 0.6,
 DIST_RANGE_EV = {"BC": 1.0, "UT": 0.6, "UTAD": 1.0, "LPSY": 0.8, "SOW": 0.8}
 
 # 拐点底部标记参数 (phase_segments 内部, 开放便于统一口径)
+# rec_lo 语义: 最小"回升"判定阈值。轨迹同 judge_phase 的波动率自适应
+# (_adapt_min_rec): 低波动股收窄至 ~3-4% 更敏感, 高波动股放宽至 ~6%。仅当
+# 显式传入该参数时用之, 未传则回退此处固定值。
 BOTTOM_MIN_BARS = 20    # 拐点标记最短根数
 BOTTOM_JMIN_BARS = 12   # 拐点回升部分最短根数
-BOTTOM_REC_LO = 0.08    # 回升幅度下限
+BOTTOM_REC_LO = 0.08    # 回升幅度下限 (波动率自适应时的兜底)
 BOTTOM_REC_HI = 0.30    # 回升幅度上限
 BOTTOM_LOOK = 50        # 低点防守回溯窗口
 BOTTOM_HEAD = 30        # 下跌段回溯窗口
 # 顶部对称标记 (与 BOTTOM_* 同构, 方向相反): 回升→回落
 TOP_MIN_BARS = 20       # 顶部拐点标记最短根数
 TOP_JMIN_BARS = 12      # 拐点回落部分最短根数
-TOP_REC_LO = 0.08       # 回落幅度下限 (自顶回落 ≥8%)
+TOP_REC_LO = 0.08       # 回落幅度下限 (自顶回落 ≥8%; 波动率自适应时的兜底)
 TOP_REC_HI = 0.30       # 回落幅度上限 (≤30%, 更大回落属正式下跌段)
 TOP_LOOK = 50           # 高点防守回溯窗口
 TOP_HEAD = 30           # 上涨段回溯窗口
