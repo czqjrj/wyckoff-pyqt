@@ -477,8 +477,22 @@ def _cloud_sync_once():
     return out
 
 
+def _pull_merge_type(tname, local_items, remote_items):
+    """「从云下载」的条目合并策略。
+
+    模拟盘是高频自更新数据 (周期每步 save_state 写盘), 本地文件几乎总与影子不一致,
+    若仍按 LWW 合并, collect 会把本地整包打新时间戳, 云端版本永远输给本地 ——
+    从另一设备下载的模拟盘无法生效 (用户视角: 下载后 UI 不更新)。因此对 paper 采用
+    **远端优先**: 云端有模拟盘状态则整包覆盖本地; 云端无数据则保留本地 (避免误清空)。
+    其余类型保持逐条目 LWW (保留本地删除/新改)。
+    """
+    if tname == "paper":
+        return dict(remote_items) if remote_items else dict(local_items)
+    return _merge_items(local_items, remote_items)
+
+
 def _cloud_pull():
-    """拉取云端合并结果应用到本机 (不强制回写)。"""
+    """拉取云端应用到本机 (不强制回写)。"""
     user = account.current_user()
     local = collect_profile()
     types = {}
@@ -488,7 +502,7 @@ def _cloud_pull():
             rt = cloud_db.read_profile_items(user, tname)
         except Exception:
             rt = {}
-        types[tname] = {"items": _merge_items(lt, rt)}
+        types[tname] = {"items": _pull_merge_type(tname, lt, rt)}
     res = apply_profile({"schema": SCHEMA, "machine": _machine_id(),
                          "exported_ts": time.time(), "types": types})
     out = {"ok": True}

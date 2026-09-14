@@ -300,3 +300,77 @@ def test_pull_merge_preserves_local_delete(tmp_path):
     wl = m._read_watchlist()
     assert "300750" not in wl
     assert "600104" in wl
+
+
+def _paper_state(cash):
+    return {"cash": cash, "positions": [], "closed": [], "orders": [],
+            "candidates": [], "pending": [], "conditions": [],
+            "equity_hist": [], "meta": {}}
+
+
+def test_pull_paper_remote_overrides_local(tmp_path):
+    """「从云下载」对模拟盘采用远端优先: 云端有状态则整包覆盖本地。
+
+    回归背景: 模拟盘高频自更新 (周期每步写盘), 本地盘与影子几乎总不一致,
+    collect 打新时间戳使 LWW 里云端永远输掉 → 下载后 UI 不更新。
+    """
+    m = _reload_modules(tmp_path)
+    local = {"paper": {"v": _paper_state(1_000_000), "ts": 999.0}}
+    remote = {"paper": {"v": _paper_state(2_000_000), "ts": 1000.0}}
+    out = m._pull_merge_type("paper", local, remote)
+    assert out == remote, "云端有模拟盘时应整包覆盖本地"
+
+    # 其余类型仍走 LWW 合并 (自选股本地删除不被云端复活)
+    wl_local = {"600104": {"v": "600104", "ts": 5000.0},
+                "300750": {"v": None, "ts": 6000.0}}
+    wl_remote = {"600104": {"v": "600104", "ts": 1.0},
+                 "300750": {"v": "300750", "ts": 2.0}}
+    out2 = m._pull_merge_type("watchlist", wl_local, wl_remote)
+    assert out2["300750"]["v"] is None, "paper 改为远端优先不得影响其它类型 LWW"
+
+
+def test_pull_paper_remote_empty_keeps_local(tmp_path):
+    """云端无模拟盘数据时, 从云下载不得清空本地模拟盘。"""
+    m = _reload_modules(tmp_path)
+    local = {"paper": {"v": _paper_state(1_000_000), "ts": 999.0}}
+    out = m._pull_merge_type("paper", local, {})
+    assert out == local
+
+
+def test_pull_merge_type_equal_remote_wins(tmp_path):
+    """远端优先下, ts 相同 (含本地被污染打同秒) 也以远端覆盖为准。"""
+    m = _reload_modules(tmp_path)
+    local = {"paper": {"v": _paper_state(1_000_000), "ts": 500.0}}
+    remote = {"paper": {"v": _paper_state(3_000_000), "ts": 500.0}}
+    out = m._pull_merge_type("paper", local, remote)
+    assert out == remote
+
+
+def test_cloud_pull_paper_overwrites_polluted_local(tmp_path, monkeypatch):
+    """端到端: 本地盘被周期写入污染(与影子不一致)后, 从云下载仍用云端整包覆盖。"""
+    import wyckoff.cloud_db as cdb
+
+    m = _reload_modules(tmp_path)
+    old = _paper_state(1_000_000)
+    _write(tmp_path, "wx_paper.json", old)
+    m._collect_type("paper")  # 建立本地影子 (首次: ts=now)
+
+    # 周期随后又写盘 → 本地盘与影子不一致 → collect 会打新时间戳 (复现污染)
+    _write(tmp_path, "wx_paper.json", _paper_state(1_500_000))
+
+    # 云端有另一设备更新的模拟盘
+    remote_v = _paper_state(2_000_000)
+    cdb_original = cdb.read_profile_items
+    monkeypatch.setattr(
+        cdb, "read_profile_items",
+        lambda user, t: {"paper": {"v": remote_v, "ts": 12345.0}}
+        if t == "paper" else {})
+    monkeypatch.setattr("wyckoff.account.current_user", lambda: "testuser")
+
+    res = m._cloud_pull()
+    assert res.get("ok") is True
+    with open(os.path.join(tmp_path, "wx_paper.json"), encoding="utf-8") as f:
+        assert json.load(f)["cash"] == 2_000_000, "云端模拟盘应整包覆盖本地"
+    shad = m._load_shadow()["paper"]
+    assert shad["paper"]["v"] == remote_v
+    assert shad["paper"]["ts"] == 12345.0

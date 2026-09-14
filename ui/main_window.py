@@ -1412,8 +1412,8 @@ class MainWindow(QMainWindow):
             return
         try:
             pt.refresh()
-        except Exception:
-            pass
+        except Exception as e:
+            log_exc("账户同步后刷新模拟盘面板失败", e)
 
     def _watch_menu(self, pos):
         from PyQt6.QtWidgets import QMenu
