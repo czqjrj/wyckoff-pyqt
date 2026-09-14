@@ -28,6 +28,7 @@ from .fusion import fuse_signals
 from .indicators import add_indicators, find_pivots, pivot_order
 from .interpret import interpret_report
 from .market import (
+    boundary_events,
     build_market_labels,
     build_sd_series,
     fetch_holder_history,
@@ -123,7 +124,7 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     # Qlib 置信度系数: 0.0~1.0, 实际影响幅度通过 qlib_conf * alpha
     qlib_alpha = 0.3  # 经验系数: 实际影响幅度 = qlib_alpha * (prob - 0.5)
     rtypes = [e["type"] for e in recent]
-    spring = "Spring" in rtypes
+    spring = "Spring" in rtypes or "TSO" in rtypes
     utad = "UTAD" in rtypes
     lpsy = "LPSY" in rtypes
 
@@ -215,7 +216,7 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
         else:
             direction = "多头/低吸"
             stop = min((e["price"] for e in recent
-                        if e["type"] in ("Spring", "SC", "LPS", "BU")),
+                        if e["type"] in ("Spring", "TSO", "SC", "LPS", "BU")),
                        default=None)
             stop = stop * 0.99 if stop else ((bottom * 0.99) if bottom else None)
     elif bullish_phase:
@@ -716,11 +717,18 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
         market["news_sentiment"] = news_sentiment
     title = f"{name} ({symbol})  威科夫分析 [{period_txt}]  |  区间 {df['day'].iloc[0]} ~ {df['day'].iloc[-1]}  |  {len(df)}根"
     segs = phase_segments(df, pivots, events)
+    chart_events = events
+    try:
+        bevents = boundary_events(df, tr)
+        if bevents:
+            chart_events = events + bevents
+    except Exception:
+        chart_events = events
     if kline_engine == "pyqtgraph":
         from .chart import build_kline_data
         if kline_data is not None:
             kline_data.update(build_kline_data(
-                df, pivots, events, title, waves=wave_data["points"],
+                df, pivots, chart_events, title, waves=wave_data["points"],
                 draw_waves=draw_waves, draw_locks=draw_locks,
                 tr=tr, profile=profile,
                 phase=phase.split(" ")[0], segs=segs, sector=sector,
@@ -731,7 +739,7 @@ def run_analysis(code: str, datalen: int = 700, scale: int = 240, fig=None, pnf_
                 symbol=symbol, scale=int(scale)))
         fig = None
     else:
-        fig = plot_chart(df, pivots, events, title, fig=fig,
+        fig = plot_chart(df, pivots, chart_events, title, fig=fig,
                          waves=wave_data["points"],
                          draw_waves=draw_waves, draw_locks=draw_locks,
                          tr=tr, profile=profile,

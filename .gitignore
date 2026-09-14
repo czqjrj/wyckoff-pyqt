@@ -76,3 +76,4 @@ debian/
 
 # ── 回测/回放运行产物 (缓存/独立状态/行情库, 本地生成勿入库) ──
 /data/
+/buypoint_backtest_data/

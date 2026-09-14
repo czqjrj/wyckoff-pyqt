@@ -78,7 +78,11 @@ _VOL_MA_LINES = [
 ]
 
 _VSA_DRAW = {"CHOC", "UPT", "TRU", "TRD", "DEM", "SUP", "ABS",
-             "TEST", "ETR", "ETF", "BC", "SV", "EVR", "ER", "EF"}
+             "TEST", "ETR", "ETF", "BC", "SV", "EVR", "ER", "EF",
+             "NS", "ND"}
+
+# 事件显示别名: 底层类型 → 图表标签。BU 实为 JOC 后回踩小溪 (BUEC)。
+_EVENT_DISPLAY_ALIAS = {"BU": "BUEC"}
 
 # 图层显隐定义: key → 右键菜单显示名。set_layer_visible 控制可见性,
 # 状态由主窗口持久化到 settings["kline_layers"]。
@@ -984,7 +988,7 @@ class KlineWidget(BasePlotWidget):
     def _draw_events(self, plot, events):
         for e, sign, dy in events:
             col = e["color"]
-            label = str(e["type"])
+            label = _EVENT_DISPLAY_ALIAS.get(str(e["type"]), str(e["type"]))
             ix, price = e["idx"], e["price"]
             ty = price + sign * dy
             stem = pg.PlotCurveItem([ix, ix], [price, ty], pen=_pen(col, 0.8))

@@ -483,9 +483,15 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
                 new_low = a < b and float(lowv[a:b].min()) < low_price[lo_i]
                 # 快速反弹过滤: 破位后 confirm_bars 内收盘反弹回支撑上方 → 震仓/诱空
                 fast_rebound = len(fut_close) > 0 and float(fut_close.max()) > floor
-                ev_type = "SOW" if (new_low and not fast_rebound) else "Shakeout"
-                desc = ("放量破位+持续走弱(弱势确认)" if (new_low and not fast_rebound)
-                        else "放量假破位+快速反弹(震仓/诱空)")
+                if new_low and not fast_rebound:
+                    ev_type = "SOW"
+                    desc = "放量破位+持续走弱(弱势确认)"
+                elif fast_rebound and low_price[lo_i] <= floor * 0.94:
+                    ev_type = "TSO"
+                    desc = "深度假破位+快速收回(终极震仓)"
+                else:
+                    ev_type = "Shakeout"
+                    desc = "放量假破位+快速反弹(震仓/诱空)"
                 events.append(dict(type=ev_type, idx=i, date=pd.Timestamp(low_date[lo_i]),
                                    price=float(low_price[lo_i]), desc=desc,
                                    color=EVENT_COLORS[ev_type]))
@@ -538,6 +544,24 @@ def detect_psy(ctx: _EventContext, pivots, sc_idx):
                      price=float(lows[cand]["price"]), desc="初步支撑",
                      color=EVENT_COLORS["PSY"])]
     return []
+
+
+def detect_psup(ctx: _EventContext, pivots, bc_idx):
+    """PSUP (初次供应) - 向量化。BC 之前走势顶端的第一处供给峰值,
+    与吸筹侧 PSY 对称, 是派发流程 A 阶段起点。"""
+    ctx = _as_ctx(ctx)
+    _, highs = _split_pivots(pivots)
+    if not len(highs):
+        return []
+    high_idx = np.array([p["idx"] for p in highs])
+    high_price = np.array([p["price"] for p in highs])
+    mask = (high_idx < bc_idx) & (bc_idx - high_idx <= 40)
+    if not np.any(mask):
+        return []
+    cand = np.where(mask)[0][-1]
+    return [dict(type="PSUP", idx=int(high_idx[cand]), date=highs[cand]["date"],
+                 price=float(high_price[cand]), desc="初次供应",
+                 color=EVENT_COLORS["PSUP"])]
 
 
 def _is_neutral_event(e_type: str) -> bool:
@@ -635,8 +659,10 @@ def detect_all(df: pd.DataFrame, pivots):
     ut = detect_ut(ctx, pivots, pivot_ev + climax)
     sow = detect_sow(ctx, pivots, pivot_ev + climax)
     scs = [e for e in climax if e["type"] == "SC"]
+    bcs = [e for e in climax if e["type"] == "BC"]
     psy = detect_psy(ctx, pivots, scs[-1]["idx"]) if scs else []
-    merged = climax + pivot_ev + ar_st + joc_lps + lpsy + ut + sow + psy
+    psup = detect_psup(ctx, pivots, bcs[-1]["idx"]) if bcs else []
+    merged = climax + pivot_ev + ar_st + joc_lps + lpsy + ut + sow + psy + psup
     merged.sort(key=lambda x: x["idx"])
     scored = event_confidence(ctx, merged)
     _apply_empirical_calibration(scored)

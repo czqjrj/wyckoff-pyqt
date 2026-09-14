@@ -270,6 +270,49 @@ def find_trading_range(df, pivots, window=150, min_tests=1):
     return None
 
 
+def boundary_events(df, tr, lookback=60):
+    """破冰/冰层回测边界事件 - 向量化。用于 K线图表标注, 不进交易信号链。
+
+    BOI (破冰): 价格放量收盘跌破区间冰线 (TR 下沿), 派发破位从试探转确认。
+    BUI (冰层回测): 破冰后价格反弹回测冰线下方, 未收复冰线 (冰线成新压力)。
+
+    返回 [{"type","idx","date","price","desc","color"}, ...] 或 []。
+    """
+    if not tr:
+        return []
+    from .config import EVENT_COLORS
+    ice = float(tr["bottom"])
+    close = df["close"].values
+    high = df["high"].values
+    vol = df["volume"].values
+    vol_ma = df["vol_ma20"].values if "vol_ma20" in df else np.full(len(df), np.nan)
+    n = len(df)
+    start = max(5, n - lookback)
+    events = []
+    mode = "scan"
+    for i in range(start, n):
+        vm = vol_ma[i]
+        if not np.isfinite(vm) or vm <= 0:
+            continue
+        if mode == "scan":
+            # 首个放量收盘跌破冰线 → BOI
+            if close[i] < ice and vol[i] >= vm * 1.25:
+                events.append(dict(
+                    type="BOI", idx=i, date=df["day"].iloc[i],
+                    price=float(close[i]), desc="放量收盘跌破区间冰线",
+                    color=EVENT_COLORS["BOI"]))
+                mode = "backup"
+        elif mode == "backup":
+            # 破冰后反抽高点触及冰线 → BUI (冰线转为新压力, 反抽即离场位)
+            if high[i] >= ice:
+                events.append(dict(
+                    type="BUI", idx=i, date=df["day"].iloc[i],
+                    price=float(high[i]), desc="破冰后反抽触及冰线",
+                    color=EVENT_COLORS["BUI"]))
+                mode = "done"
+    return events
+
+
 def fetch_market_series():
     """上证指数K线 (日线, 缓存30分钟), 用于相对强度计算。失败返回 None。"""
     try:

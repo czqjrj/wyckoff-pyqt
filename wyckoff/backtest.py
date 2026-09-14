@@ -73,7 +73,7 @@ MARKET_UNIVERSE = [
 # 实证权重 (backtest_signals.py, 20根胜率): Spring 82.6% > ST 75.0% > SC 58.3%
 # > SOS 45.7% > JOC 43.5%。JOC/SOS 胜率低于50%不直接加分, 仅作结构确认。
 # LPS/BU 是 Phase D 标准买点 (修复 detect_joc_lps_bu 后已能生成), 权重对标 ST。
-_BUY_PTS = {"Spring": 22, "Shakeout": 20, "ST": 11, "LPS": 11, "BU": 11,
+_BUY_PTS = {"Spring": 22, "TSO": 24, "Shakeout": 20, "ST": 11, "LPS": 11, "BU": 11,
             "SC": 8, "PSY": 2}
 _SELL_PTS = {"UTAD": -13, "BC": -3, "LPSY": -10, "UT": -6, "SOW": -15}
 
