@@ -896,6 +896,23 @@ def event_confidence(ctx: _EventContext, events):
                 if up_i:
                     score -= 5      # 上升趋势内 BC 命中降 (53.0% vs 非升 59.3%)
 
+        # SOW 放量门 (docs/event_env_gate_progress.md + sow_tighten_survey 全量):
+        # SOW 已由 detect_sow 强制前置 base ∈ (UTAD/LPSY/BC) + vol≥vol_ma*1.25,
+        # 但全量调查显示平凡放量 (<1.6) 命中仅 66.5% (n=230), 而深层放量
+        # (≥2.2) 命中 85.0% (n=20, +16.4pt)。同时 conf 高反命中低 (≥70 仅
+        # 63.8%) 主要由平凡放量 SOW 混入高 conf 造成 → 按 vol_ratio_20 分桶:
+        #   < 1.6: 平凡放量, 方向价值弱 → 重罚;  1.6~2.2: 中量, 轻加分;
+        #   ≥ 2.2: 深层放量破位, 方向价值最强 → 加分。
+        if e["type"] == "SOW":
+            sow_vr = vr  # vr=vol/vol_ma20, 与 vol_ratio_20 同列
+            e["feat"]["sow_vol_gate"] = round(float(sow_vr) if np.isfinite(sow_vr) else 0.0, 3)
+            if sow_vr >= 2.2:
+                score += 8
+            elif sow_vr >= 1.6:
+                score += 2
+            else:
+                score -= 8
+
         # 确保分数不会低于 0
         score = max(0, score)
 

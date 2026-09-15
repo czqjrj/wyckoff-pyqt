@@ -196,3 +196,42 @@ def test_bc_env_gate_prior_rise_boosts_conf():
     weak_c, weak_p = _climax_conf("BC", -0.02)
     assert deep_p == 0.20 and weak_p == -0.02, "prior_r20 特征应记录"
     assert deep_c > weak_c, f"深涨环境 BC 应更高置信: {deep_c} vs {weak_c}"
+
+
+# ── SOW 放量门 (sow_tighten_survey: vol_ratio≥2.2 命中85%, <1.6 仅66.5%) ──
+
+def _sow_conf(vol_ratio):
+    """在可控放量强度下求 SOW 的 conf (event_confidence)。"""
+    rng = np.random.default_rng(11)
+    closes = 20 + np.cumsum(rng.normal(0, 0.05, 200))
+    df = pd.DataFrame({
+        "day": pd.date_range("2023-01-01", periods=200, freq="D"),
+        "open": np.roll(closes, 1), "close": closes,
+        "high": np.maximum(np.roll(closes, 1), closes) * 1.02,
+        "low": np.minimum(np.roll(closes, 1), closes) * 0.98,
+        "volume": np.full(200, 5e5),
+    })
+    df.loc[0, "open"] = closes[0]
+    i = 120
+    df.loc[i, "volume"] = 5e5 * vol_ratio  # 事件当日放量
+    df = add_indicators(df, symbol="600104")
+    ctx = E._EventContext(df)
+    ev = E.event_confidence(ctx, [{"type": "SOW", "idx": i, "price": float(closes[i])}])[0]
+    return ev["conf"], ev["feat"].get("sow_vol_gate")
+
+
+def test_sow_vol_gate_deep_volume_boosts_conf():
+    """SOW 深层放量 (vol_ratio≥2.2) conf 明显高于平凡放量。
+    全量调查: ≥2.2 → 20根下跌命中 85.0%; <1.6 → 66.5%。"""
+    deep_c, deep_v = _sow_conf(2.6)
+    weak_c, weak_v = _sow_conf(1.3)
+    assert deep_v > weak_v > 0, "sow_vol_gate 特征应记录且随放量单调"
+    assert deep_c > weak_c, f"深层放量 SOW 应更高置信: {deep_c} vs {weak_c}"
+
+
+def test_sow_vol_gate_mid_volume_neutral():
+    """SOW 中量 (1.6~2.2) 介于深层/平凡之间, 应有固定增益差。"""
+    deep_c, _ = _sow_conf(2.6)   # +8
+    mid_c, _ = _sow_conf(1.9)     # +2
+    weak_c, _ = _sow_conf(1.3)    # -8
+    assert deep_c > mid_c > weak_c, "SOW 放量门单调: 深层>中量>平凡"

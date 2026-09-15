@@ -97,15 +97,28 @@ SC +10.6pt、BC +6.5pt 都是大样本但明显弱于 Spring/UTAD。当前 SC/BC
 
 ## 同轮列出的其它待办 (未开工)
 
-- SOW 收紧: 69% 命中但 conf 均值仅 31 且样本 306, 可要求 UTAD/LPSY 共振或放量破位再计分。
+- SOW 收紧: ✅ 已完成 (2026-09-15)。全量调查+放量门落地, 见 `docs/sow_tighten_results.txt` 与本文档文末。
 - LPS/JOC 链路: LPS 78.9% 最强第二梯队但样本仅 76; `detect_joc_lps_bu` 里 JOC/BU
   分支 600 只产出 0 (疑死代码), 需先验 JOC 方向 (可能像 SOS 反向) 再决定是否放宽。
 - conf→命中率校准校验: 对弱信号 (BC/SOW) 按 conf 分桶看高 conf 是否真高命中。
+  (注意: SOW 调查已发现 conf 高反命中低 → SOW 侧已由放量门修正, BC 侧仍待查)
 - VSA 看多标签复查: DEM/ETR/SPR/SV 两环境都贴近随机, 可按阶段/量能分位再挖子集。
 
 ## 相关文件
 
 - `scripts/event_by_trend.py` (本轮, untracked)
+- `scripts/sow_tighten_survey.py` (本轮 SOW 调查脚本, untracked)
+- `docs/sow_tighten_results.txt` (SOW 全量调查结果存档)
 - `scripts/event_label_survey.py` (已提交 8f05b51)
 - `wyckoff/events.py` `detect_climaxes` (L203) / `_REVERSAL_CONFIRM_DIR`, `wyckoff/config.py` `event_dir`
 - 基线输出存档 (已复制入仓库): `docs/event_by_trend_baseline.txt` (旧版), `docs/event_label_low_n.txt`
+
+## SOW 放量门落地 (2026-09-15)
+
+- 调查: `scripts/sow_tighten_survey.py --limit 6000` (5345 只, 413s)。
+- 总览: n=306, 命中 68.6%, conf 均值 66.7 (较文档旧记录 31 已由模型接管回升)。
+- 唯一有统计意义的前景分桶 = 放量强度 (vol_ratio_20 ≥2.2 → 85.0% 命中, +16.4pt)。
+- conf 档倒挂 (≥70 命中 63.8% vs 中档 71.7%): 平凡放量混入高 conf。
+- 落地保守 conf 门 (在 event_confidence, detect_sow 不动):
+  SOW vol_ratio_20 ≥2.2 → +8; 1.6~2.2 → +2; <1.6 → -8。记录 feat.sow_vol_gate。
+- 新增 2 用例, 全量回归 621 passed。

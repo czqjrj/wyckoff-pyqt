@@ -1,0 +1,46 @@
+# SOW 收紧 — 全量调查结果存档 (2026-09-15)
+
+运行: `python scripts/sow_tighten_survey.py --limit 6000`
+样本: 5345 只 (SQLite 240min 缓存), 用时 413s, 复用 detect_all 管线。
+口径: 每 SOW 未来 20 根下跌记命中 (空头), 同标的 15 根冷却窗去重。
+
+## 总览
+
+n=306, 命中 68.6% (+19.6pt 于随机 ~49%), conf 均值 **66.7**。
+
+> 注: docs/event_label_low_n.txt 记录 SOW conf=31 已过时 — 现在 SOW 走
+> online_model 接管 (ready, AUC=0.67, blend ≤0.70) + 经验校准 (shrunk 0.584),
+> conf 已大幅回升。
+
+## 分桶结果
+
+| 维度 | 分桶 | n | 命中 | 相对 | conf均值 | 均值 |
+|---|---|---|---|---|---|---|
+| 前置UTAD/LPSY/BC共振 | 有铺垫 | 306 | 68.6% | 0 | 66.7 | -4.01% |
+| 破位深度 | 6~12% | 4 | 75.0% | +6.4pt | 76.2 | -9.19% |
+| 破位深度 | <6% | 302 | 68.5% | -0.1pt | 66.6 | -3.94% |
+| **vol_ratio_20** | **≥2.2** | **20** | **85.0%** | **+16.4pt** | 84.5 | -7.60% |
+| **vol_ratio_20** | 1.6~2.2 | 56 | 71.4% | +2.8pt | 73.2 | -4.97% |
+| **vol_ratio_20** | <1.6 | 230 | 66.5% | -2.1pt | 63.6 | -3.46% |
+| conf档 | ≥70 | 127 | 63.8% | -4.8pt | 79.2 | -3.72% |
+| conf档 | 40~69 | 173 | 71.7% | +3.0pt | 59.5 | -4.06% |
+| conf档 | <40 | 6 | 83.3% | — | 10.7 | -8.78% |
+
+## 结论
+
+1. **放量是唯一有统计意义的前景分桶**: vol_ratio ≥2.2 命中 85%, 单调 85>71>66.5。
+   检测侧 detect_sow 已强制 base∈(UTAD/LPSY/BC) + vol≥vol_ma*1.25, 前置共振已隐含。
+2. **conf 相位倒挂** (高 conf 63.8% < 中档 71.7%): 高 conf 的 SOW 混入平凡放量, 方向价值被高估。
+3. 破位深度样本不足 (6~12% 仅 n=4), 不可作收紧维度。
+
+## 落地 (保守 conf 门, 保留检测)
+
+`wyckoff/events.py` `event_confidence` SOW 分支 (SC/BC 环境门之后):
+
+- `vol_ratio_20 ≥ 2.2` → +8 (深层放量破位, 命中 85%)
+- `1.6 ≤ vol_ratio_20 < 2.2` → +2 (中量)
+- `vol_ratio_20 < 1.6` → -8 (平凡放量, 66.5% 且抽去 conf 倒挂高分来源)
+- 记录 `feat.sow_vol_gate`
+
+验证: `tests/test_tags_audit.py` 新增 `test_sow_vol_gate_deep_volume_boosts_conf` +
+`test_sow_vol_gate_mid_volume_neutral` (单调性)。全量回归 621 passed。
