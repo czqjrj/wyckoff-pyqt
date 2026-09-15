@@ -173,6 +173,8 @@ def apply_paper_params(settings=None):
         "take_profit": float(_get(S.Paper.TAKE_PROFIT, TAKE_PROFIT)),
         "cost": float(_get(S.Paper.COST, COST)),
         "min_conf": int(_get(S.Paper.MIN_CONF, MIN_CONF)),
+        # ST 事件确认门槛: True = 仅 confirmed 且确认后首根已到的 ST 可入场
+        "st_confirm": bool(_get(S.Paper.ST_CONFIRM, ST_CONFIRM)),
         # ── 交易成本拆分 (A股明细费率; 未单独配置时沿用模块常量) ──
         "comm_rate": float(_get(S.Paper.COMMISSION_RATE, COMMISSION_RATE)),
         "min_comm": float(_get(S.Paper.MIN_COMMISSION, MIN_COMMISSION)),
@@ -237,6 +239,7 @@ _CUR = {
     "take_profit": TAKE_PROFIT,
     "cost": COST,
     "min_conf": MIN_CONF,
+    "st_confirm": ST_CONFIRM,
     "comm_rate": COMMISSION_RATE,
     "min_comm": MIN_COMMISSION,
     "stamp_rate": STAMP_TAX_RATE,

@@ -134,14 +134,26 @@ def load_market_gate(datalen=850):
 def newest_buyable(rec, j, window=10, require_confirm=False):
     """返回该股票在 bar j 处可买入的最新事件 (事件在 j 之前 ≤window 根内)。
 
-    require_confirm=True 时只考虑"已确认"事件, 且仅当其确认后 ava = avail_idx+1
-    (确认后的第1根) 已到达才放行 (避免事件当根即买、底部回踩被止损的过早单)。
+    require_confirm:
+      - False: 无条件放行 (事件即买)
+      - True:  全类型要求确认 (旧逻辑, 不区分类型)
+      - "st":  仅 ST 事件要求 confirmed + avail_idx+1 已到;
+               Spring/LPS/Shakeout/SC 事件即买, 不等确认。
     返回 (event, buy_bar) 或 None。buy_bar 用事件后下一根=事件idx+1 (开盘买入)。
     """
+    ST_CONFIRM_TYPES = {"ST"}
     best = None
     for e in rec["events"]:
         if e["idx"] <= j and (j - e["idx"]) <= window:
-            if require_confirm:
+            if require_confirm == "st" and e.get("type") in ST_CONFIRM_TYPES:
+                # ST 事件: 需 confirmed 且 avail_idx+1 已到
+                if not e.get("confirmed"):
+                    continue
+                ava = int(e.get("avail_idx") or -1)
+                if ava < 0 or j < ava + 1:
+                    continue
+            elif require_confirm is True or require_confirm == "all":
+                # 全类型确认 (旧逻辑)
                 if not e.get("confirmed"):
                     continue
                 ava = int(e.get("avail_idx") or -1)
@@ -1008,8 +1020,10 @@ def main():
     )
     ap.add_argument(
         "--disc-confirm",
-        action="store_true",
-        help="纪律·确认式入场: 事件确认(收上事件极值)后首根才建仓, 减少0~2根回踩止损",
+        choices=("all", "st"),
+        default=None,
+        help="纪律·确认式入场: all=全事件确认(收上事件极值)后首根才建仓; "
+             "st=仅 ST 要求确认, Spring 等事件即买 (默认 None=不确认, 事件即买)",
     )
     ap.add_argument(
         "--va-slots",

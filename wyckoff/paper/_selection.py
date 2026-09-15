@@ -271,7 +271,8 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             cand = m.scan_individual(
                 code, df, min_conf=min_conf,
                 gates_ok=(market_ok, _market_reason), name=name,
-                event_types=paper.LONG_EVENT_TYPES, strategies=strategies)
+                event_types=paper.LONG_EVENT_TYPES, strategies=strategies,
+                st_confirm=paper._CUR.get("st_confirm", True))
             if cand is None:
                 return code, None, None
             cand["code"] = code

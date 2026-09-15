@@ -433,6 +433,7 @@ DEFAULT_SETTINGS = {
     "paper_take_profit": 0.15,
     "paper_cost": 0.004,
     "paper_min_conf": 100,
+    "paper_st_confirm": True,
     "paper_scan_interval": 1800,
     "paper_commission_rate": 0.00025,
     "paper_min_commission": 5.0,

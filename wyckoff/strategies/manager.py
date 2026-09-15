@@ -124,17 +124,20 @@ class WyckoffStrategyManager:
 
     # ── 候选生成 (委托 candidates, 保持历史方法签名) ──────────────
     def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
-                        name="", event_types=None, strategies=None):
+                        name="", event_types=None, strategies=None,
+                        st_confirm=False):
         """对单只股票产出模拟盘候选 (纪律→左侧买点→价值吸筹)。"""
         return _candidates.scan_individual(
             code, df=df, min_conf=min_conf, gates_ok=gates_ok,
-            name=name, event_types=event_types, strategies=strategies)
+            name=name, event_types=event_types, strategies=strategies,
+            st_confirm=st_confirm)
 
     @staticmethod
-    def _discipline_latest(evs, n, min_conf=90, event_types=None):
+    def _discipline_latest(evs, n, min_conf=90, event_types=None, st_confirm=False):
         """纪律口径: 最近 N 根内的最新强多头事件 (conf≥min_conf)。"""
         return _candidates.discipline_latest(
-            evs, n, min_conf=min_conf, event_types=event_types)
+            evs, n, min_conf=min_conf, event_types=event_types,
+            st_confirm=st_confirm)
 
     def _value_accum_candidate(self, code, df, evs, piv, name=""):
         """策略管理器·价值吸筹候选 (底部整固 + 20根内吸筹事件, conf 下限)。"""
