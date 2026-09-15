@@ -248,7 +248,8 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
                         else pos.get("last", pos["buy_px"])
                     )
                     paper.close_position(
-                        st, pos, last * (1 - paper.SLIP_SELL), "空头信号", event_type=bear["type"]
+                        st, pos, last * (1 - paper.SLIP_SELL), "空头信号",
+                        event_type=bear["type"], day=str(D),
                     )
 
             mkt_ok = True
@@ -328,13 +329,7 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
                     _try_fill(cand)
 
             paper._rebalance_portfolio(st, df_by_code)
-            st["equity_hist"].append(
-                {
-                    "ts": str(D),
-                    "cash": round(st["cash"], 2),
-                    "equity": round(paper.equity(st, {}), 2),
-                }
-            )
+            paper._record_equity(st, str(D))
     finally:
         paper_log.set_enabled(_log_off)
         paper.save_state = _real_save

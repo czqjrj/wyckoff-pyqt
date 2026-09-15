@@ -498,7 +498,12 @@ def _fire_condition(st, c, last, df, side="buy", pos=None,
             # 从持仓峰值计算
             condition_peak = max(last, entry_price)
 
-        paper.close_position(st, pos, sell_price, f"条件单:{c['kind']}", event_type=None)
+        try:
+            _bar_day = str(df["day"].iloc[-1])
+        except Exception:
+            _bar_day = None
+        paper.close_position(st, pos, sell_price, f"条件单:{c['kind']}",
+                             event_type=None, day=_bar_day)
         c["matched_price"] = sell_price
         c["matched_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
         c["status"] = "done"

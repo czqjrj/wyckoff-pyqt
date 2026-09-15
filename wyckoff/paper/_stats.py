@@ -65,7 +65,9 @@ def _record_equity(st, day=None):
     避免曲线只能看到平仓点、与现状脱节。
     """
     ts = (day or time.strftime("%Y-%m-%d"))[:10]
-    hist = st.get("equity_hist") or []
+    hist = st.get("equity_hist")
+    if hist is None:
+        hist = st["equity_hist"] = []
     for h in hist:
         if h.get("ts") == ts:
             h["equity"] = round(equity(st, {}), 2)
@@ -261,9 +263,9 @@ def stats(st):
             if out["downside_volatility"] and out["downside_volatility"] > 0:
                 out["sortino_ratio"] = round(float((arr.mean() - rf) * 250 / out["downside_volatility"]), 3)
 
-            # 最大回撤
-            peak = np.maximum.accumulate(arr + 1)  # 累积净值
+            # 最大回撤 (累积净值口径: 峰值为累计净值的滚动最高, 而非单日因子的最高)
             cum = np.cumprod(arr + 1)
+            peak = np.maximum.accumulate(cum)
             dd = cum / peak - 1
             out["max_drawdown"] = round(float(dd.min()), 4)
 

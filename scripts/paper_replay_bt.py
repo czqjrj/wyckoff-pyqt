@@ -540,7 +540,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                             (pos["symbol"], str(D)[:10]))
                         continue
                 sell_price = last * (1 - paper.SLIP_SELL)
-                paper.close_position(st, pos, sell_price, "空头信号", event_type=bear["type"])
+                paper.close_position(st, pos, sell_price, "空头信号",
+                                     event_type=bear["type"], day=str(D))
 
         # 2) 建仓: 双策略候选 (纪律优先, 价值吸筹回退), 引擎等权口径成交
         cands = []
@@ -697,14 +698,9 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
         # 3) 引擎周期再平衡 (等权收敛, 满仓才触发)
         paper._rebalance_portfolio(st, df_by_code)
 
-        # 4) 记录净值 (今日收盘市值)
-        st["equity_hist"].append(
-            {
-                "ts": str(D),
-                "cash": round(st["cash"], 2),
-                "equity": round(paper.equity(st, {}), 2),
-            }
-        )
+        # 4) 记录净值 (今日收盘市值)。用 _record_equity 按交易日 upsert,
+        #    与 step()/close_position 内平仓时的按日快照合并去重 (避免同日重复点)。
+        paper._record_equity(st, str(D))
 
     if track_on:
         from wyckoff import paper_strategy_accuracy as psa

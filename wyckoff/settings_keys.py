@@ -258,7 +258,7 @@ DEFAULTS = {
     Backtest.RISK_PCT: 0.02,
     Backtest.RISK_MIN_RR: 3.0,
     Paper.INIT_CASH: 1_000_000,
-    Paper.MAX_POS: 3,
+    Paper.MAX_POS: 4,
     Paper.HOLD_BARS: 20,
     Paper.STOP_LOSS: 0.04,
     Paper.TAKE_PROFIT: 0.15,

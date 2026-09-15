@@ -427,7 +427,7 @@ DEFAULT_SETTINGS = {
     # 反向顶掉云端配置。凭据类 (server_chan_key / corp_secret / wxpusher_app_token)
     # 虽列于此, 但同步层 _sensitive 过滤永不跨设备上传。
     "paper_init_cash": 1_000_000,
-    "paper_max_pos": 3,
+    "paper_max_pos": 4,
     "paper_hold_bars": 20,
     "paper_stop_loss": 0.04,
     "paper_take_profit": 0.15,
