@@ -10,7 +10,7 @@ import numpy as np
 
 from .config import ACC_PHASES, DIST_PHASES, W_PIVOT_LONG
 
-_ACC_TYPES = ("PSY", "SC", "ST", "Spring", "SOS", "LPS", "BU", "JOC", "Shakeout")
+_ACC_TYPES = ("PSY", "SC", "ST", "Spring", "SOS", "LPS", "BU", "JOC", "Shakeout", "TSO")
 _DIST_TYPES = ("BC", "AR", "UT", "UTAD", "LPSY", "SOW")
 
 # ── 事件推进前置约束: type -> (前置事件类型, 回溯窗口根数) ──
@@ -27,6 +27,7 @@ _ACC_PREREQ = {
     # 震仓/诱空 (放量假破位后收复) 与 Spring 同为刺破低点后收复的吸筹确认,
     # 因果前置对标 Spring
     "Shakeout": (("SC", "ST"), 60),
+    "TSO": (("SC", "ST"), 60),   # 终极震仓: 深度加强版 Shakeout, 同为吸筹 C 阶段
     "SOS": (("SC", "Spring", "ST"), 60),
     "LPS": (("SOS", "JOC"), 40),
     "BU": (("JOC",), 40),
@@ -49,7 +50,7 @@ _DIST_PREREQ = {
 }
 
 # 阶段 marker (推进后所在阶段), 与 config 的 ACC/DIST_PHASES 对齐
-_ACC_MARKER = {"PSY": 0, "SC": 0, "AR": 0, "ST": 1, "Spring": 2, "Shakeout": 2,
+_ACC_MARKER = {"PSY": 0, "SC": 0, "AR": 0, "ST": 1, "Spring": 2, "Shakeout": 2, "TSO": 2,
                "SOS": 3, "LPS": 3, "BU": 3, "JOC": 4}
 _DIST_MARKER = {"BC": 0, "AR": 0, "UT": 1, "UTAD": 2, "LPSY": 3, "SOS": 3,
                 "LPS": 3, "JOC": 4, "SOW": 3}

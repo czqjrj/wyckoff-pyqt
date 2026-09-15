@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-14",
+  "events": [
+    {
+      "ts": "2026-09-14 23:33:48",
+      "type": "account",
+      "detail": {
+        "equity": 1000000.0,
+        "cash": 1000000.0,
+        "positions_count": 0,
+        "closed_count": 0
+      }
+    }
+  ],
+  "summary": {
+    "scan_count": 0,
+    "buy_count": 0,
+    "sell_count": 0,
+    "condition_count": 0,
+    "risk_block_count": 0,
+    "rebalance_count": 0
+  }
+}

@@ -11,9 +11,9 @@ from wyckoff.config import EVENT_COLORS
 
 _KEYS = {
     "df", "title", "pivots", "events", "waves", "draw_waves", "locks",
-    "tr", "profile", "phase", "segs", "sector", "vsa_signals",
+    "tr", "profile", "struct", "phase", "segs", "sector", "vsa_signals",
     "wave_cum", "wave_segs", "up_mask", "caption", "symbol", "scale",
-    "news_markers",
+    "news_markers", "sd", "pnf_t",
 }
 
 
@@ -146,6 +146,34 @@ def test_kline_data_auto_segs_and_passthrough():
     assert d["vsa_signals"] is vsa
     text, color = d["caption"]
     assert "板块" in text and "汽车整车" in text
+
+
+def test_kline_data_passes_struct():
+    """struct (辅助画线) 原样透传, 缺省时为 None。"""
+    df = _df()
+    struct = {"creek": {"price": 81.0, "tests": 2}, "ice": None,
+              "s_r": [{"price": 52.0, "role": "S", "tests": 3,
+                       "dist_pct": 30.0}], "events": []}
+    d = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None,
+                         struct=struct)
+    assert d["struct"] is struct
+    d2 = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None)
+    assert d2["struct"] is None
+
+
+def test_kline_data_passes_sd_and_pnf_t():
+    """sd (供求定律) / pnf_t (因果定律·P&F横向计数) 原样透传, 缺省为 None。"""
+    df = _df()
+    sd = {"demand": 1234567.0, "supply": 987654.0, "ratio": 1.25}
+    pnf_t = {"columns": 9, "count_line": 40.5, "cause": 6.0,
+             "横向计数上方目标_保守": 52.0,
+             "横向计数下方目标_保守": 30.0}
+    d = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None,
+                         sd=sd, pnf_t=pnf_t)
+    assert d["sd"] is sd
+    assert d["pnf_t"] is pnf_t
+    d2 = build_kline_data(df, _pivots(df), _events(df), "标题", waves=None)
+    assert d2["sd"] is None and d2["pnf_t"] is None
 
 
 def test_kline_caption_neutral():

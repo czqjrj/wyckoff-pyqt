@@ -202,10 +202,10 @@ def test_shakeout_when_breakdown_recovers():
 
 
 def test_shakeout_when_new_low_but_fast_rebound():
-    """破位后创新低但快速反弹回支撑上方 → Shakeout (非 SOW)。
+    """破位后创新低但快速反弹回支撑上方 → Shakeout/TSO 震仓 (非 SOW)。
 
     放量跌破前低支撑后, 即使 confirm_bars 根内创出新低,
-    若收盘快速反弹回支撑上方, 仍应归为震仓/诱空 (看多),
+    只要收盘快速反弹回支撑上方, 就仍应归为震仓 (看多),
     而非 SOW 弱势信号 (看空)。
     """
     df = _mkdf_dist(_PTS)
@@ -230,8 +230,41 @@ def test_shakeout_when_new_low_but_fast_rebound():
              "price": float(df["high"].iloc[_PTS["bc"]])}]
     ev = E.detect_sow(df, _fake_pivots(df, _PTS), base)
     assert not [e for e in ev if e["type"] == "SOW"], "创新低但快速反弹回支撑上方不应归为 SOW"
-    shakes = [e for e in ev if e["type"] == "Shakeout"]
-    assert shakes, "破位+创新低+快速反弹应归为 Shakeout 震仓"
+    shakes = [e for e in ev if e["type"] in ("Shakeout", "TSO")]
+    assert shakes, "破位+创新低+快速反弹应归为震仓 (Shakeout/TSO)"
+
+
+def test_tso_when_deep_fake_breakdown():
+    """深度假破位 (破位幅度 ≥6% 且快速反弹回支撑上方) → TSO 终极震仓。
+
+    与普通 Shakeout 的区分: 跌破前低支撑越深, 越接近"终极震仓"
+    (深度套牢清算后的最后的吸取), 标签升级为 TSO。
+    """
+    df = _mkdf_dist(_PTS)
+    # TSO 后: 深破位 (低至 8.0, floor≈11.0 → 深度 ~27%) 后 10 根内快速反弹
+    n_post = df.shape[0] - _PTS["sow"] - 1
+    closes_post = np.concatenate([
+        np.linspace(8.8, 8.0, 2),          # 深破位
+        np.linspace(8.0, 11.5, 8),         # 快速反弹回 floor 上方
+        np.full(n_post - 10, 11.5)
+    ])
+    df.loc[_PTS["sow"] + 1:, "close"] = closes_post
+    df["open"] = np.roll(df["close"], 1)
+    df.loc[0, "open"] = df["close"].iloc[0]
+    df["high"] = np.maximum(df["open"], df["close"]) * 1.01
+    df["low"] = np.minimum(df["open"], df["close"]) * 0.995
+    df = add_indicators(df, symbol="600104")
+    base = [{"type": "UTAD", "idx": _PTS["utad"],
+             "price": float(df["high"].iloc[_PTS["utad"]])},
+            {"type": "LPSY", "idx": _PTS["lpsy"],
+             "price": float(df["high"].iloc[_PTS["lpsy"]])},
+            {"type": "BC", "idx": _PTS["bc"],
+             "price": float(df["high"].iloc[_PTS["bc"]])}]
+    ev = E.detect_sow(df, _fake_pivots(df, _PTS), base)
+    tso = [e for e in ev if e["type"] == "TSO"]
+    assert tso, "深度假破位+快速反弹应归为 TSO 终极震仓"
+    assert not [e for e in ev if e["type"] == "SOW"], "快速收复不归 SOW"
+    assert ev[0]["price"] <= base[0]["price"] * 0.94, "TSO 破位深度应超阈值"
 
 
 # ───────────────── 4. 完整链推进结构进度 ─────────────────

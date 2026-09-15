@@ -157,6 +157,11 @@ EVENT_COLORS = {
     "UT": "#e07b00",    # 上冲测试 (派发 Phase B, 测试前高失败)
     "SOW": "#b00020",   # 弱势信号 (破位确认, 派发 Phase D→E 衔接)
     "Shakeout": "#12b886",  # 震仓/诱空 (放量假破位, 实为吸筹方买点)
+    "TSO": "#0c8599",   # 终极震仓 (深度假破位+快速收回, 加强版 Spring)
+    "BUEC": "#9a6b0a",  # 回测小溪 (JOC 突破后回踩小溪上沿确认)
+    "BOI": "#a61e4d",   # 破冰 (跌破区间冰线/TR 下沿)
+    "BUI": "#f06595",   # 冰层回测 (破冰后回测冰线下方)
+    "PSUP": "#8c564b",  # 初次供应 (派发开始的第一次供给峰值)
 }
 
 EVENT_CN = {
@@ -164,11 +169,13 @@ EVENT_CN = {
     "ST": "二次测试", "Spring": "弹簧", "UTAD": "上冲派发", "SOS": "强势信号",
     "JOC": "跨越小溪", "LPS": "最后支撑点", "BU": "回撤", "LPSY": "最后供应点",
     "UT": "上冲测试", "SOW": "弱势信号", "Shakeout": "震仓/诱空",
+    "TSO": "终极震仓", "BUEC": "回测小溪", "PSUP": "初次供应",
+    "BOI": "破冰", "BUI": "冰层回测",
 }
 
-BULL_EVENTS = ("JOC", "Spring", "LPS", "ST", "BU", "Shakeout")
-BEAR_EVENTS = ("UTAD", "LPSY", "UT", "SOW")
-NEUTRAL_EVENTS = ("SC", "BC", "AR", "SOS")
+BULL_EVENTS = ("JOC", "Spring", "LPS", "ST", "BU", "BUEC", "Shakeout", "TSO")
+BEAR_EVENTS = ("UTAD", "LPSY", "UT", "SOW", "BOI", "PSUP")
+NEUTRAL_EVENTS = ("SC", "BC", "AR", "SOS", "BUI")
 
 
 def event_dir(typ):

@@ -778,12 +778,16 @@ def build_news_markers(df, news_sentiment, min_abs_score=0.15, max_markers=30):
 def build_kline_data(df, pivots, events, title, waves=None, draw_waves=True,
                      draw_locks=True, tr=None, profile=None, phase=None,
                      segs=None, sector=None, vsa_signals=None,
-                     news_sentiment=None,
+                     news_sentiment=None, struct=None,
+                     sd=None, pnf_t=None,
                      symbol=None, scale=240):
     """收集桌面端 pyqtgraph K 线图所需的全部绘制数据 (与 plot_chart 同口径)。
 
     在 worker 线程内调用, 返回值可跨线程交给 KlineWidget.set_data。
-    symbol/scale 用于阶段带反馈标注的定位 (图表上显示 正确/错误 徽标)。"""
+    symbol/scale 用于阶段带反馈标注的定位 (图表上显示 正确/错误 徽标)。
+    struct: structure_lines() 的辅助画线/结构标签数据 (可选)。
+    sd: supply_demand() 供需强度结果 {"demand","supply","ratio"} (可选)。
+    pnf_t: pnf_targets() 横向计数目标 (因果定律, 可选)。"""
     if segs is None:
         segs = phase_segments(df, pivots, events)
     locks = _build_locks(df, events, pivots) if draw_locks else []
@@ -800,6 +804,7 @@ def build_kline_data(df, pivots, events, title, waves=None, draw_waves=True,
         "locks": locks,
         "tr": tr,
         "profile": profile,
+        "struct": struct,
         "phase": phase,
         "segs": segs,
         "sector": sector,
@@ -811,16 +816,21 @@ def build_kline_data(df, pivots, events, title, waves=None, draw_waves=True,
         "symbol": symbol,
         "scale": int(scale),
         "news_markers": build_news_markers(df, news_sentiment),
+        "sd": sd,
+        "pnf_t": pnf_t,
     }
 
 
 def plot_chart(df, pivots, events, title, fig=None, waves=None, draw_locks=True,
                tr=None, profile=None, phase=None, segs=None, sector=None,
-               vsa_signals=None, draw_waves=True):
+               vsa_signals=None, draw_waves=True, struct=None, sd=None,
+               pnf_t=None):
     """绘制K线图。传入 fig 时复用(清空重绘), 否则新建, 避免 GUI 反复换 Figure 造成内存泄漏。
     sector: {"name", "main20"} 时在右上角绘制板块确认卡 (威科夫三击法·板块层)。
     vsa_signals: VSA 分类结果 (见 vsa_classify), 非空时在 K 线下方标注有操作
-    意义的标签 (CHOC/UPT/TRU/TRD/DEM/SUP/ABS/TEST/ETR/ETF/BC/SV)。"""
+    意义的标签 (CHOC/UPT/TRU/TRD/DEM/SUP/ABS/TEST/ETR/ETF/BC/SV)。
+    struct: structure_lines() 的辅助画线/结构标签数据 (Creek/Ice/S·R/Throwback/SOT)。
+    sd/pnf_t: 供求定律 / 因果定律 (P&F 横向计数) 摘要, 供标注卡。"""
     _deprecated_matplotlib()
     if fig is None:
         fig = Figure(figsize=(11, 7.5), dpi=100)
@@ -889,6 +899,33 @@ def plot_chart(df, pivots, events, title, fig=None, waves=None, draw_locks=True,
         ax.axhline(poc, color="#d97706", ls=":", lw=1.2, alpha=0.8)
         ax.text(x_end, poc, f" POC {poc:.2f}", color="#d97706",
                 fontsize=_fs(-2), ha="right", va="center")
+
+    # 辅助画线/结构标签 (Creek 小溪 / Ice 冰线 / S·R / Throwback / SOT)
+    if struct:
+        for sr in struct.get("s_r", []):
+            col = "#059669" if sr["role"] == "S" else "#e11d48"
+            ax.axhline(sr["price"], color=col, ls="--", lw=0.9, alpha=0.45)
+        if struct.get("creek"):
+            ax.axhline(struct["creek"]["price"], color="#2563eb", ls="--",
+                       lw=1.2, alpha=0.8)
+            ax.text(x_end, struct["creek"]["price"],
+                    f" 小溪 {struct['creek']['price']:.2f}", color="#2563eb",
+                    fontsize=_fs(-2), ha="right", va="center")
+        if struct.get("ice"):
+            ax.axhline(struct["ice"]["price"], color="#7c3aed", ls="--",
+                       lw=1.2, alpha=0.8)
+            ax.text(x_end, struct["ice"]["price"],
+                    f" 冰线 {struct['ice']['price']:.2f}", color="#7c3aed",
+                    fontsize=_fs(-2), ha="right", va="center")
+        for st in struct.get("events", []):
+            col = "#0ea5e9" if st["type"] == "Throwback" else "#f59e0b"
+            yy = df["low"].iloc[st["idx"]]
+            ax.plot([st["idx"]], [yy], marker="v", markersize=6,
+                    color=col, zorder=6)
+            ax.annotate(st["type"], xy=(st["idx"], yy), xytext=(st["idx"], yy - (
+                (df["high"].max() - df["low"].min()) * 0.03)),
+                color=col, fontsize=_fs(-2), fontweight="bold",
+                ha="center", va="top")
 
     # 波浪理论: 在K线图上标注最近一段波浪结构 (上升浪/下跌浪 起止位置)
     wave_handles = []
@@ -1103,6 +1140,35 @@ def plot_chart(df, pivots, events, title, fig=None, waves=None, draw_locks=True,
                 ha="right", va="top", zorder=5,
                 bbox=dict(facecolor="white", alpha=0.9, edgecolor=sc, lw=0.9,
                           boxstyle="round,pad=0.35"))
+    # 威科夫三大定律摘要卡 (此刻最相关的两条, 自下而上堆叠)
+    _law_y = 0.70
+    if sd and sd.get("ratio") is not None:
+        r = sd["ratio"]
+        stxt = ("买方主导" if r >= 1.2 else "卖方主导" if r <= 0.8 else "供需均衡")
+        sc = _UP if r >= 1.0 else _DN
+        _law_y -= 0.145  # 供求定律卡
+        ax.text(0.99, _law_y, f"供求: 需求 {sd['demand'] / 1e6:.1f} · 供给 "
+                f"{sd['supply'] / 1e6:.1f} 万手 · 比 {r:.2f} ({stxt})",
+                transform=ax.transAxes, fontsize=_fs(-1), fontweight="bold",
+                color=sc, ha="right", va="top", zorder=5,
+                bbox=dict(facecolor="white", alpha=0.9, edgecolor=sc, lw=0.9,
+                          boxstyle="round,pad=0.35"))
+    if pnf_t and pnf_t.get("columns"):
+        last_p = float(df["close"].iloc[-1])
+        _ceu = pnf_t.get("横向计数上方目标_保守")
+        _ced = pnf_t.get("横向计数下方目标_保守")
+        ptxt = (f"因果(P&F): {pnf_t['columns']}列·计数线 {pnf_t['count_line']:.2f} → "
+                f"守恒 {pnf_t['cause']:.2f}")
+        if _ceu:
+            ptxt += f"  上方 +{(_ceu / last_p - 1) * 100:.1f}%"
+        if _ced:
+            ptxt += f"  / 下方 -{(1 - _ced / last_p) * 100:.1f}%"
+        _law_y -= 0.145  # 因果定律卡
+        ax.text(0.99, _law_y, ptxt, transform=ax.transAxes,
+                fontsize=_fs(-1), fontweight="bold", color="#7c3aed",
+                ha="right", va="top", zorder=5,
+                bbox=dict(facecolor="white", alpha=0.9, edgecolor="#7c3aed",
+                          lw=0.9, boxstyle="round,pad=0.35"))
     _h, _l = ax.get_legend_handles_labels()
     ax.legend(handles=_h + wave_handles, loc="upper left", fontsize=_fs(-2), ncol=3)
     ax.grid(alpha=0.35, lw=0.5, color=C_GRID)
