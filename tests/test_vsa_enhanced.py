@@ -165,3 +165,31 @@ def test_desc_format():
     s = sigs[0]
     assert "量" in s["desc"] and "x " in s["desc"]
     assert "idx" in s and "date" in s and "color" in s
+
+
+def test_sv_high_volume_marked_noise():
+    """SV 放量 ≥2.2x 应标噪 (docs/vsa_bull_subsets.txt: 高量 SV 命中 44.1% 反向)。
+    停止量/供方枯竭在放量时语义上是"继续抛压"而非枯竭 → 不参与融合评分。"""
+    n = 400
+    np.random.seed(5)
+    close = np.linspace(90, 50, n) + np.random.randn(n) * 0.2
+    o = close + np.random.randn(n) * 0.3
+    h = np.maximum(o, close) + np.abs(np.random.randn(n) * 0.7) + 0.1
+    low = np.minimum(o, close) - np.abs(np.random.randn(n) * 0.7) - 0.1
+    vol = np.random.rand(n) * 2e6 + 1e5
+    vol[180] = 9e6  # 事件根: 放量 (vr 远超 2.2)
+    df = pd.DataFrame({
+        "open": o, "close": close, "high": h, "low": low, "volume": vol,
+        "day": pd.date_range("2024-01-01", periods=n),
+    })
+    df = add_indicators(df, symbol="600104")
+    sigs = vsa_classify(df, scale=240)
+    sv = [s for s in sigs if s["label"] == "SV"]
+    assert sv, "下跌趋势应产出 SV"
+    sv_high = [s for s in sv if (s["features"] or {}).get("vr", 0) >= 2.2]
+    assert sv_high, "事件根放量 SV 应被识别为高量"
+    for s in sv_high:
+        assert s["noise"], f"高量 SV ({s['features'].get('vr')}x) 应标噪"
+    for s in sv:
+        vr = (s["features"] or {}).get("vr", 0)
+        assert bool(s["noise"]) == (vr >= 2.2), f"SV 量能门不一致: vr={vr} noise={s['noise']}"

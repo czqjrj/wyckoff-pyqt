@@ -173,9 +173,9 @@ EVENT_CN = {
     "BOI": "破冰", "BUI": "冰层回测",
 }
 
-BULL_EVENTS = ("JOC", "Spring", "LPS", "ST", "BU", "BUEC", "Shakeout", "TSO")
+BULL_EVENTS = ("Spring", "LPS", "ST", "BUEC", "Shakeout", "TSO")
 BEAR_EVENTS = ("UTAD", "LPSY", "UT", "SOW", "BOI", "PSUP")
-NEUTRAL_EVENTS = ("SC", "BC", "AR", "SOS", "BUI")
+NEUTRAL_EVENTS = ("SC", "BC", "AR", "SOS", "BUI", "JOC", "BU")
 
 
 def event_dir(typ):

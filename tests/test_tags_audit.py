@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from wyckoff import events as E
-from wyckoff.config import EVENT_CN, EVENT_COLORS
+from wyckoff.config import EVENT_CN, EVENT_COLORS, event_dir
 from wyckoff.indicators import add_indicators
 from wyckoff.market import boundary_events
 from wyckoff.vsa_explain import EVENT_EXPLAIN
@@ -235,3 +235,12 @@ def test_sow_vol_gate_mid_volume_neutral():
     mid_c, _ = _sow_conf(1.9)     # +2
     weak_c, _ = _sow_conf(1.3)    # -8
     assert deep_c > mid_c > weak_c, "SOW 放量门单调: 深层>中量>平凡"
+
+
+# ── JOC/BU 降中性 (joc_direction_survey: 候选上涨占比 42.9%, -8.9pt 于池基准) ──
+
+def test_joc_bu_neutral():
+    """JOC/BU 实测看多方向反向 (42.9% vs 51.8% 池基准, -8.9pt),
+    与 SOS 同理降为中性结构标记。event_dir 返回 0。"""
+    assert event_dir("JOC") == 0, "JOC 已降中性 (方向反向)"
+    assert event_dir("BU") == 0, "BU 已降中性 (依赖 JOC)"

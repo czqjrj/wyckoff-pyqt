@@ -354,7 +354,11 @@ def vsa_classify(df: pd.DataFrame, scale: int = 240) -> list:
         out.append({"idx": i, "date": row["day"], "label": lb,
                     "color": VSA_COLOR[lb],
                     # 噪声型标签: 命中贴近随机, 供上游过滤 (信号库/融合评分)
-                    "noise": lb in VSA_NOISE_TYPES,
+                    # SV 增加量能实例门: 停止量(供方枯竭)在放量≥2.2x 时反向
+                    # (docs/vsa_bull_subsets.txt: SV vr≥2.2 命中仅 44.1%, <1.5
+                    # 55.2%) —— 高量 SV 语义上是"继续抛压"而非枯竭, 标噪过滤。
+                    "noise": (lb in VSA_NOISE_TYPES
+                              or (lb == "SV" and vr[i] >= 2.2)),
                     "desc": f"量{vr[i]:.1f}x {_DESC.get(lb, lb)}",
                     "features": {
                         "vr": round(float(vr[i]), 4),
