@@ -149,3 +149,50 @@ def test_bu_alias_buec_explained():
     assert EVENT_EXPLAIN.get("BU"), "BU 解释缺失"
     assert EVENT_EXPLAIN.get("BUEC"), "BUEC 解释缺失"
     assert EVENT_CN.get("BUEC") == "回测小溪"
+
+
+# ── SC/BC 环境门 (docs/event_env_gate_progress.md 全量调查分桶) ──
+
+def _climax_conf(typ, prior_r20, i=120):
+    """在可控前置 20 根收益下求 SC/BC 的 conf (event_confidence)。"""
+    rng = np.random.default_rng(7)
+    closes = 20 + np.cumsum(rng.normal(0, 0.05, 200))
+    closes[i] = closes[i - 20] * (1 + prior_r20)
+    df = pd.DataFrame({
+        "day": pd.date_range("2023-01-01", periods=200, freq="D"),
+        "open": np.roll(closes, 1), "close": closes,
+        "high": np.maximum(np.roll(closes, 1), closes) * 1.02,
+        "low": np.minimum(np.roll(closes, 1), closes) * 0.98,
+        "volume": np.full(200, 5e5),
+    })
+    df.loc[0, "open"] = closes[0]
+    df = add_indicators(df, symbol="600104")
+    ctx = E._EventContext(df)
+    ev = E.event_confidence(ctx, [{"type": typ, "idx": i, "price": float(closes[i])}])[0]
+    return ev["conf"], ev["feat"].get("prior_r20")
+
+
+def test_sc_env_gate_prior_drop_boosts_conf():
+    """SC 前置大跌 (≤-15%) 环境 conf 明显高于无大跌 (随机环境)。
+    全量调查: 前置 ≤-15% → 20根上涨命中 70.4%; 前置 >-8% 命中仅 ~51%。"""
+    deep_c, deep_p = _climax_conf("SC", -0.20)
+    weak_c, weak_p = _climax_conf("SC", 0.02)
+    assert deep_p == -0.20 and weak_p == 0.02, "prior_r20 特征应记录"
+    assert deep_c > weak_c, f"深跌环境 SC 应更高置信: {deep_c} vs {weak_c}"
+
+
+def test_sc_env_gate_middle_zone_neutral():
+    """SC 前置小跌 (-15% ~ -8%) 介于深跌/随机之间, 应有固定增益差。"""
+    strong_c, _ = _climax_conf("SC", -0.20)   # +8
+    mid_c, _ = _climax_conf("SC", -0.10)       # 无调整
+    weak_c, _ = _climax_conf("SC", 0.02)       # -15
+    assert strong_c > mid_c > weak_c, "SC 环境门单调: 深跌>中跌>无跌"
+
+
+def test_bc_env_gate_prior_rise_boosts_conf():
+    """BC 前置大涨 (≥+15%) 环境 conf 明显高于横盘 (反向失效)。
+    全量调查: 前置 ≥+15% → 20根下跌命中 60.5%; 横盘 ≤+4% 命中 ~47.8%。"""
+    deep_c, deep_p = _climax_conf("BC", 0.20)
+    weak_c, weak_p = _climax_conf("BC", -0.02)
+    assert deep_p == 0.20 and weak_p == -0.02, "prior_r20 特征应记录"
+    assert deep_c > weak_c, f"深涨环境 BC 应更高置信: {deep_c} vs {weak_c}"

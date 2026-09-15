@@ -864,12 +864,37 @@ def event_confidence(ctx: _EventContext, events):
         # 现有代码已根据 up_i 进行加分/减分, 此处补充"强匹配惩罚"以明确过滤弱信号
         if up_i:  # 当前在上升趋势
             # 底部反转类型在上升趋势中变弱
-            if e["type"] in ("SC", "ST", "Spring", "LPS", "PSY", "Shakeout"):
+            if e["type"] in ("ST", "Spring", "LPS", "PSY", "Shakeout"):
                 score -= 15  # 明确惩罚: 这些类型应在下跌/非上升趋势中出现
         else:  # 当前在非上升/下降趋势
             # 顶部反转类型在下降趋势中变弱
-            if e["type"] in ("BC", "UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
+            if e["type"] in ("UTAD", "SOS", "JOC", "BU", "AR", "LPSY"):
                 score -= 15  # 明确惩罚: 这些类型应在上升趋势中出现
+
+        # SC/BC 环境门 (docs/event_env_gate_progress.md 全量调查分桶结论):
+        # SC/BC 是中性高潮事件, 上方 `if d:` 趋势块恒被跳过 (up_i 恒 False, BC
+        # 恒吃 -15 而 SC 恒不吃)。这里补上前置 20 根动量门, 用数据选定阈值:
+        #   SC: 前置大跌 ≤-15% → 20根上涨命中 70.4% (n=1025, +11pt);
+        #       前置未大跌 (>-8%) 命中仅 51% 接近随机 → 重罚。
+        #   BC: 前置大涨 ≥+15% → 20根下跌命中 60.5% (n=5925, +5pt);
+        #       横盘 (≤+4%) 命中 47.8% 反向随机 → 重罚; 上升趋势内命中降 6pt。
+        if e["type"] in ("SC", "BC") and i >= 20:
+            prior_r20 = float(close[i] / max(close[i - 20], 1e-9) - 1)
+            up_i = np.isfinite(ma20[i]) and np.isfinite(ma50[i]) and \
+                ma20[i] > ma50[i] and close[i] > ma50[i]
+            e["feat"]["prior_r20"] = round(prior_r20, 4)
+            if e["type"] == "SC":
+                if prior_r20 <= -0.15:
+                    score += 8      # 深度超卖环境: SC 方向价值最强
+                elif prior_r20 > -0.08:
+                    score -= 15     # 无前置大跌: SC 接近随机, 降权
+            else:  # BC
+                if prior_r20 >= 0.15:
+                    score += 8      # 深度超买环境: BC 方向价值最强
+                elif prior_r20 <= 0.04:
+                    score -= 12     # 横盘: BC 反向失效, 降权
+                if up_i:
+                    score -= 5      # 上升趋势内 BC 命中降 (53.0% vs 非升 59.3%)
 
         # 确保分数不会低于 0
         score = max(0, score)
