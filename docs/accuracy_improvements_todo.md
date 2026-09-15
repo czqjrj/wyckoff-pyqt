@@ -15,7 +15,7 @@
 | 5 | 高价值 VSA 标签交叉验证 | ⚠️ 部分 (仅融合维度) | `wyckoff/fusion.py`；独立策略未入池 |
 | 6 | 九大检验点 / 多周期 / 阶段先验 | ✅ 已落实 (分散) | `ninetests` / `multitime.py` / `feedback` |
 
-结论: **5 项已落实, 1 项部分落实**; 另有 9 项工程/验证缺口待补。
+结论: **5 项已落实, 1 项部分落实**; 另有 11 项工程/验证缺口待补。
 
 ---
 
@@ -103,6 +103,17 @@
     只含 discipline + left_buy, 价值吸筹实际不参与扫描 (与文件注释"纪律>价值吸筹>左侧"不一致)。
   - 建议: 确认是有意下线还是遗漏; 若保留, 需按 `winrate_improve_eval.md` 结论设 conf 门槛。
 
+- [ ] **5.12 类型检查 + 覆盖率门槛**
+  - 现状: 仅 ruff(E/F/W/I/UP) + compileall + pytest, 无 mypy/pyright 类型检查、无 coverage 门槛;
+    本地环境未装 ruff (仅 CI 装)。
+  - 建议: CI 增加 mypy 核心包 (`wyckoff/`, 先 `ignore_missing_imports`) 与
+    `pytest --cov` 门槛 (建议核心模块 ≥70%); 本地 `pip install -e ".[lint]"`。
+
+- [ ] **5.13 状态存储规模化**
+  - 现状: `wx_signal_accuracy.json` 单文件 8.9MB (13,523 条), 靠 atomic write 保证一致性;
+    评估/落盘在单锁内全量读写, 规模再增会拖慢且易冲突。
+  - 建议: 迁到 `wyckoff_cache.db` (SQLite, 项目已有 `sqldb.py`) 或分片/增量写入。
+
 ---
 
 ## 四、复现与验证命令
@@ -127,5 +138,43 @@ python -m pytest tests -q
 - `wyckoff/fusion.py` / `wyckoff/multitime.py` / `wyckoff/ninetests.py`
 - `docs/profitability_bt.md` / `docs/accuracy_report.md` / `docs/event_env_gate_progress.md`
 - `docs/winrate_improve_eval.md` / `docs/spring_only_progress.md` / `docs/backtest_comparison_report.md`
+
+---
+
+## 六、现状体检 (2026-09-15 实测)
+
+### 6.1 工程质量: 高
+
+- 规模: 263 个 py / 74,211 行 / 198 commits。
+- 结构: `wyckoff/` 核心 80 模块、`ui/` 拆 components/renderers/threads、`sync/` 独立包、
+  `scripts/`、`tests/`; `paper/`、`strategies/` 均已模块化; `discipline.py`/`config.py` 单一数据源。
+- 测试: `pytest tests -q` → **617 passed, 7 skipped (624 collected), 56.5s**。
+- CI (`.github/workflows/ci.yml`): ruff + compileall + pytest(offscreen) + 信号评估。
+- 缺口: 无类型检查 / 覆盖率门槛 (见 5.12); 状态单 JSON 8.9MB (见 5.13)。
+
+### 6.2 分析准确度: 分层明显
+
+信号库 (wx_signal_accuracy.json): 13,523 条 / 已评估 13,483 / pending 40 / stale 1。
+
+| 层级 | 代表类型 (20根方向命中, n) | 结论 |
+|---|---|---|
+| 强多头 | Spring 84.8% (671)、Shakeout 80.0% (135)、ST 74.7% (186)、LPS 65.0% (137)、SC 60.6% (327) | 统计显著 edge |
+| 强空头 | LPSY 79.9% (134)、UTAD 78.6% (676) | A股无裸空, 仅反向证据 |
+| 弱事件 | AR 52.6% (681)、SOS 46.2% (277)、BC 46.1% (386)、JOC 40.0% (95)、PSY 35.0% (100) | ~随机, 已剔除 |
+| VSA | 全部 48–60% | ~随机, 仅上下文确认 |
+
+- 强梯队加权 ~77% vs 弱梯队 ~45% (与 `docs/accuracy_report.md` 一致)。
+- 校准模型: `wx_online_model.json` `ready=True`, `version=3`, `auc_oos=0.5614`,
+  `acc_oos=0.5715`, `ic_oos=0.1196` (退化, 见 5.7)。
+- 回测 (样本内): paper3 改进 +93.1%/Sharpe 1.07/回撤 -13.8%; Spring-only +494%/胜率 59.1%/
+  回撤 -13.14%; conservative 年化 +15.4%~+29.5%。
+
+### 6.3 总评与风险
+
+- **事件识别层可信** (强梯队 60–85% 有统计意义); 弱事件与 VSA 接近随机, 已正确降权。
+- **系统层仅为"有正期望候选"**: 回测方向一致 (单笔 +2.9~6%、胜率 53~83%、盈亏比 2~3),
+  但三处硬伤必须打折——① 模型退化; ② 全部样本内、含 2024 偏强行情, 无前向验证;
+  ③ 板块强度历史快照缺失致门禁历史空转、组合为数学叠加。
+- 落地前先补 P0/P1 (VSA 入池、多周期门、板块去重回测、样本外验证、模型重训监控)。
 
 > 免责: 以上均为样本内历史统计与工程缺口, 落地前需样本外验证; 不构成投资建议。
