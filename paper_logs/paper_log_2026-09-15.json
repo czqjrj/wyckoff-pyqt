@@ -1,0 +1,102 @@
+{
+  "date": "2026-09-15",
+  "events": [
+    {
+      "ts": "2026-09-15 00:23:47",
+      "type": "account",
+      "detail": {
+        "equity": 1000000.0,
+        "cash": 1000000.0,
+        "positions_count": 0,
+        "closed_count": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 09:04:56",
+      "type": "buy",
+      "detail": {
+        "symbol": "600000",
+        "name": "x",
+        "qty": 33300,
+        "price": 10.01,
+        "amount": 333333.0,
+        "conf": 80,
+        "strategy": "",
+        "event_type": "",
+        "sector": "",
+        "reason": "手动买入"
+      }
+    },
+    {
+      "ts": "2026-09-15 09:51:12",
+      "type": "scan",
+      "detail": {
+        "scan_count": 4,
+        "codes_scanned": 3116,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 10:31:32",
+      "type": "scan",
+      "detail": {
+        "scan_count": 5,
+        "codes_scanned": 89,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 11:01:27",
+      "type": "scan",
+      "detail": {
+        "scan_count": 6,
+        "codes_scanned": 89,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 11:39:19",
+      "type": "scan",
+      "detail": {
+        "scan_count": 7,
+        "codes_scanned": 89,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 13:38:44",
+      "type": "scan",
+      "detail": {
+        "scan_count": 8,
+        "codes_scanned": 89,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 14:10:26",
+      "type": "scan",
+      "detail": {
+        "scan_count": 9,
+        "codes_scanned": 89,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-15 14:38:47",
+      "type": "scan",
+      "detail": {
+        "scan_count": 10,
+        "codes_scanned": 89,
+        "candidates_found": 0
+      }
+    }
+  ],
+  "summary": {
+    "scan_count": 7,
+    "buy_count": 1,
+    "sell_count": 0,
+    "condition_count": 0,
+    "risk_block_count": 0,
+    "rebalance_count": 0
+  }
+}

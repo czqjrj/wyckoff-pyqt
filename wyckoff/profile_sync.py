@@ -434,11 +434,15 @@ def _no_net():
 
 
 def _cloud_enabled():
-    """MySQL 云后端可用: 在线 + 已登录账户 (按用户隔离) + 可连通。"""
+    """MySQL 云后端可用: 在线 + 已登录账户 (按用户隔离) + 已配置。
+
+    只做能力判定 (非实时连通探测); 冷启动/瞬态掉线由 cloud_db 数据通路
+    自带长超时 + 重试处理, 避免一次快速探测失败就整单中断。
+    """
     try:
         if not account.current_user():
             return False
-        return cloud_db.enabled()
+        return cloud_db.configured()
     except Exception:
         return False
 

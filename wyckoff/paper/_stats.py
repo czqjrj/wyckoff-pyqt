@@ -6,6 +6,8 @@ import time
 import numpy as np
 
 import wyckoff.paper as paper
+
+from .. import paper_strategy_accuracy
 from ._params import SLIP_BUY, SLIP_SELL
 
 

@@ -14,9 +14,11 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import threading
+import time
 
 try:
     import pymysql
@@ -33,7 +35,46 @@ DEFAULT_PASSWORD = os.environ.get("WYCKOFF_SQL_PASSWORD", "98nM5egHVauDIbqm")
 NO_NET_ENV = "WYCKOFF_NO_NET"
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 15
+_DATA_TIMEOUT = 120
+_DATA_CONNECT_TIMEOUT = 30
 _LOCK = threading.Lock()
+
+# SQLPub 为 Serverless MySQL: 空闲休眠, 冷启动时握手/认证/首查可能掉线,
+# 这些瞬态错误需在数据通路内重试 (健康检查 enabled() 除外, 保持快速失败)。
+_TRANSIENT_CODES = (2003, 2006, 2013)
+
+
+def _is_transient(exc):
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    if pymysql and isinstance(exc, pymysql.err.OperationalError):
+        return not exc.args or exc.args[0] in _TRANSIENT_CODES
+    if pymysql and isinstance(exc, pymysql.err.InterfaceError):
+        return True
+    return False
+
+
+def _retry(fn, attempts=2, base_sleep=1.5):
+    """瞬态连不上/读超时/认证掉线时带退避重试整个操作 (整体为重写语义, 重试无害)。"""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - 重试判定见 _is_transient
+            last = exc
+            if not _is_transient(exc) or i >= attempts - 1:
+                raise
+            time.sleep(base_sleep * (i + 1))
+    raise last
+
+
+def _retry_on_transient(attempts=2):
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return _retry(lambda: fn(*args, **kwargs), attempts=attempts)
+        return wrapper
+    return deco
 
 # 建表 (两表): users 登录账号; profile_items 私有数据同步条目
 _SCHEMA = """
@@ -83,31 +124,46 @@ def config():
     }
 
 
-def connect():
-    """建立到 SQLPub 的新连接。失败抛异常。"""
+def connect(connect_timeout=_DATA_CONNECT_TIMEOUT, read_timeout=_DATA_TIMEOUT):
+    """建立到 SQLPub 的新连接。失败抛异常。
+
+    健康检查 (enabled) 用短超时快速辨识离线/被墙; 同步数据通路用长超时:
+    Serverless 冷启动握手可能耗时数十秒, MB 级 canonical JSON 传输也要时间。
+    """
     if pymysql is None:
         raise RuntimeError("未安装 PyMySQL, 无法使用 MySQL 云同步")
     conn = pymysql.connect(
         host=DEFAULT_HOST, port=DEFAULT_PORT, user=DEFAULT_USER,
         password=DEFAULT_PASSWORD, database=DEFAULT_DB,
-        connect_timeout=_CONNECT_TIMEOUT, read_timeout=_READ_TIMEOUT,
-        write_timeout=_READ_TIMEOUT, charset="utf8mb4",
+        connect_timeout=connect_timeout, read_timeout=read_timeout,
+        write_timeout=read_timeout, charset="utf8mb4",
         autocommit=True, cursorclass=pymysql.cursors.DictCursor)
     return conn
 
 
+def configured():
+    """后端是否已配置 (非离线 + PyMySQL 可用); 不做连通探测, 供编排层把关。
+
+    连通与否由数据通路自身负责 (长超时 + 瞬态重试), 避免冷启动期一次
+    快速探测失败就整体中断同步。
+    """
+    return not _no_net() and pymysql is not None
+
+
 def enabled():
     """后端是否可用: 在线 + PyMySQL 可用 + 连通。失败静默 False。"""
-    if _no_net() or pymysql is None:
+    if not configured():
         return False
     try:
-        with connect() as conn:
+        with connect(connect_timeout=_CONNECT_TIMEOUT,
+                     read_timeout=_READ_TIMEOUT) as conn:
             conn.cursor().execute("SELECT 1")
         return True
     except Exception:
         return False
 
 
+@_retry_on_transient()
 def ensure_schema():
     """建表 (幂等)。"""
     with connect() as conn:
@@ -119,6 +175,7 @@ def ensure_schema():
 
 
 # ── users: 登录账号 ────────────────────────────────────────
+@_retry_on_transient()
 def get_user(username):
     """按用户名取账号记录, 无则返回 None。"""
     with connect() as conn:
@@ -136,6 +193,7 @@ def get_user(username):
     }
 
 
+@_retry_on_transient()
 def list_users():
     """返回全部用户名列表。"""
     with connect() as conn:
@@ -144,6 +202,7 @@ def list_users():
             return [r["username"] for r in cur.fetchall()]
 
 
+@_retry_on_transient()
 def upsert_user(record):
     """写入/更新一条账号记录 (含哈希)。"""
     with connect() as conn:
@@ -158,6 +217,7 @@ def upsert_user(record):
                  record.get("created_ts", 0.0)))
 
 
+@_retry_on_transient()
 def rename_user(old_user, new_user, display=None):
     """改用户名: 更新 users 主键 + 迁移 profile_items 归属。"""
     with connect() as conn:
@@ -170,6 +230,7 @@ def rename_user(old_user, new_user, display=None):
                 (new_user, old_user))
 
 
+@_retry_on_transient()
 def delete_user(username):
     """删除账号及其全部同步数据 (仅破坏性调用, 谨慎)。"""
     with connect() as conn:
@@ -195,6 +256,7 @@ def _deserialize(s):
         return None
 
 
+@_retry_on_transient()
 def read_profile_items(username, type_):
     """读取某用户某类型的全部条目, 返回 {item_id: {"v": value, "ts": ts}}。"""
     with connect() as conn:
@@ -209,6 +271,7 @@ def read_profile_items(username, type_):
     }
 
 
+@_retry_on_transient()
 def write_profile_items(username, type_, items):
     """整体覆盖写入某用户某类型的条目集 (items: {item_id: {v, ts}})。
 
@@ -228,6 +291,7 @@ def write_profile_items(username, type_, items):
                     (username, type_, str(iid), _serialize(v), float(ts)))
 
 
+@_retry_on_transient()
 def clear_profile(username):
     """清空某用户全部同步数据。"""
     with connect() as conn:
@@ -239,6 +303,7 @@ def clear_profile(username):
 CALIB_KEY = "calib"
 
 
+@_retry_on_transient()
 def read_calib_bundle():
     """读取共享校准 bundle (signals/feedback/model/meta 四份 canonical JSON)。
 
@@ -262,6 +327,7 @@ def read_calib_bundle():
     }
 
 
+@_retry_on_transient()
 def write_calib_bundle(files, updated_ts=None):
     """整体覆盖写入共享校准 bundle。
 
@@ -301,6 +367,7 @@ def write_calib_bundle(files, updated_ts=None):
                     [CALIB_KEY] + args)
 
 
+@_retry_on_transient()
 def clear_calib_bundle():
     """清空共享校准 bundle (仅破坏性调用, 谨慎)。"""
     with connect() as conn:

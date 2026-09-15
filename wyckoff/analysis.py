@@ -1,7 +1,10 @@
 """完整分析流水线 (run_analysis) 与交易计划生成。"""
+import logging
 import threading
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from .backtest import backtest_events, backtest_vsa, robustness_check
 from .chart import plot_chart, plot_indicators

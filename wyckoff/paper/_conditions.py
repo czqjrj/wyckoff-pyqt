@@ -5,8 +5,8 @@ import time
 import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
+from ..strategies.constants import STRATEGY_LONG_LEFT, STRATEGY_VALUE_ACC
 from ._params import SLIP_SELL
-
 
 # ── 条件单 (价格触发 / 止盈止损 / 追踪止损) ─────────────────
 # kind:
@@ -156,7 +156,7 @@ def place_condition(kind, symbol, price=None, pct=None, trigger="above",
                     qty=0, name="", reason=""):
     """独立入口: 加载状态并添加条件单。返回 (cond, msg)。"""
     st = paper.load_state()
-    with _LOCK:
+    with paper._LOCK:
         return add_condition(st, kind, symbol, price=price, pct=pct,
                              trigger=trigger, qty=qty, name=name,
                              reason=reason, save=True)

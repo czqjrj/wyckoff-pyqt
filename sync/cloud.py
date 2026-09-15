@@ -31,9 +31,17 @@ def _bundle_key(name):
 
 
 def enabled():
-    """云传输是否可用 (在线 + 连通)。"""
+    """云传输是否可用 (在线 + 连通, 供状态展示/健康判断)。"""
     try:
         return cloud_db.enabled()
+    except Exception:
+        return False
+
+
+def configured():
+    """云传输是否已配置 (非离线 + 客户端可用); 编排层据此把关, 不实时探测。"""
+    try:
+        return cloud_db.configured()
     except Exception:
         return False
 

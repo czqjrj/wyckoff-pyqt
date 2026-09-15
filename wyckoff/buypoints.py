@@ -129,7 +129,7 @@ def _get_adaptive_gate_params(kind: str, vol_ma20: float) -> tuple:
         if vol_ma20 > 0.25:
             left_adj += 5
             lower_adj -= 0.001
-        # 波动率 < 15%: 缩小左侧窗口, 宽容右侧比例
+        # 波动率 < 10%: 缩小左侧窗口, 宽容右侧比例
         elif vol_ma20 < 0.10:
             left_adj -= 5
             lower_adj += 0.001
@@ -301,7 +301,7 @@ def _spring_retest_bp(df, context, e):
             continue
         if not _finite(vma[j]) or vma[j] <= 0:
             continue
-        if vol[j] >= vma[j] * (1 / RETEST_VOL):
+        if vol[j] >= vma[j] * RETEST_VOL:
             continue  # 量未萎缩 → 不是"卖压耗尽"
         # 相对回落: 低于弹簧后累计高点 3% 以上才算"回落"
         peak = float(np.max(close[sp:j + 1]))
@@ -603,7 +603,12 @@ def struct_buy_points(df, events, pivots=None, context_cache=None):
         i = int(e["idx"])
         if not (60 <= i < len(df)):
             continue
+        # 左侧底部信号 (弹簧/震仓/二次测试): 阶段以其"回测的既有结构"判定 (bar i-1),
+        # 而非暴跌 bar 本身——弹簧低点常突破 MA, 用 bar i 会误判为派发/下跌。
+        # 右侧事件 (突破/回踩) 的决策点即 bar i, 仍按 bar i 判定。
         ctx = _phase_at(df, pivots, events, i, cache)
+        if t in ("Spring", "Shakeout", "ST"):
+            ctx = _phase_at(df, pivots, events, max(0, i - 1), cache)
         if t == "Spring":
             if _reject_stage(ctx, ("spring",)):
                 continue
@@ -710,6 +715,9 @@ def struct_buy_points(df, events, pivots=None, context_cache=None):
                 struct_kind = "dist"
             elif any(k in phase for k in ("Markdown", "下跌")):
                 struct_kind = "md"
+            elif any(k in phase for k in ("Markup", "上升")):
+                # 上升途中: 中性档 (无调整), 不按吸筹收紧左侧窗口
+                struct_kind = "other"
             else:
                 struct_kind = "acc"  # 默认视为底部结构
         except Exception:

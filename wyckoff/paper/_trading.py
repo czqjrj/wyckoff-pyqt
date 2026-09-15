@@ -7,7 +7,7 @@ import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
 from ..strategies.constants import STRATEGY_VALUE_ACC
-from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAILING_STOP, WEAK_MAX_POS
+from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAIL_ATR_MULT, TRAILING_STOP, WEAK_MAX_POS
 
 
 # ── 撮合: 买入/卖出 ─────────────────────────────────────
@@ -75,7 +75,7 @@ def place_buy_order(code, name, type_, conf, price, n_total, execute=True,
     独立入口: 自行加载状态、校验持仓/同持上限/资金。返回 (order, msg)。
     """
     st = paper.load_state()
-    with _LOCK:
+    with paper._LOCK:
         if has_position(st, code):
             return None, "已持有"
         weak = paper._weak_market_flag()  # 刷新弱市标记 (UI 手动买入也走弱市限仓)

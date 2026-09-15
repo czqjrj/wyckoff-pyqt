@@ -14,7 +14,7 @@ from .bundle import export_bundle, import_bundle, machine_id
 def _require_cloud():
     if transport.no_net():
         raise transport.SyncError("WYCKOFF_NO_NET=1, 已跳过同步")
-    if not cloud.enabled():
+    if not cloud.configured():
         raise transport.SyncError("云端 (MySQL) 不可用, 无法同步")
 
 
@@ -22,7 +22,7 @@ def pull(retrain=False):
     """拉取远端 canonical 数据合并进本地库。返回结果 dict。"""
     if transport.no_net():
         return {"skipped": "WYCKOFF_NO_NET=1"}
-    if not cloud.enabled():
+    if not cloud.configured():
         return {"error": "云端 (MySQL) 不可用, 无法同步"}
     remote = cloud.read_canonical()
     counts = {}
@@ -40,7 +40,7 @@ def push():
     """本地数据导出覆盖 canonical 文件并推送 (云单行原子 upsert)。"""
     if transport.no_net():
         return {"skipped": "WYCKOFF_NO_NET=1"}
-    if not cloud.enabled():
+    if not cloud.configured():
         return {"error": "云端 (MySQL) 不可用, 无法同步"}
     bundle = export_bundle(include_model=True)
     meta = cloud.make_meta(
@@ -65,7 +65,7 @@ def sync(retrain=True):
     """
     if transport.no_net():
         return {"skipped": "WYCKOFF_NO_NET=1"}
-    if not cloud.enabled():
+    if not cloud.configured():
         return {"error": "云端 (MySQL) 不可用, 无法同步", "ok": False}
     result = {"cloud": True, "retrained": False}
     remote = cloud.read_canonical()

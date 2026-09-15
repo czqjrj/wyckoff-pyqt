@@ -4,7 +4,7 @@ import time
 
 import wyckoff.paper as paper
 
-from ._params import AdvancedOrder, OrderSide, OrderStatus, OrderType
+from ._params import SLIP_BUY, SLIP_SELL, AdvancedOrder, OrderSide, OrderStatus, OrderType
 
 
 # ── 高级订单管理 ────────────────────────────────────────────

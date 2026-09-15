@@ -201,6 +201,77 @@ def test_rightside_emitted_after_leftside():
                a["entry_price"] < b["entry_price"] for a in lefts)
 
 
+def _mk_retest_df(dip_vol_ratio=0.40, seed=3, n=135):
+    """弹簧→拉升→缩量/平量回踩守住→收复, 供 spring_retest 缩量纪律测试。
+
+    dip_vol_ratio: 回踩 bar 的 volume / vol_ma20 (负值 = 该窗量未摆设为平量 1.05)。
+    n 默认 135 ≥ struct_buy_points 的最低长度门 (120), 且弹簧低点在 bar 83
+    (与 _mk_retest_event 的 idx=83/price=7.58 对齐), 回踩 dip 在 bar 90/91。"""
+    rng = np.random.default_rng(seed)
+    days = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = np.empty(n); low = np.empty(n); high = np.empty(n)
+    op = np.empty(n); vol = np.full(n, 1.0e6)
+    c = 11.0
+    for i in range(n):
+        if i < 45:
+            c = max(8.0, c - 0.07)
+        elif i < 78:
+            c += rng.normal(0, 0.02)
+            c = min(8.7, max(8.3, c))
+        elif i <= 82:
+            c = 8.3 - (0.08 * (i - 78))       # 弹簧前缓跌
+            vol[i] = 1.9e6 if i == 79 else 1.0e6
+        elif i == 83:                            # 弹簧低点 7.55
+            c = 7.58
+            vol[i] = 0.55e6
+        elif i == 84:                            # 快速收回
+            c = 7.95
+        elif i < 90:                             # 拉升
+            c = min(8.85, c + 0.07)
+        elif i == 90:                            # 回踩起点: 守住弹簧低点, 量按 ratio
+            c = 8.12
+            vol[i] = (1.9e6 if dip_vol_ratio >= 0 else 0.60e6)
+        elif i == 91:                            # 回踩缩量/平量
+            c = 8.02
+            r = (1.0e6 * dip_vol_ratio) if dip_vol_ratio >= 0 else 1.05e6
+            vol[i] = r
+        elif i == 92:                            # 收复
+            c = 8.35
+        elif i < 98:
+            c = min(8.9, c + 0.05)
+        else:
+            c += rng.normal(0, 0.02)
+        lo = c - 0.12; hi = c + 0.12
+        if i == 83:
+            lo, hi = 7.50, 7.62
+        if i == 90:
+            lo, hi = 8.06, 8.18
+        if i == 91:
+            lo, hi = 7.96, 8.08
+        close[i] = c; low[i] = lo; high[i] = hi; op[i] = c
+    return add_indicators(pd.DataFrame({
+        "day": days, "open": op, "high": high, "low": low,
+        "close": close, "volume": vol.astype(float)}), symbol="test")
+
+
+def _mk_retest_event(idx=83, price=7.58):
+    return [{"type": "Spring", "idx": idx, "price": price, "conf": 80, "date": None}]
+
+
+def test_spring_retest_requires_shrunk_volume():
+    """缩量回踩须量萎缩 (< vol_ma20×92%) 才给 buy point, 平量回踩不产 (量未卖压耗尽)。"""
+    ev = _mk_retest_event()
+    shrunk = BP.struct_buy_points(_mk_retest_df(dip_vol_ratio=0.40), ev)
+    flat = BP.struct_buy_points(_mk_retest_df(dip_vol_ratio=1.05), ev)
+    kinds_s = [b["kind"] for b in shrunk]
+    kinds_f = [b["kind"] for b in flat]
+    assert "spring_retest" in kinds_s, kinds_s
+    assert "spring_retest" not in kinds_f, kinds_f
+    sr = [b for b in shrunk if b["kind"] == "spring_retest"][0]
+    assert sr["stage"] not in ("distribution", "markdown")
+    assert sr["stop_price"] < sr["entry_price"]
+
+
 def test_reject_stage_blocks_distribution_markdown():
     assert BP._reject_stage("distribution", ("sos_break",))
     assert BP._reject_stage("markdown", ("spring",))

@@ -1,9 +1,11 @@
 """模拟盘风控层: 回撤/风险预算/集中度/资金利用率门禁 + 仓位计算 + 组合风险。"""
 
+import numpy as np
+
 import wyckoff.paper as paper
 
 from .. import paper_log
-from ._params import PositionRisk, SLIP_BUY
+from ._params import MIN_LOT, SLIP_BUY, PositionRisk, PositionSizingMethod
 
 
 # ── 风控与资金管理 ──────────────────────────────────────────

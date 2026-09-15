@@ -176,7 +176,8 @@ def judge_phase(df: pd.DataFrame, pivots, events):
     ma50 = df["price_ma50"].values
     n = len(df)
     recent_cutoff = df["day"].iloc[max(0, len(df) - W_RECENT)]
-    recent_ev = [e for e in events if e["date"] >= recent_cutoff]
+    recent_ev = [e for e in events
+                 if e["date"] is not None and e["date"] >= recent_cutoff]
     rtypes = {e["type"] for e in recent_ev}
     phase, detail = "待定", ""
     if len(recent_highs) >= 2 and len(recent_lows) >= 2:
@@ -275,11 +276,16 @@ def judge_phase(df: pd.DataFrame, pivots, events):
                 phase, detail = "底部整固 (Accumulation)", "价站上MA50(枢轴不足, 均线后备)"
             else:
                 phase, detail = "顶部构筑 (Distribution)", "价跌破MA50(枢轴不足, 均线后备)"
-    springs = [e for e in events if e["type"] == "Spring" and e["date"] >= recent_cutoff]
-    uts = [e for e in events if e["type"] == "UTAD" and e["date"] >= recent_cutoff]
-    scs = [e for e in events if e["type"] == "SC" and e["date"] >= recent_cutoff]
-    jocs = [e for e in events if e["type"] == "JOC" and e["date"] >= recent_cutoff]
-    soss = [e for e in events if e["type"] == "SOS" and e["date"] >= recent_cutoff]
+    springs = [e for e in events if e["type"] == "Spring"
+               and e["date"] is not None and e["date"] >= recent_cutoff]
+    uts = [e for e in events if e["type"] == "UTAD"
+           and e["date"] is not None and e["date"] >= recent_cutoff]
+    scs = [e for e in events if e["type"] == "SC"
+           and e["date"] is not None and e["date"] >= recent_cutoff]
+    jocs = [e for e in events if e["type"] == "JOC"
+            and e["date"] is not None and e["date"] >= recent_cutoff]
+    soss = [e for e in events if e["type"] == "SOS"
+            and e["date"] is not None and e["date"] >= recent_cutoff]
     # 事件修正: SC后出现SOS/JOC且无UTAD → 底部整固(吸筹)迹象
     if scs and (jocs or soss) and not uts:
         last_sc = scs[-1]
