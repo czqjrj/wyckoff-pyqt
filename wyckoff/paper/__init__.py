@@ -312,15 +312,13 @@ def _limit_blocked(code, side, df=None) -> bool:
 # (AR/BC/SOS/JOC/PSY/SOW_INVALID 等) 不单独触发入场, 避免稀释组合质量。
 # 注: UTAD/LPSY 命中 78.5%/78.3%, 高于旧含 SOW_INVALID 的口径, 一并纳入。
 try:
-    # 仅保留明确的多头事件（Spring, ST, LPS），
-    # 移除 UTAD/LPSY (空头方向 event_dir=-1)、SC (中性)、Shakeout (胜率最差41.7%)
-    # 预期：移除 Shakeout 可提升胜率 ~5个百分点
-    LONG_EVENT_TYPES = frozenset({"Spring", "ST", "LPS"})
-    # SC/SOW_INVALID 方向为中性 (event_dir==0), 但属底部反转/空头失效。
-    # 其中 SC 命中 60.7% 在强梯队内, 保留; SOW_INVALID (71.1%) 非强梯队, 剔除.
+    # 仅保留 Spring 多头事件最佳实践 (Spring-only 实证最优: 200只全A conf=100
+    # 118笔 +456.4% vs Spring+ST 117笔 +195.6%, Spring 命中20=88%/均收+13.3%)。
+    # ST/LPS/Shakeout/SC 均已剥离: ST 命中78%/止损率25% 弱; LPS 池中近无;
+    # Shakeout/SC 在 conf≥100 全A池 0 笔 (均为弱环/中性)。事件集收敛至单类型。
+    LONG_EVENT_TYPES = frozenset({"Spring"})
 except Exception:  # pragma: no cover - 防御首启缺失
-    LONG_EVENT_TYPES = frozenset(
-        {"Spring", "ST", "LPS"})
+    LONG_EVENT_TYPES = frozenset({"Spring"})
 
 
 # ── 微信推送 (交易提醒) ─────────────────────────────────────
