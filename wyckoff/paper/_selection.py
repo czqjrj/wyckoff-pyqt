@@ -43,7 +43,7 @@ def _weak_market_flag():
 def _strategy_manager():
     """策略管理器单例 (延迟实例化, 数据目录落在 DATA_DIR 下避免污染运行目录)。
 
-    供模拟盘候选生成复用: 策略4 (模拟盘纪律, conf≥90) 与 综合选股·价值吸筹
+    供模拟盘候选生成复用: Spring-only (模拟盘纪律, conf≥90) 与 综合选股·价值吸筹
     (底部整固 + 20根内吸筹事件)。导入失败或数据不可用时返回 None (纯离线降级)。
     """
     if paper._SMGR is None:

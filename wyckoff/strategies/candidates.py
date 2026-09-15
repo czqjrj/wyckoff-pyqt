@@ -27,7 +27,7 @@ from wyckoff.strategies.evaluators import evaluate_strategy_value_accumulation
 # 命中20 81% / 75% / 67%; 左侧不受门禁, 弱市仍可兜底入场)
 STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT)
 STRATEGY_CN = {
-    STRATEGY_DISCIPLINE: "策略4·纪律",
+    STRATEGY_DISCIPLINE: "Spring-only",
     STRATEGY_VALUE_ACC: "价值吸筹",
     STRATEGY_LONG_LEFT: "威科夫左侧买点",
 }

@@ -13,7 +13,7 @@ from wyckoff.strategies.constants import LONG_EVENT_TYPES, SPRING_CONFIRM_WINDOW
 
 
 def trading_discipline(**overrides):
-    """策略4 实证的交易纪律 (止损/止盈/持有/同持上限/结构破位),
+    """Spring-only 实证的交易纪律 (止损/止盈/持有/同持上限/结构破位),
     供各策略共用, 保证信号落地时执行相同的出场规则。"""
     d = {
         "max_pos": 3,          # 同持上限
@@ -60,7 +60,7 @@ def check_discipline_gates(stock_code):
 
 
 def evaluate_strategy_4(df, i, wevents, nt, vsa_labels, stock_code=None, min_conf=90):
-    """策略4: 模拟盘纪律策略 (强多头事件 + high conf + 硬门禁)
+    """Spring-only: 模拟盘纪律策略 (强多头事件 + high conf + 硬门禁)
 
     源自 wyckoff.paper 模拟盘实证 (真实K线历史回放胜率~53%、盈亏比~3):
       选股: 强多头事件 {Spring, Shakeout, ST, LPS, SC}, conf≥90, 事件在近10根内;
@@ -108,7 +108,7 @@ def evaluate_strategy_value_accumulation(df, i, wevents, wpivots):
     5个预设中唯一实测正期望 (48只样本):
       胜率 49.2%、盈亏比 1.53、累计收益 +224%, 样本内/外 47.4%/51.9%,
       时间半段 48/51, 属"正期望型"(大盈小亏) 而非 >60% 高胜率。
-    事件窗口回测口径为 20 根 (比策略4的 conf≥90 + 10根 事件更密, 更稳健)。
+    事件窗口回测口径为 20 根 (比 Spring-only 的 conf≥90 + 10根 事件更密, 更稳健)。
     """
     window = df.iloc[:i + 1]
     phase, _ = judge_phase(window, wpivots, wevents)
@@ -153,7 +153,7 @@ def evaluate_strategy_spring(df, i, wevents, nt, vsa_labels, stock_code=None):
     - 特征: Spring是经典的威科夫筑底形态, 实证回测显示Spring后20根
              +12.7% 的上涨概率，是中短线多头的高概率入场时机
 
-    相比策略4: 无需硬门禁, 专注于个股底部反转形态;
+    相比 Spring-only: 无需硬门禁, 专注于个股底部反转形态;
     相比SOS策略: 更侧重于震荡区间内的回踩确认而非突破。
     """
     spring_events = [e for e in wevents if e["type"] == "Spring"]

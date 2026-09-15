@@ -5,7 +5,7 @@ candidates (模拟盘候选插件表) 与 evaluators (信号评估器) 各自独
 manager 门面仅从这里导入再统一导出, 保证既有 import 路径全部兼容。
 """
 
-# 多头吸筹事件集: 综合选股「价值吸筹」与策略4共用
+# 多头吸筹事件集: 综合选股「价值吸筹」与 Spring-only 共用
 LONG_EVENT_TYPES = ("Spring", "Shakeout", "ST", "LPS", "SC")
 
 # SOS动态确认窗口 (源自 events.py DYNAMIC_WINDOW)
