@@ -576,8 +576,9 @@ class MktWidget(HoverHighlightMixin, BasePlotWidget):
             if key is None or key == "chips":
                 continue
             data_key = key
-            if data_key in d:
-                days = d[data_key].get("days") or []
+            val = d.get(data_key)
+            if val:
+                days = val.get("days") or []
                 ds = [_parse_day(d) for d in days]
 
                 def fmt(i, ds=ds):
