@@ -15,6 +15,8 @@ Qlib因子作为量化模型预测补充, 通过因子评分对技术面信号�
 import json
 import os
 
+from .calib_registry import bucket_value
+from .calib_registry import get as _calib
 from .config import VSA_BEAR, VSA_BULL, W_RECENT, WEAK_EVENT_TYPES, event_dir
 from .paths import DATA_DIR
 from .vsa import VSA_NOISE_TYPES
@@ -150,8 +152,9 @@ def _event_score(events, recent_window=None, max_idx=None, oos=False):
         decay = (1.0 - dist / recent_window) ** 1.5
         # 弱信号折扣: SOS/JOC 突破日信号实测命中率贴近基准甚至反向 (37股回测
         # SOS 48.8% / JOC 44.2% vs 基准47.6%, Spring 83% / ST 78%),
-        # 给半权重, 避免弱信号淹没强信号。
-        strength = 0.5 if e.get("type") in ("SOS", "JOC") else 1.0
+        # 给半权重, 避免弱信号淹没强信号。阈值登记在 calib_registry
+        # (weak_event_half); 过期/样本不足时回退原行为 (权重 1.0)。
+        strength = bucket_value(_calib("weak_event_half"), e.get("type", ""))
         # 跟进确认: 仅当事件携带 confirmed 字段时应用 (detect_all 输出),
         # 手工构造/旧数据没有该字段 → 权重不变。已确认 ×1.2 / 未确认 ×0.5 /
         # 待确认 ×0.9。研究结论: "只在确认后进场, 不在信号当根进场"——
@@ -516,8 +519,6 @@ def _qlib_factor_score(df, last_close, qlib_prob=None):
 
     概率→评分: (prob-0.5) × QLIB_PROB_SENSITIVITY × 100, 0.5 中性。
     """
-    from datetime import datetime, timedelta
-
     import pandas as pd
 
     prob = None

@@ -209,8 +209,11 @@ def _mk_retest_df(dip_vol_ratio=0.40, seed=3, n=135):
     (与 _mk_retest_event 的 idx=83/price=7.58 对齐), 回踩 dip 在 bar 90/91。"""
     rng = np.random.default_rng(seed)
     days = pd.date_range("2024-01-01", periods=n, freq="D")
-    close = np.empty(n); low = np.empty(n); high = np.empty(n)
-    op = np.empty(n); vol = np.full(n, 1.0e6)
+    close = np.empty(n)
+    low = np.empty(n)
+    high = np.empty(n)
+    op = np.empty(n)
+    vol = np.full(n, 1.0e6)
     c = 11.0
     for i in range(n):
         if i < 45:
@@ -241,14 +244,18 @@ def _mk_retest_df(dip_vol_ratio=0.40, seed=3, n=135):
             c = min(8.9, c + 0.05)
         else:
             c += rng.normal(0, 0.02)
-        lo = c - 0.12; hi = c + 0.12
+        lo = c - 0.12
+        hi = c + 0.12
         if i == 83:
             lo, hi = 7.50, 7.62
         if i == 90:
             lo, hi = 8.06, 8.18
         if i == 91:
             lo, hi = 7.96, 8.08
-        close[i] = c; low[i] = lo; high[i] = hi; op[i] = c
+        close[i] = c
+        low[i] = lo
+        high[i] = hi
+        op[i] = c
     return add_indicators(pd.DataFrame({
         "day": days, "open": op, "high": high, "low": low,
         "close": close, "volume": vol.astype(float)}), symbol="test")

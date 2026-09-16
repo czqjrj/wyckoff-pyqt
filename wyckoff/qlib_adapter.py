@@ -20,6 +20,9 @@ import logging
 import os
 from typing import Any
 
+import numpy as np
+import pandas as pd
+
 from . import paths
 
 logger = logging.getLogger(__name__)
@@ -196,9 +199,9 @@ def load_train_pool() -> list[str]:
     if os.path.isfile(pool_file):
         try:
             lines = [
-                l.strip().lower()
-                for l in open(pool_file, encoding="utf-8")
-                if l.strip() and not l.strip().startswith("#")
+                row.strip().lower()
+                for row in open(pool_file, encoding="utf-8")
+                if row.strip() and not row.strip().startswith("#")
             ]
             if lines:
                 return lines
@@ -426,8 +429,6 @@ def _spread_probabilities(preds: np.ndarray, auc: float) -> np.ndarray:
     """
     import bisect
 
-    import numpy as np
-
     n = len(preds)
     if n == 0:
         return np.array([])
@@ -451,8 +452,6 @@ def qlib_probability_series(
 
     用于消融实验和实时推理的统一入口, 保证两者口径一致。
     """
-    import numpy as np
-
     if model_obj is None:
         model_obj = _load_qlib_model()
     if model_obj is None or feat_df is None or feat_df.empty:
@@ -976,7 +975,7 @@ if __name__ == "__main__":
             print(f"特征数: {res['n_features']}")
             if "all_horizons" in res:
                 print(f"各周期 AUC: {res['all_horizons']}")
-            print(f"Top-5 特征:")
+            print("Top-5 特征:")
             for name, imp in res.get("top_features", [])[:5]:
                 print(f"  {name}: {imp:.1f}")
         else:

@@ -104,8 +104,7 @@ def test_vsa_noise_filtered():
 
 
 def test_weak_events_excluded_from_score():
-    from wyckoff.config import WEAK_EVENT_TYPES, STRONG_TIER_TYPES
-    from wyckoff.config import event_dir
+    from wyckoff.config import STRONG_TIER_TYPES, WEAK_EVENT_TYPES, event_dir
     # 弱事件 (PSY/JOC/SOS/AR/BC) 命中贴近随机 → 不参与事件维度评分
     weak = [{"idx": 100, "type": t, "conf": 100} for t in WEAK_EVENT_TYPES]
     assert _event_score(weak, max_idx=120) == 0.0

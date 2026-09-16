@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pandas as pd
 
-from wyckoff.indicators import add_indicators
 from wyckoff import sqldb
+from wyckoff.indicators import add_indicators
 
 HORIZON = 20
 COOLDOWN = 15
@@ -113,7 +113,7 @@ def main():
     rets = np.array([c["r"] for c in cands])
     pool_up = np.mean([r > 0 for r in pool["rets"]])
     up = np.mean(rets > 0)
-    print(f"\n== JOC 放宽候选 20 根方向 ==")
+    print("\n== JOC 放宽候选 20 根方向 ==")
     print(f"  池基准20根上涨: {pool_up * 100:.1f}%  (n={pool['n']})")
     print(f"  JOC 候选: n={len(cands)} 上涨占比={up * 100:.1f}% "
           f"增量={ (up - pool_up) * 100:+5.1f}pt 均值={np.mean(rets) * 100:+6.2f}%")

@@ -9,7 +9,6 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
-
 # ── 可配置策略参数 ─────────────────────────────────────────
 # 持仓周期 K 根 (日线, ~1 个月)
 HOLD_BARS = 20
@@ -18,7 +17,6 @@ HOLD_BARS = 20
 # 5 起回撤再降但收益回落, 6 显著衰减, 故取 4。
 MAX_POSITIONS = 4
 # 每笔资金占比 (1/MAX_POSITIONS 等权)
-_POS_WEIGHT = 1.0 / MAX_POSITIONS
 # 单边成本 (含佣金+印花税+滑点, 参考 backtest.cost=0.004)
 # 全面适配A股后: 撮合改用下方明细费率 (佣金/印花税/过户费), 该扁平率仅作
 # 旧口径兼容/无明细设置时的兜底, 与 backtest.py 等 flat cost 参数保持一致。
@@ -240,4 +238,27 @@ class PositionRisk:
             "concentration_risk": self.concentration_risk,
             "liquidity_risk": self.liquidity_risk,
         }
+
+
+# 公开导出 (配置常量 / 枚举 / 数据类), 供 facade `from ._params import *` 引用。
+__all__ = [
+    # 可配置策略参数
+    "HOLD_BARS", "MAX_POSITIONS", "COST", "COMMISSION_RATE", "MIN_COMMISSION",
+    "STAMP_TAX_RATE", "TRANSFER_FEE_RATE", "LIMIT_FILL", "SLIP_BUY", "SLIP_SELL",
+    "STOP_LOSS", "TRAILING_STOP", "TRAIL_ATR_MULT", "TRAIL_BACK_PCT",
+    "TRAIL_ACTIVATE_PCT", "WEAK_FILTER", "WEAK_MAX_POS", "WEAK_INDEX_CODE",
+    "VA_WEIGHT", "ENABLE_VA", "ENABLE_LONG_LEFT", "REBALANCE",
+    "PUSH_ENABLED", "PUSH_METHOD", "PUSH_SERVER_CHAN_KEY",
+    "PUSH_WECHAT_CORP_ID", "PUSH_WECHAT_CORP_SECRET", "PUSH_WECHAT_AGENT_ID",
+    "PUSH_WECHAT_TO_USER", "PUSH_WXPUSHER_APP_TOKEN", "PUSH_WXPUSHER_TOPIC_IDS",
+    "PUSH_WXPUSHER_UIDS", "TAKE_PROFIT", "INIT_CASH", "MIN_LOT", "MIN_CONF",
+    "ST_CONFIRM",
+    # 风控参数
+    "MAX_DRAWDOWN_PCT", "MAX_RISK_PCT", "MAX_SECTOR_CONCENTRATION",
+    "MAX_SINGLE_CONCENTRATION", "CORRELATION_THRESHOLD", "VOL_ADJUST_ENABLED",
+    "VOL_PERCENTILE_HIGH", "VOL_PERCENTILE_LOW", "MAX_CAPITAL_USAGE",
+    # 订单/枚举/数据类
+    "OrderType", "OrderSide", "OrderStatus", "PositionSizingMethod",
+    "AdvancedOrder", "PositionRisk",
+]
 

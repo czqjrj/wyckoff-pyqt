@@ -18,10 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from wyckoff.indicators import add_indicators, find_pivots
-from wyckoff.events import detect_all
-from wyckoff.phases import phase_segments
 from wyckoff import sqldb
+from wyckoff.events import detect_all
+from wyckoff.indicators import add_indicators, find_pivots
+from wyckoff.phases import phase_segments
 
 HORIZON = 20
 # fb_prior 约定: 各阶段"期望正义方向" (1=涨, -1=跌)。注意 markup/markdown 是
@@ -90,7 +90,7 @@ def main():
     print(f"完成 {done} 只, 用时 {time.time() - t0:.0f}s, 阶段带样本 "
           f"{sum(s['n'] for s in stats.values())}")
 
-    print(f"\n== 各阶段带 (段末 20 根方向, 与 fb_prior 同口径) ==")
+    print("\n== 各阶段带 (段末 20 根方向, 与 fb_prior 同口径) ==")
     total20 = [u for s in stats.values() for u in s["ups"]]
     p_up = np.mean([u > 0 for u in total20]) if total20 else 0.0
     print(f"池基准 (全部段末 20根上涨占比): {p_up * 100:.1f}%  (n={len(total20)})")

@@ -230,33 +230,6 @@ def strength_at(board_name, ts, max_gap_days=45):
     return None if v is None else float(v)
 
 
-def install_snapshot_cron(hour=None, minute=30):
-    """Linux: 安装/移除每日板块强度快照任务 (默认 08:30 盘前)。
-
-    hour=None 时移除。快照写入自动节流 (1 小时/条), 每日执行只是兜底
-    保证频度; 快照供回填层按日期取当时 sec_pct (P4 无偏采样)。"""
-    def _cmd():
-        import sys as _sys
-        if getattr(_sys, "frozen", False):
-            return f'"{_sys.executable}" --board-snapshot'
-        import os as _os
-        proj = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-        return f'cd "{proj}" && "{_sys.executable}" -m wyckoff.chain --snapshot'
-
-    try:
-        from ._shared import install_schedule
-    except ImportError:
-        return False
-    try:
-        return install_schedule(
-            "WyckoffBoardSnap", _cmd(),
-            time_str=f"{hour if hour is not None else 8:02d}:{minute:02d}",
-            remove=hour is None,
-            cron_markers=("wyckoff.chain",))
-    except Exception:
-        return False
-
-
 def main(argv=None):
     import sys as _sys
     if "--snapshot" in (_sys.argv if argv is None else argv):
@@ -467,42 +440,6 @@ def chain_snapshot(sector_name=None):
     return out
 
 
-def chain_evidence(sector_name):
-    """产业链证据条目 [(text, tone)] 供 build_confirm_section (四击法确认)。
-
-    只在有明确传导方向或所处环节极端强弱时输出, 无信号保持安静。"""
-    if not sector_name:
-        return []
-    ev = []
-    try:
-        snaps = chain_snapshot(sector_name)
-    except Exception:
-        return []
-    for s in snaps:
-        own = s["highlight"]
-        if not own:
-            continue
-        tier, _nm = own[0]
-        trans = s["trans"]
-        if trans == "上游→下游":
-            tone = "bullish" if tier != "upstream" else "neutral"
-            ev.append((f"产业链: [{s['name']}] 上游强势向中下游传导 · "
-                       f"所处{'上游' if tier == 'upstream' else '中下游'}环节", tone))
-        elif trans == "下游→上游":
-            tone = "bullish" if tier != "downstream" else "neutral"
-            ev.append((f"产业链: [{s['name']}] 下游景气向上游传导 · "
-                       f"所处{'下游' if tier == 'downstream' else '中上游'}环节", tone))
-        else:
-            a = s["avg"][tier]
-            if a is not None and a <= 0.25:
-                ev.append((f"产业链: [{s['name']}] 所处环节强度垫底"
-                           f"(后25%), 缺乏链条共振", "bearish"))
-            elif a is not None and a >= 0.85:
-                ev.append((f"产业链: [{s['name']}] 所处环节强度领先"
-                           f"(前15%)", "bullish"))
-    return ev[:2]  # 个股跨多链时最多取两条证据
-
-
 def apply_sector_strength(events, sec_pct, n_total, recent=10):
     """把当前板块强度百分位写入近期事件的 feat.sec_pct (context 预留钩子)。
 
@@ -535,79 +472,4 @@ def apply_sector_strength(events, sec_pct, n_total, recent=10):
     return cnt
 
 
-def strength_history(sector: str, start_date: str = "2023-09-01", end_date: str = None) -> pd.DataFrame:
-    """回填板块强度历史分位序列（按日）。
 
-    从 wx_board_snap.json 读取历史快照，返回 DataFrame:
-      columns = ['date', 'pct']  pct ∈ [0,1] (1=最强)
-
-    若 sector 在快照中从未出现，返回空 DataFrame (非 None)，
-    供调用方判定是 fail-open 还是 fail-close。
-
-    参数:
-        sector: 板块名 (如 "银行", "医药", "有色金属")
-        start_date: 开始回溯日期 (默认 2023-09-01)
-        end_date: 结束日期 (默认 None → 今日)
-    返回: DataFrame 或空 DataFrame
-    """
-    from datetime import datetime
-    from pathlib import Path
-
-    import pandas as pd
-
-    snap_path = Path(BOARD_SNAP_FILE)
-    if not snap_path.exists():
-        return pd.DataFrame(columns=["date", "pct"])
-
-    try:
-        with open(snap_path, encoding="utf-8") as f:
-            snaps = json.load(f)
-    except Exception:
-        return pd.DataFrame(columns=["date", "pct"])
-
-    if not isinstance(snaps, list):
-        return pd.DataFrame(columns=["date", "pct"])
-
-    # 统一时间戳 -> 日期字符串
-    rows = []
-    for s in snaps:
-        if not isinstance(s, dict):
-            continue
-        ts_int = s.get("ts", 0)
-        # 时间戳是秒级整数，转 datetime
-        try:
-            dt = datetime.fromtimestamp(ts_int) if ts_int > 1e9 else datetime.fromtimestamp(ts_int / 1e9)
-        except Exception:
-            continue
-        d_str = dt.strftime("%Y-%m-%d")
-        # 只保留在目标区间内的快照
-        if start_date and d_str < start_date:
-            continue
-        if end_date:
-            try:
-                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                if dt > end_dt:
-                    continue
-            except Exception:
-                pass
-        # 抽取该板块的强度
-        strengths = s.get("strengths") or {}
-        pct = strengths.get(sector)
-        if pct is not None:
-            try:
-                pct = float(pct)
-            except Exception:
-                pct = None
-        else:
-            pct = None
-        rows.append({"date": d_str, "pct": pct})
-
-    if not rows:
-        return pd.DataFrame(columns=["date", "pct"])
-
-    df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-    # 对同一日多条记录去重，取最后一次 (最新快照)
-    df = df.drop_duplicates(subset="date", keep="last")
-    return df

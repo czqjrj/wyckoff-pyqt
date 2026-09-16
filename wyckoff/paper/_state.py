@@ -17,10 +17,6 @@ from ..paths import PAPER_FILE
 logger = logging.getLogger(__name__)
 
 
-def file_path() -> str:
-    return PAPER_FILE
-
-
 def _backup_corrupt_file() -> str | None:
     """把损坏的账户文件改名留存, 返回备份路径 (文件不存在时返回 None)。"""
     if not os.path.exists(PAPER_FILE):

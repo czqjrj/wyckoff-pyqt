@@ -26,8 +26,7 @@ import numpy as np
 import pandas as pd
 
 from ._shared import atomic_write_json
-from .config import (STRONG_TIER_TYPES, WEAK_EVENT_TYPES, event_dir,
-                     vsa_dir)
+from .config import STRONG_TIER_TYPES, WEAK_EVENT_TYPES, event_dir, vsa_dir
 from .datasource import fetch_kline
 from .events import detect_all
 from .indicators import add_indicators, find_pivots

@@ -28,12 +28,6 @@ import subprocess
 import sys
 
 from .paths import DATA_DIR
-from .trading_time import (
-    TRADING_SESSIONS,
-    TRADE_DATES_CACHE,
-    in_trading_hours,
-    is_trading_day,
-)
 
 TASK_NAME = "WyckoffPaper"
 DEFAULT_AT = "08:59"

@@ -7,26 +7,14 @@ import wyckoff.paper as paper
 
 logger = logging.getLogger(__name__)
 
+# ── 选股: 全市场自动筛选并自动生成条件单 ─────────────────────
+# ── 三重共振纪律硬门禁 (统一数据源见 discipline.py) ──
+# 门禁经 paper._market_trend_ok / paper._sector_strength_ok / paper._flow_net5
+# 运行时解析 (paper/discipline 单一源, 测试 monkeypatch 到 paper.*)。
 from ..strategies.constants import (
     STRATEGY_DISCIPLINE,
     STRATEGY_LONG_LEFT,
     STRATEGY_VALUE_ACC,
-)
-
-
-
-# ── 选股: 全市场自动筛选并自动生成条件单 ─────────────────────
-# ── 三重共振纪律硬门禁 (统一数据源见 discipline.py) ──
-# paper 是实际撮合的交关口; 门禁阈值与实现收敛到 discipline.py 单一源。
-# 此处保留模块级名字 (供本模块内部与测试 monkeypatch 引用), 语义完全一致。
-from ..discipline import (  # noqa: E402
-    flow_net5 as _flow_net5,
-)
-from ..discipline import (
-    market_trend_ok as _market_trend_ok,
-)
-from ..discipline import (
-    sector_strength_ok as _sector_strength_ok,
 )
 
 

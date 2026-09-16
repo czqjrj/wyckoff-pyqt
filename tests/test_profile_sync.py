@@ -363,7 +363,6 @@ def test_cloud_pull_paper_overwrites_polluted_local(tmp_path, monkeypatch):
 
     # 云端有另一设备更新的模拟盘
     remote_v = _paper_state(2_000_000)
-    cdb_original = cdb.read_profile_items
     monkeypatch.setattr(
         cdb, "read_profile_items",
         lambda user, t: {"paper": {"v": remote_v, "ts": 12345.0}}
@@ -405,8 +404,6 @@ def test_paper_settings_synced_sensitive_excluded(tmp_path):
 
 def test_paper_settings_distributed_via_cloud(tmp_path, monkeypatch):
     """云端下发的模拟盘设置 (用户改过、非默认) 能被拉回本地应用。"""
-    import wyckoff.cloud_db as cdb
-
     m = _reload_modules(tmp_path)
     # 本地默认 (未改过) → 首同步打保守 ts=0, 云端配置胜出
     st = m._collect_type("settings")

@@ -21,8 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from wyckoff.indicators import add_indicators
 from wyckoff import sqldb
+from wyckoff.indicators import add_indicators
 from wyckoff.vsa import vsa_classify
 
 HORIZON = 20
@@ -48,7 +48,7 @@ def load_cached(symbol, max_age=10 ** 9):
 
 
 def _vsa_dir(lb):
-    from wyckoff.fusion import VSA_BULL, VSA_BEAR
+    from wyckoff.fusion import VSA_BEAR, VSA_BULL
     return 1 if lb in VSA_BULL else (-1 if lb in VSA_BEAR else 0)
 
 
@@ -147,7 +147,6 @@ def main():
             if not tot:
                 continue
             all_hit = sum(b["hits"] for b in buck.values())
-            all_ret = [r for b in buck.values() for r in b["rets"]]
             hr = all_hit / tot * 100
             print(f"  [{cond:<12s}] n={tot:<6d} 命中={hr:5.1f}% "
                   f"相对={hr - p_up * 100:+5.1f}pt")

@@ -24,7 +24,17 @@
 
 遗留说明: A2 附加项（`backfill_ctx` 全量 backfill 重建中性事件历史特征）未在本轮执行，归 Round 3 前重跑 survey 时一并处理。
 
-**下轮建议（Round 2）**: A3 阈值注册表 → S8 ruff 264→0 → S7 死代码 → S9 配置补登记。
+### Round 2（已完成 2026-09-16，工作树未提交）
+
+| 工作项 | 状态 | 备注 |
+|---|---|---|
+| A3 阈值注册表 | ✅ | 新增 `wyckoff/calib_registry.py`（`CalibEntry`/`Bucket` + `bucket_value`/`resolve`，带 `as_of`/`min_n`/过期回退 `default`）；`events.py` 的 SC/BC 环境门、SOW 放量门、boll 高位门与 `fusion.py` 弱事件半权改走注册表；`tests/test_calib_registry.py`(7 例) |
+| S8 ruff 264→0 | ✅ | `ruff check .` = **0**；修 `scripts/paper_replay_grid.py:473` f-string 复用引号（Py3.10 下 invalid-syntax）；`paper/__init__.py` star import(F405) 改显式导入 + `__all__`；F401/F841/E702 逐项清理 |
+| S7 死代码摘除 | ✅ | 删 `wyckoff/backtrader_engine.py`(297行)、`wyckoff/ensemble.py`(134行)、`paper/_orders.py`；`_stats.advanced_stats/signal_stats_text`、`fundamental.fetch_board_flow_by_code`、`screener.recommended_presets`、`chain.{install_snapshot_cron,chain_evidence,strength_history}`、`_state.file_path`、`_POS_WEIGHT` 均确认全仓 0 引用后删除 |
+| S9 配置补登记 | ⏸️ | 本轮未做（按指示跳过） |
+| 回归结果 | ✅ | `python -m pytest tests -q` = **643 passed**；`ruff check .` = **0** |
+
+**收尾说明**: 后续 Round 3/4（T1/T2、A5、S6、P2 批次、S9 等）按指示不再执行。
 
 ---
 
@@ -166,8 +176,8 @@
 ## 5. 复现与检查命令
 
 ```bash
-python -m pytest tests -q                    # Round-1 后为 636 passed
-ruff check .                                 # Round-1 后为 264 处
+python -m pytest tests -q                    # Round-2 后为 643 passed
+ruff check .                                 # Round-2 后为 0 处
 ruff check . --output-format=concise | Select-String -Pattern "F601|F821|F841|F405"  # 看重点
 git grep -n -- "create_oco_order" . || :      # 死代码确认手法
 python -m pytest tests -q -k tags_audit       # SC/BC 环境门既有测试

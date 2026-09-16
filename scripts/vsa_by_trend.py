@@ -15,9 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from wyckoff.config import vsa_dir
-from wyckoff.indicators import add_indicators
 from wyckoff import sqldb
+from wyckoff.indicators import add_indicators
 from wyckoff.vsa import vsa_classify
 
 HORIZON = 20
@@ -40,7 +39,7 @@ def load_cached(symbol, max_age=10 ** 9):
 
 
 def _vsa_dir(lb):
-    from wyckoff.fusion import VSA_BULL, VSA_BEAR
+    from wyckoff.fusion import VSA_BEAR, VSA_BULL
     return 1 if lb in VSA_BULL else (-1 if lb in VSA_BEAR else 0)
 
 

@@ -490,44 +490,6 @@ def fetch_sector_flow(symbol: str):
     return name, out
 
 
-def fetch_board_flow_by_code(bk_code: str):
-    """直接按板块BK代码获取主力资金流 DataFrame (列同个股: day/main/super/large/mid/small)。
-    失败返回 None。缓存 10 分钟。"""
-    if not bk_code:
-        return None
-    now = time.time()
-    with _LOCK:
-        cached = _SECTOR_FLOW_CACHE.get(f"__{bk_code}")
-        if cached and now - cached[0] < _FLOW_TTL:
-            return cached[1]
-    secid = f"90.{bk_code}"
-    r = _get("https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
-             {"secid": secid, "fields1": "f1,f2,f3,f7",
-              "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
-              "klt": "101", "lmt": "120"},
-             {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"})
-    out = None
-    if r is not None:
-        try:
-            kl = ((r.json().get("data") or {}).get("klines")) or []
-            rows = []
-            for k in kl:
-                f = k.split(",")
-                if len(f) < 11:
-                    continue
-                rows.append([f[0], float(f[1]), float(f[5]), float(f[4]),
-                             float(f[3]), float(f[2])])
-            if rows:
-                out = pd.DataFrame(rows, columns=["day", "main", "super",
-                                                   "large", "mid", "small"])
-                out["day"] = pd.to_datetime(out["day"])
-        except (ValueError, KeyError):
-            out = None
-    with _LOCK:
-        _SECTOR_FLOW_CACHE[f"__{bk_code}"] = (time.time(), out)
-    return out
-
-
 def fetch_board_constituents(bk_code: str, limit: int = 80, name: str = ""):
     """获取板块 BK代码 的成份股列表, 按成交额降序取前 limit 只。
     返回 [(代码, 名称, 最新价), ...] 或 []。

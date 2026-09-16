@@ -761,9 +761,3 @@ def list_presets():
             item["verified_date"] = verified.get("date")
         out.append(item)
     return out
-
-
-def recommended_presets():
-    """返回实测正期望且推荐使用的预设 key 列表。"""
-    return [k for k, v in PRESET_STRATEGIES.items()
-            if v.get("verified") and v["verified"].get("recommended")]

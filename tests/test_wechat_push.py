@@ -1,6 +1,4 @@
 """微信推送 (WxPusher / Server酱 / 企业微信) 发送函数测试。"""
-import json
-
 import wyckoff.wechat_push as wp
 
 

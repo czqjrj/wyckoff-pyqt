@@ -22,15 +22,10 @@
 from __future__ import annotations
 
 import itertools
-import json
 import logging
 import os
-import statistics
 import threading
-import time
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
 
 try:
     import numpy as np
@@ -38,9 +33,16 @@ except Exception:  # pragma: no cover
     np = None
 
 from .. import paper_log, paper_strategy_accuracy
+from ..discipline import flow_net5 as _flow_net5  # noqa: E402  测试会 monkeypatch paper._flow_net5
+from ..discipline import market_trend_ok as _market_trend_ok
+from ..discipline import sector_strength_ok as _sector_strength_ok
 from ..market_rules import (
     buy_fee as _mr_buy_fee,
+)
+from ..market_rules import (
     limit_blocked as _mr_limit_blocked,
+)
+from ..market_rules import (
     sell_fee as _mr_sell_fee,
 )
 from ..paths import PAPER_FILE
@@ -51,88 +53,113 @@ from ..strategies.constants import (
     STRATEGY_VALUE_ACC,
 )
 from ..trading_time import gate_reason
-
-from ._params import *  # noqa: F401,F403  常量/枚举/数据类 (可配置+风控+订单)
-from ._params import _POS_WEIGHT  # noqa: F401
-from ._state import file_path, load_state, _new_state, save_state
-from ._push import _notify_trade, _push_dispatch, _split_list
-from ._risk import (
-    check_drawdown_limit,
-    check_risk_budget,
-    check_sector_concentration,
-    check_single_concentration,
-    check_capital_usage,
-    _risk_blocks_entry,
-    calculate_kelly_fraction,
-    calculate_position_size,
-    calculate_var,
-    calculate_position_risk,
-    update_portfolio_risk,
-)
-from ._orders import (
-    create_oco_order,
-    create_bracket_order,
-    create_scale_in_order,
-    create_scale_out_order,
-    create_trailing_stop_order,
-    check_advanced_orders,
-    _cancel_sibling_orders,
-    cancel_advanced_order,
-)
-from ._stats import (
-    net_cost_rate,
-    float_ret,
-    equity,
-    _record_equity,
-    stats,
-    advanced_stats,
-    signal_stats_text,
-)
-
-
-from ..discipline import flow_net5 as _flow_net5  # noqa: E402  测试会 monkeypatch paper._flow_net5
-from ..discipline import market_trend_ok as _market_trend_ok
-from ..discipline import sector_strength_ok as _sector_strength_ok
-
-from ._selection import (
-    _weak_market_flag,
-    _strategy_manager,
-    _value_accum_candidate,
-    _long_buy_candidate,
-    _is_low_quality,
-    _probe_workers,
-    _mainboard_universe,
-    pick_candidates,
-    _stock_name,
-)
 from ._conditions import (
-    _cond,
-    add_condition,
     _apply_auto_conditions,
-    place_condition,
-    _create_position_conditions,
     _backfill_position_protection,
-    cancel_condition,
-    _match_trigger,
     _check_conditions,
+    _create_position_conditions,
     _find_pos,
     _t1_blocked,
-    _judge_condition_correct,
-    _fire_condition,
+    cancel_condition,
+    place_condition,
 )
+from ._params import (
+    COMMISSION_RATE,
+    CORRELATION_THRESHOLD,
+    COST,
+    ENABLE_LONG_LEFT,
+    ENABLE_VA,
+    HOLD_BARS,
+    INIT_CASH,
+    LIMIT_FILL,
+    MAX_CAPITAL_USAGE,
+    MAX_DRAWDOWN_PCT,
+    MAX_POSITIONS,
+    MAX_RISK_PCT,
+    MAX_SECTOR_CONCENTRATION,
+    MAX_SINGLE_CONCENTRATION,
+    MIN_COMMISSION,
+    MIN_CONF,
+    MIN_LOT,
+    PUSH_ENABLED,
+    PUSH_METHOD,
+    PUSH_SERVER_CHAN_KEY,
+    PUSH_WECHAT_AGENT_ID,
+    PUSH_WECHAT_CORP_ID,
+    PUSH_WECHAT_CORP_SECRET,
+    PUSH_WECHAT_TO_USER,
+    PUSH_WXPUSHER_APP_TOKEN,
+    PUSH_WXPUSHER_TOPIC_IDS,
+    PUSH_WXPUSHER_UIDS,
+    REBALANCE,
+    SLIP_BUY,
+    SLIP_SELL,
+    ST_CONFIRM,
+    STAMP_TAX_RATE,
+    STOP_LOSS,
+    TAKE_PROFIT,
+    TRAIL_ACTIVATE_PCT,
+    TRAIL_ATR_MULT,
+    TRAIL_BACK_PCT,
+    TRAILING_STOP,
+    TRANSFER_FEE_RATE,
+    VA_WEIGHT,
+    VOL_ADJUST_ENABLED,
+    VOL_PERCENTILE_HIGH,
+    VOL_PERCENTILE_LOW,
+    WEAK_FILTER,
+    WEAK_INDEX_CODE,
+    WEAK_MAX_POS,
+    AdvancedOrder,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PositionRisk,
+    PositionSizingMethod,
+)
+from ._push import _notify_trade, _push_dispatch, _split_list
+from ._risk import _risk_blocks_entry
+from ._selection import (
+    _mainboard_universe,
+    _strategy_manager,
+    _weak_market_flag,
+    pick_candidates,
+)
+from ._state import _new_state, load_state, save_state
+from ._stats import _record_equity, equity, float_ret, net_cost_rate, stats
 from ._trading import (
-    _next_open,
-    execute_date,
-    has_position,
     _make_order,
-    place_buy_order,
-    _enqueue_buy,
-    fill_buy,
-    step,
+    _next_open,
     _rebalance_portfolio,
     close_position,
+    fill_buy,
     force_close_position,
+    has_position,
+    step,
 )
+
+# 公开/再导出的符号: 供 sub._xxx 模块经 `import wyckoff.paper as paper` 跨模块调用,
+# 以及 UI/脚本 `from wyckoff.paper import ...`。声明在 __all__ 以消除 Ruff F401
+# ("imported but unused") —— 这些名在本 facade 未必直接使用, 但属对外 API。
+__all__ = [
+    # 子模块再导出 (内部跨模块经 paper.<name> 引用)
+    "_flow_net5", "_market_trend_ok", "_sector_strength_ok",
+    "_check_conditions", "_find_pos", "_t1_blocked", "_create_position_conditions",
+    "cancel_condition", "place_condition",
+    "_notify_trade", "_push_dispatch", "_split_list",
+    "_strategy_manager",
+    "_new_state",
+    "float_ret", "net_cost_rate",
+    "close_position", "force_close_position",
+    # 公共 API
+    "paper_log", "paper_strategy_accuracy", "S", "gate_reason", "PAPER_FILE",
+    "apply_paper_params", "run_cycle", "run_scan",
+    "fee_buy", "fee_sell", "_limit_blocked", "LONG_EVENT_TYPES", "PAPER_BUSY_MSG",
+    "_CUR", "_LOCK",
+    # _params 常量/枚举/数据类 (经 `paper.<name>` 被脚本/引擎子模块引用)
+    "SLIP_BUY", "SLIP_SELL", "MIN_LOT", "VOL_PERCENTILE_HIGH", "VOL_PERCENTILE_LOW",
+    "OrderType", "OrderSide", "OrderStatus", "AdvancedOrder", "PositionRisk",
+]
 
 logger = logging.getLogger(__name__)
 

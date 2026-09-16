@@ -19,9 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from wyckoff.indicators import add_indicators, find_pivots
-from wyckoff.events import detect_all
 from wyckoff import sqldb
+from wyckoff.events import detect_all
+from wyckoff.indicators import add_indicators, find_pivots
 
 HORIZON = 20
 COOLDOWN = 15

@@ -7,7 +7,7 @@ import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
 from ..strategies.constants import STRATEGY_VALUE_ACC
-from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAIL_ATR_MULT, TRAILING_STOP, WEAK_MAX_POS
+from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAIL_ATR_MULT, TRAILING_STOP
 
 
 # ── 撮合: 买入/卖出 ─────────────────────────────────────
