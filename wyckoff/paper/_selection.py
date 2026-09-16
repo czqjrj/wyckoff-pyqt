@@ -1,8 +1,11 @@
 """模拟盘选股层: 弱市过滤 / 策略候选 / 全市场扫描 (纪律硬门禁引用)。"""
 
+import logging
 import os
 
 import wyckoff.paper as paper
+
+logger = logging.getLogger(__name__)
 
 from ..strategies.constants import (
     STRATEGY_DISCIPLINE,
@@ -30,14 +33,19 @@ from ..discipline import (
 # ── 弱市过滤 (改进: 指数未站上MA20 → 降仓 + 停用价值吸筹) ──
 def _weak_market_flag():
     """按 paper._CUR 弱市过滤设置评估当前市场强弱, 返回是否弱市。
-    弱市过滤关闭或数据异常 → 视为不强 (不受限)。调用方负责把结果落 st["weak"]。"""
+
+    弱市过滤关闭 → 视为不强 (不受限, 用户显式选择)。
+    数据不可用/判定异常 → fail-close 返回 True (按弱市限仓), 与纪律"缺一不可"
+    一致: 指数数据缺失时宁可少开仓也不放大敞口。调用方负责把结果落 st["weak"]。
+    """
     if not paper._CUR.get("weak_filter"):
         return False
     try:
         ok, _reason = paper._market_trend_ok()
         return not ok
     except Exception:
-        return False
+        logger.warning("弱市判定异常, 按弱市 fail-close 处理 (限仓)")
+        return True
 
 
 def _strategy_manager():

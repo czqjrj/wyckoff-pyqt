@@ -411,26 +411,35 @@ def _load_qlib_model():
 
 
 def _spread_probabilities(preds: np.ndarray, auc: float) -> np.ndarray:
-    """将模型原始输出按样本内分位数归一化, 放大区分度。
+    """将模型原始输出按**前缀分位**归一化, 放大区分度。
 
     模型原始概率在 A 股日频上高度集中于 0.35~0.65 (std≈0.05),
-    永远无法穿越 0.6/0.4 的方向修正阈值。这里按预测值在整个
-    样本内的经验分位数重新映射: 分位数 rank∈[0,1] →
+    永远无法穿越 0.6/0.4 的方向修正阈值。这里按预测值在前缀样本内的
+    经验分位数重新映射: 第 i 根 rank∈[0,1] 只用 [0..i] 内数据 (因果无前视):
 
         prob = 0.5 + (rank - 0.5) * spread
         spread = min(1.0, 0.3 + auc * 0.6)   # AUC 越高, 允许离中性越远
 
-    效果: 强看多 (>75分位) → prob>0.6, 强看空 (<25分位) → prob<0.4。
-    弱 AUC (0.5) 时 spread 收敛到 0.6, 仍有少量极端信号但整体贴近中性。
+    rank 为前缀分位 (含当期自身, 即 empirical CDF): 历史 bar 不受其后 bar
+    拖拽, 回测/消融不再泄漏未来 (旧版整段分位有前视)。代价是早期样本
+    (i 很小) 分位离散且偏 0/1; 调用方如需稳定应跳过前 ~60 根再使用。
     """
+    import bisect
+
     import numpy as np
 
     n = len(preds)
     if n == 0:
         return np.array([])
-    ranks = (preds[None, :] <= preds[:, None]).mean(axis=1)
+    prefix_rank = np.empty(n, dtype=float)
+    window = []
+    for i in range(n):
+        p = float(preds[i])
+        # 前 i+1 根内 <= p 的占比 (含自身, 与旧整段分位口径一致)
+        prefix_rank[i] = (bisect.bisect_right(window, p) + 1) / (i + 1)
+        bisect.insort(window, p)
     spread = min(1.0, 0.3 + float(auc) * 0.6)
-    prob = 0.5 + (ranks - 0.5) * spread
+    prob = 0.5 + (prefix_rank - 0.5) * spread
     return np.clip(prob, 0.01, 0.99)
 
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import logging
 import os
 import statistics
 import threading
@@ -132,6 +133,8 @@ from ._trading import (
     close_position,
     force_close_position,
 )
+
+logger = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
 
@@ -498,6 +501,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     #    不直接成交, 交给下方 buy_price 条件单 (below) 等回踩。
     if trading:
         # 冻结交割时段模式: cand 在非交易时段被截留为空/复用, 不执行任何撮合。
+        _limit_unknown = 0
         for e in cand:
             eff_max = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
             if len(st["positions"]) >= eff_max:
@@ -530,13 +534,21 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
                 continue
             # 涨跌停成交约束: 最新 bar 涨停封板 → 按市价买不进, 顺延该候选
             if _CUR.get("limit_fill", True):
+                _lim_ok = False
                 try:
                     _df_l = add_indicators(
                         fetch_kline(code, datalen=90, scale=240), symbol=code)
-                    if _mr_limit_blocked(_df_l, "buy", code):
+                    _lim_ok = _df_l is not None and len(_df_l) > 0
+                    if _lim_ok and _mr_limit_blocked(_df_l, "buy", code):
                         continue
                 except Exception:
-                    pass
+                    _lim_ok = False
+                if not _lim_ok:
+                    # fail-close: 封板状态未知时按"可能封板"处理, 本期不买
+                    _limit_unknown += 1
+                    st.setdefault("risk_metrics", {})["limit_unknown"] = _limit_unknown
+                    logger.warning("run_cycle: %s 封板状态未知(行情不可用), 顺延买入", code)
+                    continue
             # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
             # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
             stop_pct = take_pct = None
@@ -574,12 +586,22 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
     codes |= {o["symbol"] for o in st["pending"]}
+    _kline_missing = 0
     for code in codes:
         try:
-            df_by_code[code] = add_indicators(
+            _df_cur = add_indicators(
                 fetch_kline(code, datalen=420, scale=240), symbol=code)
+            if _df_cur is None or len(_df_cur) == 0:
+                _kline_missing += 1
+                logger.warning("run_cycle: %s 行情为空, 本期跳过止盈止损判定", code)
+            else:
+                df_by_code[code] = _df_cur
         except Exception:
-            pass
+            _kline_missing += 1
+            logger.warning("run_cycle: %s 行情获取失败, 本期跳过止盈止损判定", code)
+    if _kline_missing:
+        risk_m = st.setdefault("risk_metrics", {})
+        risk_m["kline_missing"] = int(risk_m.get("kline_missing") or 0) + _kline_missing
     step(st, df_by_code, trading=trading)
     # 4) 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到等权目标,
     #    消除资金利用率不足(~66%)与单仓过度集中。
@@ -593,7 +615,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         except Exception:
             continue
     _record_equity(st, _day or None)
-    save_state(st)
+    if not save_state(st):
+        logger.error("run_cycle 落盘失败, 交易状态可能未持久化")
+        st.setdefault("meta", {})["save_failed"] = True
     try:
         paper_log.log_account_snapshot(
             equity_value=equity(st, {}), cash=st["cash"],
@@ -697,9 +721,8 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
         fresh['last_scan_result'] = result_str
         fresh['weak'] = bool(st.get('weak', False))
         _apply_auto_conditions(fresh, cand, weak=fresh['weak'])
-        try:
-            save_state(fresh)
-        except Exception:
-            pass
+        if not save_state(fresh):
+            logger.error("run_scan 落盘失败, 候选更新可能未持久化")
+            fresh.setdefault("meta", {})["save_failed"] = True
 
     return result_str

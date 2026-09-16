@@ -751,8 +751,18 @@ def event_confidence(ctx: _EventContext, events):
         up_i = False
         confluent = 0
         bw_pct_val = None
+        # 趋势/布林宽度/RSI/KDJ 取值 与方向无关, 统一计算并保留到 feat:
+        # 中性事件 (SC/BC/AR/SOS/PSY/BU) 也能携带真实特征供在线模型/回看使用;
+        # 打分仍按方向在下方 `if d:` 分支内进行, 中性事件的 score 不受影响。
+        up_i = np.isfinite(ma20[i]) and np.isfinite(ma50[i]) and ma20[i] > ma50[i] and close[i] > ma50[i]
+        if bw_series is not None and np.isfinite(bw_series[i]):
+            trail = bw_series[max(0, i - 120):i + 1]
+            trail = trail[np.isfinite(trail)]
+            if len(trail) >= 20:
+                bw_pct_val = float((trail < bw_series[i]).mean()) * 100
+        rsi_val = rsi_6[i] if rsi_6 is not None and i < len(rsi_6) and np.isfinite(rsi_6[i]) else None
+        kdj_val = kdj_d[i] if kdj_d is not None and i < len(kdj_d) and np.isfinite(kdj_d[i]) else None
         if d:
-            up_i = np.isfinite(ma20[i]) and np.isfinite(ma50[i]) and ma20[i] > ma50[i] and close[i] > ma50[i]
             # trend 交互: 数据显示底部反转在非上升趋势更有效, 顶部反转在上升趋势更有效
             if e["type"] in ("Spring", "ST", "Shakeout"):
                 # 底部反转: 非上升趋势加分 (Spring 83.9% vs 50%)
@@ -779,13 +789,7 @@ def event_confidence(ctx: _EventContext, events):
                     score += min(12, max(0, (bp - 0.7)) * 40)
                     score -= min(8, max(0, (0.3 - bp)) * 27)
             # bw_pct (布林宽度百分位) 保留记录但不参与打分 (rho=+0.007, 无预测力)
-            if bw_series is not None and np.isfinite(bw_series[i]):
-                trail = bw_series[max(0, i - 120):i + 1]
-                trail = trail[np.isfinite(trail)]
-                if len(trail) >= 20:
-                    bw_pct_val = float((trail < bw_series[i]).mean()) * 100
             # RSI_6 打分: 多头信号 RSI 越低越有效 (rho=-0.126, 74.8% vs 56.9%)
-            rsi_val = rsi_6[i] if rsi_6 is not None and i < len(rsi_6) and np.isfinite(rsi_6[i]) else None
             if rsi_val is not None and d > 0:
                 if rsi_val < 30:
                     score += 10
@@ -794,7 +798,6 @@ def event_confidence(ctx: _EventContext, events):
                 elif rsi_val > 70:
                     score -= 8
             # KDJ_D 打分: 多头信号 KDJ_D 越低越有效 (rho=-0.159, 74.5% vs 63.2%)
-            kdj_val = kdj_d[i] if kdj_d is not None and i < len(kdj_d) and np.isfinite(kdj_d[i]) else None
             if kdj_val is not None and d > 0:
                 if kdj_val < 20:
                     score += 10

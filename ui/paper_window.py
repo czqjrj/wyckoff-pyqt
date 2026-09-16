@@ -157,6 +157,7 @@ _CN_SIG_HEAD = ("日期", "策略", "代码", "名称", "事件", "置信", "信
                 "5根", "10根", "20根", "状态")
 
 # 策略管理器信号来源 → 界面中文标签 (策略注册信息唯一来源: 策略管理器)
+from wyckoff.paper._params import TRAILING_STOP as _DEF_TRAILING_STOP
 from wyckoff.settings_keys import S
 from wyckoff.strategies.manager import STRATEGY_CN as _STRAT_CN
 from wyckoff.strategies.manager import STRATEGY_ORDER as _STRAT_ORDER
@@ -969,7 +970,7 @@ class PaperWindow(QDialog):
 
         self.ck_trailing = QCheckBox("追踪止损")
         self.ck_trailing.setChecked(
-            bool(self._settings.get(S.Paper.TRAILING_STOP, False)))
+            bool(self._settings.get(S.Paper.TRAILING_STOP, _DEF_TRAILING_STOP)))
         self.ck_trailing.setToolTip(
             "从持仓期内最高价回撤触发平仓, 而非固定百分比止损; "
             "可避免强势股被结构位 -3% 噪音洗出")
