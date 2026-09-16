@@ -1019,6 +1019,20 @@ class PaperWindow(QDialog):
         self.sp_cooldown.setToolTip(
             "止损后再入冷却: 同标的止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)")
 
+        self.sp_drawdown = QDoubleSpinBox()
+        self.sp_drawdown.setRange(0.05, 0.50)
+        self.sp_drawdown.setSingleStep(0.01)
+        self.sp_drawdown.setDecimals(3)
+        self.sp_drawdown.setValue(
+            float(self._settings.get(S.Paper.MAX_DRAWDOWN, 0.15)))
+
+        self.sp_risk = QDoubleSpinBox()
+        self.sp_risk.setRange(0.001, 0.10)
+        self.sp_risk.setSingleStep(0.005)
+        self.sp_risk.setDecimals(3)
+        self.sp_risk.setValue(
+            float(self._settings.get(S.Paper.MAX_RISK_PCT, 0.02)))
+
         fields = (
             ("同持上限", self.sp_maxpos),
             ("置信度≥", self.sp_conf),
@@ -1067,6 +1081,8 @@ class PaperWindow(QDialog):
                 self.sp_tp: "止盈/移动止盈激活线",
                 self.sp_cost: "单边成本 (佣金+印花税+滑点), 旧口径兜底",
                 self.sp_cash: "模拟盘初始资金 (更改后需重置账户)",
+                self.sp_drawdown: "账户最大回撤熔断: 净值从峰值回撤达到该比例即暂停开仓",
+                self.sp_risk: "单笔风险: 单次开仓允许承担的资金比例上限",
             }[w[1]])
         hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+15%·回落 8% / "
                       "弱市过滤开")
