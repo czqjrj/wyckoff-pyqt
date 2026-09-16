@@ -1,5 +1,6 @@
 """用户数据持久化: 自选股 / 设置 / 阶段带反馈标注 / 持仓簿。"""
 import json
+import logging
 import os
 import re
 
@@ -14,6 +15,11 @@ from .paths import (
     SETTINGS_FILE,
     WATCHLIST_FILE,
 )
+
+logger = logging.getLogger("wyckoff.storage")
+
+# 已告警的 (key, value) 集合: 漂移告警幂等, 避免每轮 load_settings 刷屏
+_PAPER_DRIFT_SEEN = set()
 
 # 优先使用环境变量中的 AI API Key, 避免把密钥明文写入配置文件
 # (wyckoff_settings.json 可能被误提交/同步; env 方式密钥不入盘)。
@@ -99,6 +105,23 @@ def _dedupe_api_key(key):
     return key
 
 
+def _warn_paper_drift(key, value, calibrated):
+    """模拟盘参数漂移告警 (每键一次, 幂等防刷屏)。
+
+    复读频率高 (每轮 apply_paper_params 前都会 load_settings), 用模块级集合
+    记住已告警的 (key,value) 组合, 同名同值只记一次; 用户主动改回校准值后
+    可再次告警。
+    """
+    global _PAPER_DRIFT_SEEN
+    token = (key, value)
+    if token in _PAPER_DRIFT_SEEN:
+        return
+    _PAPER_DRIFT_SEEN.add(token)
+    logger.warning("模拟盘参数漂移: %s = %r, 校准默认 %r —— 若非本机主动调优, "
+                   "请到「设置→策略参数」复核 (引擎仅对风控上限强制钳制)",
+                   key, value, calibrated)
+
+
 def load_settings():
     s = dict(DEFAULT_SETTINGS)
     try:
@@ -109,6 +132,26 @@ def load_settings():
         s["ai_api_key"] = _dedupe_api_key(s.get("ai_api_key", ""))
     except Exception:
         pass
+    # 模拟盘参数漂移预警: 磁盘/云端回灌的 paper_* 值与出厂调优默认不一致时
+    # 立即告警 (只读, 不静默修复), 防止"运行中的客户端写回旧值覆盖调优参数"长期
+    # 无感 (曾出现 maxpos3/止损5%/conf90/移动止盈关 覆盖校准值)。用户渠道类键
+    # (推送凭据/开关) 属个人配置, 不参与校准对齐告警。
+    _PAPER_DRIFT_SKIP = frozenset({
+        "paper_push_enabled", "paper_push_method",
+        "paper_server_chan_key", "paper_wechat_corp_id",
+        "paper_wechat_corp_secret", "paper_wechat_agent_id",
+        "paper_wechat_to_user", "paper_wxpusher_app_token",
+        "paper_wxpusher_topic_ids", "paper_wxpusher_uids",
+    })
+    for _k, _default in DEFAULT_SETTINGS.items():
+        if not _k.startswith("paper_") or _k in _PAPER_DRIFT_SKIP:
+            continue
+        _v = s.get(_k)
+        try:
+            if _v != _default:
+                _warn_paper_drift(_k, _v, _default)
+        except Exception:
+            continue
     # 环境变量密钥优先: 存在则覆盖配置文件中的值 (运行时生效, 不落盘)
     env_key = (os.environ.get(API_KEY_ENV) or "").strip()
     if env_key:

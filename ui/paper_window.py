@@ -157,7 +157,15 @@ _CN_SIG_HEAD = ("日期", "策略", "代码", "名称", "事件", "置信", "信
                 "5根", "10根", "20根", "状态")
 
 # 策略管理器信号来源 → 界面中文标签 (策略注册信息唯一来源: 策略管理器)
-from wyckoff.paper._params import TRAILING_STOP as _DEF_TRAILING_STOP
+from wyckoff.paper._params import (
+    MAX_DRAWDOWN_PCT as _DEF_MAX_DRAWDOWN,
+)
+from wyckoff.paper._params import (
+    MAX_RISK_PCT as _DEF_MAX_RISK,
+)
+from wyckoff.paper._params import (
+    TRAILING_STOP as _DEF_TRAILING_STOP,
+)
 from wyckoff.settings_keys import S
 from wyckoff.strategies.manager import STRATEGY_CN as _STRAT_CN
 from wyckoff.strategies.manager import STRATEGY_ORDER as _STRAT_ORDER
@@ -1020,18 +1028,22 @@ class PaperWindow(QDialog):
             "止损后再入冷却: 同标的止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)")
 
         self.sp_drawdown = QDoubleSpinBox()
-        self.sp_drawdown.setRange(0.05, 0.50)
+        self.sp_drawdown.setRange(0.05, _DEF_MAX_DRAWDOWN)
         self.sp_drawdown.setSingleStep(0.01)
         self.sp_drawdown.setDecimals(3)
         self.sp_drawdown.setValue(
-            float(self._settings.get(S.Paper.MAX_DRAWDOWN, 0.15)))
+            float(self._settings.get(S.Paper.MAX_DRAWDOWN, _DEF_MAX_DRAWDOWN)))
+        self.sp_drawdown.setToolTip(
+            "最大账户回撤: 净值自峰值回撤超此值停止开新仓 (校准上限, 引擎钳制不再放宽)")
 
         self.sp_risk = QDoubleSpinBox()
-        self.sp_risk.setRange(0.001, 0.10)
+        self.sp_risk.setRange(0.001, _DEF_MAX_RISK)
         self.sp_risk.setSingleStep(0.005)
         self.sp_risk.setDecimals(3)
         self.sp_risk.setValue(
-            float(self._settings.get(S.Paper.MAX_RISK_PCT, 0.02)))
+            float(self._settings.get(S.Paper.MAX_RISK_PCT, _DEF_MAX_RISK)))
+        self.sp_risk.setToolTip(
+            "单笔最大风险预算: 账户净值% (Kelly 上限; 校准上限, 引擎钳制不再放宽)")
 
         fields = (
             ("同持上限", self.sp_maxpos),

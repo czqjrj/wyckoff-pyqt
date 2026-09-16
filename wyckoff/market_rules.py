@@ -102,16 +102,20 @@ def limit_blocked(df, side, symbol=None) -> bool:
 
     buy: 最新 bar 涨停封板 → 按市价买不进 (返回 True);
     sell: 最新 bar 跌停封板 → 按市价卖不出 (返回 True)。
-    数据缺失/无法判定时返回 False (fail-open), 不误拦正常撮合。
+
+    数据缺失/解析失败时 fail-closed (返回 True = 视为不可成交): 行情断档时
+    "无法确认是否能成交" 与 "能成交" 不同, 前者应按封板处理拦截下单, 避免
+    数据故障下撮合出票面成交 (实盘为真实资金)。合成/裸 K 线 (无 limit_up/
+    limit_dn 指标列) 仍按未封板处理, 由调用方保证真实撮合路径先 attach 指标。
     """
     if df is None or len(df) == 0:
-        return False
+        return True
     try:
         up, dn = bar_limit_flags(df, symbol)
     except Exception:
-        return False
+        return True
     if len(up) == 0:
-        return False
+        return True
     if side == "sell":
         return bool(dn[-1])
     return bool(up[-1])

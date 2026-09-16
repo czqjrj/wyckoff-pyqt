@@ -260,6 +260,24 @@ def apply_paper_params(settings=None):
         "wxpusher_topic_ids": _get(S.Paper.WXPUSHER_TOPIC_IDS, PUSH_WXPUSHER_TOPIC_IDS),
         "wxpusher_uids": _get(S.Paper.WXPUSHER_UIDS, PUSH_WXPUSHER_UIDS),
     }
+    # 风控上限钳制 (实盘地基): 磁盘/云端/UI 均可能回灌更宽松的风控值 (如把
+    # 最大回撤调到 30%、单笔风险 5%), 引擎一律不得高于校准上限 —— 更严可、
+    # 更松不行, 防止陈旧配置静默弱化风控。操作参数 (止损/止盈/持仓数等) 仍
+    # 可按研究需要放开, 供回测网格/配置页调试, 不在本钳制范围内。
+    _RISK_CEILING = {
+        "max_drawdown": MAX_DRAWDOWN_PCT,
+        "max_risk_pct": MAX_RISK_PCT,
+        "max_sector_conc": MAX_SECTOR_CONCENTRATION,
+        "max_single_conc": MAX_SINGLE_CONCENTRATION,
+        "correlation_threshold": CORRELATION_THRESHOLD,
+        "max_capital_usage": MAX_CAPITAL_USAGE,
+    }
+    for _k, _cap in _RISK_CEILING.items():
+        _v = float(_CUR.get(_k) or 0.0)
+        if _v > _cap:
+            logger.warning("apply_paper_params: %s=%s 超校准上限 %.4f, 钳制为上限",
+                           _k, _v, _cap)
+            _CUR[_k] = _cap
     return _CUR
 
 
@@ -329,14 +347,18 @@ def fee_sell(amount) -> float:
 
 
 def _limit_blocked(code, side, df=None) -> bool:
-    """最新 bar 涨跌停封板无法成交 (涨跌停成交约束); 未启用/无行情 → False。"""
+    """最新 bar 涨跌停封板无法成交 (涨跌停成交约束)。
+
+    未启用 limit_fill → 不拦截 (False); 行情不可得时 fail-closed:
+    _next_open 失败按"可能封板"处理 (True), 不撮合无法确认价位的订单。
+    """
     if not _CUR.get("limit_fill", True):
         return False
     if df is None:
         try:
             df = _next_open(code)
         except Exception:
-            return False
+            return True
     return _mr_limit_blocked(df, side, code)
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (见 docs/winrate_improve_eval.md §五)

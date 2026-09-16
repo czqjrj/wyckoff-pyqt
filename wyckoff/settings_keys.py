@@ -286,6 +286,7 @@ DEFAULTS = {
     Paper.COST: 0.004,
     Paper.MIN_CONF: 100,
     Paper.SCAN_INTERVAL: 1800,
+    Paper.SIZING_METHOD: "equal_weight",
     # 止损后再入冷却 (交易日根数): 降回撤实证最优, 见 _params.STOP_COOLDOWN
     Paper.STOP_COOLDOWN: 20,
     Paper.ENABLE_CHINEXT: False,
@@ -321,4 +322,91 @@ DEFAULTS = {
     Runtime.CALIB_REPO_URL: "",
     Runtime.PROFILE_REPO_URL: "",
     Runtime.PROFILE_SYNC: False,
+    # ── 补齐 Paper 域其余缺省键 (与 config.DEFAULT_SETTINGS 对账的完整登记) ──
+    Paper.WEAK_FILTER: True,
+    Paper.WEAK_MAX_POS: 1,
+    Paper.WEAK_INDEX_CODE: "sh000001",
+    Paper.TRAILING_STOP: True,
+    Paper.TRAIL_BACK_PCT: 0.08,
+    Paper.TRAIL_ACTIVATE_PCT: 0.0,
+    Paper.TRAIL_ATR_MULT: 0.0,
+    Paper.ST_CONFIRM: True,
+    Paper.REBALANCE: True,
+    Paper.VA_WEIGHT: 0.6,
+    Paper.MAX_DRAWDOWN: 0.15,
+    Paper.MAX_RISK_PCT: 0.02,
+    Paper.MAX_SECTOR_CONC: 0.40,
+    Paper.MAX_SINGLE_CONC: 0.25,
+    Paper.CORRELATION_THRESHOLD: 0.70,
+    Paper.VOL_ADJUST_ENABLED: True,
+    Paper.MAX_CAPITAL_USAGE: 0.95,
+    Paper.PUSH: False,
+    Paper.PUSH_METHOD: "server_chan",
+    Paper.SERVER_CHAN_KEY: "",
+    Paper.WECHAT_CORP_ID: "",
+    Paper.WECHAT_CORP_SECRET: "",
+    Paper.WECHAT_AGENT_ID: "",
+    Paper.WECHAT_TO_USER: "",
+    Paper.WXPUSHER_APP_TOKEN: "",
+    Paper.WXPUSHER_TOPIC_IDS: "",
+    Paper.WXPUSHER_UIDS: "",
 }
+
+
+def _engine_paper_defaults():
+    """Paper 域校准默认值 (单一真源 _params.py)。
+
+    延迟 import: paper/__init__ 反引 settings_keys (S 类), 若在本模块顶部直接
+    import 引擎参数会循环; 放到 S 类/DEFAULTS 之后执行, 任一侧先加载时符号均已
+    就位 (import 包时仅触发一次, 子模块导入在父包部分初始化下仍可完成)。
+    返回 {Paper 键: 引擎常量}, 供 DEFAULTS 覆盖并在程序内作为统一对照。
+    """
+    from .paper import _params as _p
+
+    return {
+        Paper.INIT_CASH: _p.INIT_CASH,
+        Paper.MAX_POS: _p.MAX_POSITIONS,
+        Paper.HOLD_BARS: _p.HOLD_BARS,
+        Paper.STOP_LOSS: _p.STOP_LOSS,
+        Paper.TAKE_PROFIT: _p.TAKE_PROFIT,
+        Paper.COST: _p.COST,
+        Paper.MIN_CONF: _p.MIN_CONF,
+        Paper.STOP_COOLDOWN: _p.STOP_COOLDOWN,
+        Paper.COMMISSION_RATE: _p.COMMISSION_RATE,
+        Paper.MIN_COMMISSION: _p.MIN_COMMISSION,
+        Paper.STAMP_TAX_RATE: _p.STAMP_TAX_RATE,
+        Paper.TRANSFER_FEE_RATE: _p.TRANSFER_FEE_RATE,
+        Paper.LIMIT_FILL: _p.LIMIT_FILL,
+        Paper.ENABLE_VA: _p.ENABLE_VA,
+        Paper.ENABLE_LONG_LEFT: _p.ENABLE_LONG_LEFT,
+        Paper.WEAK_FILTER: _p.WEAK_FILTER,
+        Paper.WEAK_MAX_POS: _p.WEAK_MAX_POS,
+        Paper.WEAK_INDEX_CODE: _p.WEAK_INDEX_CODE,
+        Paper.ST_CONFIRM: _p.ST_CONFIRM,
+        Paper.REBALANCE: _p.REBALANCE,
+        Paper.VA_WEIGHT: _p.VA_WEIGHT,
+        Paper.TRAILING_STOP: _p.TRAILING_STOP,
+        Paper.TRAIL_BACK_PCT: _p.TRAIL_BACK_PCT,
+        Paper.TRAIL_ACTIVATE_PCT: _p.TRAIL_ACTIVATE_PCT,
+        Paper.TRAIL_ATR_MULT: _p.TRAIL_ATR_MULT,
+        Paper.MAX_DRAWDOWN: _p.MAX_DRAWDOWN_PCT,
+        Paper.MAX_RISK_PCT: _p.MAX_RISK_PCT,
+        Paper.MAX_SECTOR_CONC: _p.MAX_SECTOR_CONCENTRATION,
+        Paper.MAX_SINGLE_CONC: _p.MAX_SINGLE_CONCENTRATION,
+        Paper.CORRELATION_THRESHOLD: _p.CORRELATION_THRESHOLD,
+        Paper.VOL_ADJUST_ENABLED: _p.VOL_ADJUST_ENABLED,
+        Paper.MAX_CAPITAL_USAGE: _p.MAX_CAPITAL_USAGE,
+        Paper.PUSH: _p.PUSH_ENABLED,
+        Paper.PUSH_METHOD: _p.PUSH_METHOD,
+        Paper.SERVER_CHAN_KEY: _p.PUSH_SERVER_CHAN_KEY,
+        Paper.WECHAT_CORP_ID: _p.PUSH_WECHAT_CORP_ID,
+        Paper.WECHAT_CORP_SECRET: _p.PUSH_WECHAT_CORP_SECRET,
+        Paper.WECHAT_AGENT_ID: _p.PUSH_WECHAT_AGENT_ID,
+        Paper.WECHAT_TO_USER: _p.PUSH_WECHAT_TO_USER,
+        Paper.WXPUSHER_APP_TOKEN: _p.PUSH_WXPUSHER_APP_TOKEN,
+        Paper.WXPUSHER_TOPIC_IDS: _p.PUSH_WXPUSHER_TOPIC_IDS,
+        Paper.WXPUSHER_UIDS: _p.PUSH_WXPUSHER_UIDS,
+    }
+
+
+DEFAULTS.update(_engine_paper_defaults())
