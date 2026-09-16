@@ -463,6 +463,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             # (max_risk_pct=2%) 会与宽止损(如-8%)冲突而系统性压死纪律策略
             # (33%等权仓位×8%=2.6%>2%)。回放里让风险由止盈止损参数本身决定。
             "paper_max_risk_pct": 1.0,
+            # 止损后再入冷却 (交易日根数; 0=关闭)
+            "paper_stop_cooldown": int(params.get("stop_cooldown") or 0),
             # 账户回撤门禁同样放开: 回测目标是最优止盈止损参数本身,
             # 回撤期的入场裁量由统计表(回撤指标)呈现, 不由该门禁压制买入。
             "paper_max_drawdown": 1.0,
@@ -953,6 +955,12 @@ def main():
     ap.add_argument("--cash", type=float, default=None, help="初始资金")
     ap.add_argument("--window", type=int, default=10, help="信号可买入窗口(根)")
     ap.add_argument(
+        "--stop-cooldown",
+        type=int,
+        default=0,
+        help="止损后再入冷却(交易日根数, 0=关闭): 同标止损平仓后 N 个交易日内禁止再开仓",
+    )
+    ap.add_argument(
         "--chain-cap",
         type=int,
         default=0,
@@ -1061,6 +1069,7 @@ def main():
         "trail_activate_pct": args.trail_activate if args.trail_activate is not None
         else defaults["trail_activate_pct"],
         "trail_atr_mult": defaults["trail_atr_mult"],
+        "stop_cooldown": args.stop_cooldown,
         "cost": args.cost if args.cost is not None else defaults["cost"],
         "init_cash": args.cash if args.cash is not None else defaults["init_cash"],
         "window": args.window,

@@ -892,8 +892,9 @@ class PaperWindow(QDialog):
         grid.setSpacing(6)
 
         self.sp_maxpos = QSpinBox()
-        self.sp_maxpos.setRange(1, 5)
-        self.sp_maxpos.setValue(int(self._settings.get(S.Paper.MAX_POS, 3)))
+        self.sp_maxpos.setRange(1, 8)
+        self.sp_maxpos.setValue(int(self._settings.get(S.Paper.MAX_POS, 5)))
+        self.sp_maxpos.setToolTip("同时持有的最大股票数 (回测最优 5; 6 起收益回落)")
 
         self.sp_conf = QSpinBox()
         self.sp_conf.setRange(50, 100)
@@ -1010,6 +1011,14 @@ class PaperWindow(QDialog):
         self.ck_weak.setToolTip(
             "上证收盘<MA20 判定弱市 → 新开仓上限 1 只")
 
+        self.sp_cooldown = QSpinBox()
+        self.sp_cooldown.setRange(0, 60)
+        self.sp_cooldown.setSuffix(" 根")
+        self.sp_cooldown.setValue(
+            int(self._settings.get(S.Paper.STOP_COOLDOWN, 20)))
+        self.sp_cooldown.setToolTip(
+            "止损后再入冷却: 同标的止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)")
+
         fields = (
             ("同持上限", self.sp_maxpos),
             ("置信度≥", self.sp_conf),
@@ -1087,6 +1096,8 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.STAMP_TAX_RATE] = self.sp_stamp.value() / 100
         self._settings[S.Paper.TRANSFER_FEE_RATE] = self.sp_transfer.value() / 100
         self._settings[S.Paper.LIMIT_FILL] = self.ck_limit_fill.isChecked()
+        # 止损冷却: 同标止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)
+        self._settings[S.Paper.STOP_COOLDOWN] = self.sp_cooldown.value()
         # 自动执行模式 (0=关闭 / 900=15m / 1800=30m)
         self._settings[S.Paper.SCAN_INTERVAL] = (
             0, 900, 1800)[self.auto_on.currentIndex()]

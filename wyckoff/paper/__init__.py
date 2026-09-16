@@ -96,6 +96,7 @@ from ._params import (
     SLIP_SELL,
     ST_CONFIRM,
     STAMP_TAX_RATE,
+    STOP_COOLDOWN,
     STOP_LOSS,
     TAKE_PROFIT,
     TRAIL_ACTIVATE_PCT,
@@ -220,6 +221,8 @@ def apply_paper_params(settings=None):
         "correlation_threshold": float(_get("paper_correlation_threshold", CORRELATION_THRESHOLD)),
         "vol_adjust_enabled": bool(_get("paper_vol_adjust_enabled", VOL_ADJUST_ENABLED)),
         "max_capital_usage": float(_get("paper_max_capital_usage", MAX_CAPITAL_USAGE)),
+        # 止损后再入冷却 (交易日根数, 0=关闭)
+        "stop_cooldown": int(_get("paper_stop_cooldown", STOP_COOLDOWN)),
         # 资金管理方式
         "sizing_method": _get("paper_sizing_method", PositionSizingMethod.EQUAL_WEIGHT.value),
         # 板块权限: 未开通创业板/科创板 → 扫描/选股排除对应代码

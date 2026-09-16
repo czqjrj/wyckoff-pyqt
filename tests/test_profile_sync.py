@@ -410,18 +410,18 @@ def test_paper_settings_distributed_via_cloud(tmp_path, monkeypatch):
     assert st.get("paper_max_pos", {}).get("ts") == 0.0, \
         "默认模拟盘参数首同步应为保守时间戳"
 
-    # 云端有用户改过的模拟盘配置
-    remote = {"paper_max_pos": {"v": 5, "ts": 9999.0},
+    # 云端有用户改过的模拟盘配置 (≠ 本地默认5)
+    remote = {"paper_max_pos": {"v": 6, "ts": 9999.0},
               "paper_wxpusher_app_token": {"v": "AT_remote",
                                            "ts": 9999.0}}
     merged = m._merge_items(st, remote)
-    assert merged["paper_max_pos"]["v"] == 5, "云端策略参数应覆盖本地默认"
+    assert merged["paper_max_pos"]["v"] == 6, "云端策略参数应覆盖本地默认"
     assert merged["paper_wxpusher_app_token"]["v"] == "AT_remote", \
         "token 出现在云端凭据? 应被上层敏感过滤拦截"
 
     rc = m.apply_profile(
         {"schema": m.SCHEMA,
          "types": {"settings": {"items": {
-             "paper_max_pos": {"v": 5, "ts": 9999.0}}}}})
+             "paper_max_pos": {"v": 6, "ts": 9999.0}}}}})
     assert rc["changed"] is True
-    assert m._read_settings_state().get("paper_max_pos") == 5
+    assert m._read_settings_state().get("paper_max_pos") == 6
