@@ -37,9 +37,12 @@ def _write(tmp, rel, data):
 
 def test_settings_whitelist_extracts_domains(tmp_path):
     m = _reload_modules(tmp_path)
+    import wyckoff.storage as st
     s = {k: f"v-{k}" for k in m.SETTINGS_WHITELIST}
     s["ai_api_key"] = "sk-secret123"
     s["calib_repo_url"] = "git@x"
+    # 校准版本对齐, 避免 load_settings 触发 paper_* 回迁覆盖测试用值
+    s[st._CALIBRATION_VERSION_KEY] = st.PAPER_CALIBRATION_VERSION
     _write(tmp_path, "wyckoff_settings.json", s)
     state = m._read_settings_state()
     assert "ai_api_key" not in state
@@ -381,10 +384,12 @@ def test_cloud_pull_paper_overwrites_polluted_local(tmp_path, monkeypatch):
 def test_paper_settings_synced_sensitive_excluded(tmp_path):
     """模拟盘设置进入同步白名单, 但凭据类键 (token/key/secret) 永不跨设备同步。"""
     m = _reload_modules(tmp_path)
-    # 本地配好的模拟盘设置 + 一个敏感凭据
+    import wyckoff.storage as st
+    # 本地配好的模拟盘设置 + 一个敏感凭据 (校准版本对齐, 不触发回迁)
     s = {"paper_limit_fill": True, "paper_max_pos": 4,
          "paper_commission_rate": 0.00025,
          "paper_wxpusher_topics": "n/a"}
+    s[st._CALIBRATION_VERSION_KEY] = st.PAPER_CALIBRATION_VERSION
     s["paper_wxpusher_app_token"] = "AT_supersecret"
     s["paper_server_chan_key"] = "SCKEY_supersecret"
     _write(tmp_path, "wyckoff_settings.json", s)

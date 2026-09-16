@@ -21,6 +21,48 @@ logger = logging.getLogger("wyckoff.storage")
 # 已告警的 (key, value) 集合: 漂移告警幂等, 避免每轮 load_settings 刷屏
 _PAPER_DRIFT_SEEN = set()
 
+# 模拟盘校准 Schema 版本: _params.py 校准默认调整后 +1, 触发所有客户端在下次
+# 加载时把磁盘旧值一次性回迁到新校准默认 (见 load_settings)。落盘键名以 "_"
+# 开头, 不在同步白名单 (SK 枚举) 内, 故不参与跨设备同步, 也不会被 collect 当
+# tombstone。旧客户端/首装文件无此键 → 视为过期, 走一次回迁。
+PAPER_CALIBRATION_VERSION = 1
+_CALIBRATION_VERSION_KEY = "_paper_calibration_version"
+
+# 推送凭据/开关等个人渠道键: 属用户配置而非校准参数, 不参与回迁与漂移告警。
+_PAPER_PERSONAL_KEYS = frozenset({
+    "paper_push_enabled", "paper_push_method",
+    "paper_server_chan_key", "paper_wechat_corp_id",
+    "paper_wechat_corp_secret", "paper_wechat_agent_id",
+    "paper_wechat_to_user", "paper_wxpusher_app_token",
+    "paper_wxpusher_topic_ids", "paper_wxpusher_uids",
+})
+
+
+def _paper_calibrated_keys():
+    """参与校准对齐的 paper_* 键 (排除个人渠道键)。"""
+    for k in DEFAULT_SETTINGS:
+        if k.startswith("paper_") and k not in _PAPER_PERSONAL_KEYS:
+            yield k
+
+
+def _migrate_paper_calibration(s):
+    """把磁盘旧校准值一次性回迁到当前引擎校准默认; 返回被修正的键集合。
+
+    仅当文件的校准版本过期时调用 (见 load_settings): 陈旧客户端写回的
+    maxpos3/止损5%/conf90/移动止盈关 等会静默弱化风控, 首启即纠正。回迁后
+    打上新版本戳, 用户后续主动调优不再被覆盖 (仅告警)。
+    """
+    repaired = {}
+    for k in _paper_calibrated_keys():
+        default = DEFAULT_SETTINGS[k]
+        v = s.get(k, default)
+        if v != default:
+            repaired[k] = v
+            s[k] = default
+    s[_CALIBRATION_VERSION_KEY] = PAPER_CALIBRATION_VERSION
+    return repaired
+
+
 # 优先使用环境变量中的 AI API Key, 避免把密钥明文写入配置文件
 # (wyckoff_settings.json 可能被误提交/同步; env 方式密钥不入盘)。
 API_KEY_ENV = "WYCKOFF_API_KEY"
@@ -124,28 +166,32 @@ def _warn_paper_drift(key, value, calibrated):
 
 def load_settings():
     s = dict(DEFAULT_SETTINGS)
+    saved_ok = False
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             saved = json.load(f)
         if isinstance(saved, dict):
             s.update(saved)
+            saved_ok = True
         s["ai_api_key"] = _dedupe_api_key(s.get("ai_api_key", ""))
     except Exception:
         pass
-    # 模拟盘参数漂移预警: 磁盘/云端回灌的 paper_* 值与出厂调优默认不一致时
-    # 立即告警 (只读, 不静默修复), 防止"运行中的客户端写回旧值覆盖调优参数"长期
-    # 无感 (曾出现 maxpos3/止损5%/conf90/移动止盈关 覆盖校准值)。用户渠道类键
-    # (推送凭据/开关) 属个人配置, 不参与校准对齐告警。
-    _PAPER_DRIFT_SKIP = frozenset({
-        "paper_push_enabled", "paper_push_method",
-        "paper_server_chan_key", "paper_wechat_corp_id",
-        "paper_wechat_corp_secret", "paper_wechat_agent_id",
-        "paper_wechat_to_user", "paper_wxpusher_app_token",
-        "paper_wxpusher_topic_ids", "paper_wxpusher_uids",
-    })
-    for _k, _default in DEFAULT_SETTINGS.items():
-        if not _k.startswith("paper_") or _k in _PAPER_DRIFT_SKIP:
-            continue
+    # 校准版本回迁: 文件版本过期 (旧客户端写回旧值/首装) 时把 paper_* 校准参数
+    # 一次性纠正回引擎默认并落盘; 版本已对齐则跳过 (用户主动调优得以保留)。
+    if saved_ok and s.get(_CALIBRATION_VERSION_KEY) != PAPER_CALIBRATION_VERSION:
+        repaired = _migrate_paper_calibration(s)
+        if repaired:
+            logger.warning("模拟盘校准参数已回迁: %s",
+                           ", ".join(f"{k}={repaired[k]!r}→{DEFAULT_SETTINGS[k]!r}"
+                                     for k in sorted(repaired)))
+        try:
+            save_settings(s)
+        except Exception as e:
+            log_exc("模拟盘校准回迁落盘失败", e)
+    # 模拟盘参数漂移告警: 版本已对齐后 paper_* 仍偏离校准默认, 视为用户主动
+    # 调优, 只告警不修复。用户渠道类键 (推送凭据/开关) 属个人配置, 不参与。
+    for _k in _paper_calibrated_keys():
+        _default = DEFAULT_SETTINGS[_k]
         _v = s.get(_k)
         try:
             if _v != _default:
@@ -160,9 +206,13 @@ def load_settings():
 
 
 def save_settings(s):
-    if isinstance(s, dict) and s.get("ai_api_key"):
+    if isinstance(s, dict):
         s = dict(s)
-        s["ai_api_key"] = _dedupe_api_key(s["ai_api_key"])
+        # 落盘即打当前校准版本戳: 显式保存 (用户改配置/云端下发) 视为已对齐当前
+        # 校准, 后续 load_settings 不再误判为过期文件而回迁覆盖。
+        s[_CALIBRATION_VERSION_KEY] = PAPER_CALIBRATION_VERSION
+        if s.get("ai_api_key"):
+            s["ai_api_key"] = _dedupe_api_key(s["ai_api_key"])
     try:
         atomic_write_json(SETTINGS_FILE, s)
     except Exception as e:

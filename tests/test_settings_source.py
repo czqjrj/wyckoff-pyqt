@@ -7,7 +7,8 @@ settings_keys.DEFAULTS 长期靠手抄同步, 磁盘 wyckoff_settings.json 曾�
 本测试保证:
   1) 三个 Python 源里 paper_* 数值必须与引擎常量一致 (任一改值漂移即 CI 失败);
   2) apply_paper_params 对超校准上限的风控值强制钳制 (更严可、更松不行);
-  3) load_settings 对磁盘漂移只告警不静默修复 (可观测性, 不引入隐式改盘)。
+  3) load_settings 对过期校准版本的文件一次性回迁为引擎默认并落盘, 版本对齐后
+     的用户主动调优只告警不覆盖 (既不静默弱化风控, 也不反复抹掉用户改值)。
 """
 import json
 import logging
@@ -131,8 +132,8 @@ def test_risk_params_tighter_than_calibrated_preserved():
     assert c["max_capital_usage"] == 0.80
 
 
-def test_load_settings_warns_on_paper_drift(tmp_path, monkeypatch, caplog):
-    """磁盘回灌漂移值只告警、不静默修复 (可观测, 不隐式改用户盘)。"""
+def test_load_settings_migrates_legacy_paper_drift(tmp_path, monkeypatch, caplog):
+    """过期校准版本 (旧客户端写回的旧值) 首启回迁为引擎默认并落盘。"""
     import wyckoff.storage as storage
     drifted = {
         "paper_max_pos": 3,
@@ -147,7 +148,39 @@ def test_load_settings_warns_on_paper_drift(tmp_path, monkeypatch, caplog):
     storage._PAPER_DRIFT_SEEN.clear()
     with caplog.at_level(logging.WARNING, logger="wyckoff.storage"):
         s = storage.load_settings()
-    # 漂移值仍原样加载 (非修复), 并逐键告警
+    # 漂移值被回迁为校准默认
+    assert s["paper_max_pos"] == P.MAX_POSITIONS
+    assert s["paper_stop_loss"] == P.STOP_LOSS
+    assert s["paper_min_conf"] == P.MIN_CONF
+    assert s["paper_trailing_stop"] == P.TRAILING_STOP
+    assert s["paper_enable_va"] == P.ENABLE_VA
+    assert "回迁" in caplog.text
+    # 回迁结果与版本戳已落盘, 二次加载不再回迁、不再告警
+    on_disk = json.loads(f.read_text(encoding="utf-8"))
+    assert on_disk["paper_max_pos"] == P.MAX_POSITIONS
+    assert on_disk[storage._CALIBRATION_VERSION_KEY] == storage.PAPER_CALIBRATION_VERSION
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="wyckoff.storage"):
+        storage.load_settings()
+    assert "回迁" not in caplog.text
+
+
+def test_load_settings_warns_on_post_migration_drift(tmp_path, monkeypatch, caplog):
+    """版本已对齐后仍偏离 = 用户主动调优: 只告警, 不覆盖。"""
+    import wyckoff.storage as storage
+    drifted = {
+        storage._CALIBRATION_VERSION_KEY: storage.PAPER_CALIBRATION_VERSION,
+        "paper_max_pos": 3,
+        "paper_stop_loss": 0.05,
+        "paper_min_conf": 90,
+    }
+    f = tmp_path / "wyckoff_settings.json"
+    f.write_text(json.dumps(drifted), encoding="utf-8")
+    monkeypatch.setattr(storage, "SETTINGS_FILE", str(f))
+    storage._PAPER_DRIFT_SEEN.clear()
+    with caplog.at_level(logging.WARNING, logger="wyckoff.storage"):
+        s = storage.load_settings()
+    # 用户改值原样保留, 仅逐键告警
     assert s["paper_max_pos"] == 3
     assert s["paper_stop_loss"] == 0.05
     assert s["paper_min_conf"] == 90
