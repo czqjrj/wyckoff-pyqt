@@ -94,6 +94,43 @@ def check_capital_usage(st, required_cash: float) -> tuple[bool, str]:
     return True, ""
 
 
+def _strptime_day(s):
+    try:
+        from datetime import datetime
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _stop_loss_reentry_blocked(st, code, cooldown_n) -> bool:
+    """止损平仓后 N 交易日内禁止对同标的重开仓。
+
+    取 st["closed"] 中该 symbol 最近一条平仓记录; 若为止损(reason 含 stop_loss)
+    且平仓日距当前日(equity_hist 末点)不足 cooldown_n 个交易日 → 返回 True。
+    无交易日参照时 fail-soft 放行 (不阻断既有行为)。
+    """
+    last = None
+    for c in reversed(st.get("closed", [])):
+        if c.get("symbol") == code:
+            last = c
+            break
+    if last is None or "stop_loss" not in (last.get("reason") or ""):
+        return False
+    hist_days = [h.get("ts") for h in (st.get("equity_hist") or [])]
+    cur = hist_days[-1] if hist_days else None
+    prev = last.get("day")
+    if not cur or not prev:
+        return False
+    if prev in hist_days and cur in hist_days:
+        gap = hist_days.index(cur) - hist_days.index(prev)
+    else:
+        c0, p0 = _strptime_day(cur), _strptime_day(prev)
+        if not c0 or not p0:
+            return False
+        gap = (c0 - p0).days
+    return 0 <= gap < int(cooldown_n)
+
+
 def _risk_blocks_entry(st, cand, price) -> bool:
     """run_cycle 入场前的风控门禁聚合: 任一不满足则拦截该笔 (返回 True=拦截)。
 
@@ -111,6 +148,13 @@ def _risk_blocks_entry(st, cand, price) -> bool:
                                       msg or "回撤超限", risk_type="drawdown")
         except Exception:
             pass
+        return True
+    # 止损后再入冷却: 该标的上次平仓是止损, 且距上次平仓不足 N 个交易日 → 拦截。
+    # (当前交易日取 equity_hist 末点; 回放/实盘均按日 upsert, 近似当日.)
+    stop_cd = int(paper._CUR.get("stop_cooldown") or 0)
+    if stop_cd > 0 and _stop_loss_reentry_blocked(st, cand["code"], stop_cd):
+        st.setdefault("meta", {})["last_risk_skip"] = {
+            "code": cand["code"], "reason": f"止损后再入冷却 {stop_cd}根"}
         return True
     # 预估 qty (与 _make_order 同口径: 按账户总权益等权, 而非剩余现金)
     mv = sum(float(p.get("last", p["buy_px"])) * p["qty"]

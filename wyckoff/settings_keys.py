@@ -116,6 +116,10 @@ class Paper(_Base):
     WEAK_FILTER = "paper_weak_filter"
     WEAK_MAX_POS = "paper_weak_max_pos"
     WEAK_INDEX_CODE = "paper_weak_index_code"
+    # 止损后再入冷却 (交易日根数, 0=关闭): 同标止损平仓后 N 个交易日内禁止再开仓。
+    # 实证 (200只全A, conf=100): 冷却20根消除同标反复止损 (2024-06 sh605338 三连损),
+    # maxpos=5+冷却 → +551%/-11.9% (优于 maxpos=4 的 +494%/-13.1%)。
+    STOP_COOLDOWN = "paper_stop_cooldown"
     # 价值吸筹单仓资金权重
     VA_WEIGHT = "paper_va_weight"
     # 价值吸筹策略总开关: False = 模拟盘完全停用该策略 (不再扫描/生成入场条件单)
@@ -258,13 +262,15 @@ DEFAULTS = {
     Backtest.RISK_PCT: 0.02,
     Backtest.RISK_MIN_RR: 3.0,
     Paper.INIT_CASH: 1_000_000,
-    Paper.MAX_POS: 4,
+    Paper.MAX_POS: 5,
     Paper.HOLD_BARS: 20,
     Paper.STOP_LOSS: 0.04,
     Paper.TAKE_PROFIT: 0.15,
     Paper.COST: 0.004,
     Paper.MIN_CONF: 100,
     Paper.SCAN_INTERVAL: 1800,
+    # 止损后再入冷却 (交易日根数): 降回撤实证最优, 见 _params.STOP_COOLDOWN
+    Paper.STOP_COOLDOWN: 20,
     Paper.ENABLE_CHINEXT: False,
     Paper.ENABLE_STAR: False,
     # 交易成本拆分 (A股真实费率, 供模拟盘撮合按明细计费)
