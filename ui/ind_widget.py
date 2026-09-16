@@ -786,9 +786,12 @@ class IndWidget(HoverHighlightMixin, BasePlotWidget):
     def _on_crosshair_moved(self, crosshair):
         """十字光标移动时更新状态栏显示当前面板数值。"""
         key = getattr(crosshair, "_panel_key", "")
-        if key and hasattr(self, "_crosshair_values"):
-            self._crosshair_values[key] = (crosshair._x, crosshair._y)
-            self.crosshair_moved.emit(key, crosshair._x, crosshair._y)
+        if not key or not hasattr(self, "_crosshair_values"):
+            return
+        if crosshair._x is None or crosshair._y is None:
+            return
+        self._crosshair_values[key] = (crosshair._x, crosshair._y)
+        self.crosshair_moved.emit(key, crosshair._x, crosshair._y)
 
     def keyPressEvent(self, ev):
         """键盘快捷键:
