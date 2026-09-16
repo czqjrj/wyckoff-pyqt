@@ -73,10 +73,37 @@
         "codes_scanned": 90,
         "candidates_found": 0
       }
+    },
+    {
+      "ts": "2026-09-16 14:28:52",
+      "type": "scan",
+      "detail": {
+        "scan_count": 10,
+        "codes_scanned": 3111,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-16 14:33:47",
+      "type": "scan",
+      "detail": {
+        "scan_count": 11,
+        "codes_scanned": 90,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-16 14:45:05",
+      "type": "scan",
+      "detail": {
+        "scan_count": 12,
+        "codes_scanned": 90,
+        "candidates_found": 0
+      }
     }
   ],
   "summary": {
-    "scan_count": 7,
+    "scan_count": 10,
     "buy_count": 0,
     "sell_count": 0,
     "condition_count": 0,
