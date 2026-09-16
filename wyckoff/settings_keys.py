@@ -120,6 +120,23 @@ class Paper(_Base):
     # 实证 (200只全A, conf=100): 冷却20根消除同标反复止损 (2024-06 sh605338 三连损),
     # maxpos=5+冷却 → +551%/-11.9% (优于 maxpos=4 的 +494%/-13.1%)。
     STOP_COOLDOWN = "paper_stop_cooldown"
+    # ── 风控键 (8键配置化, S5; 引擎真源 _params.py, 默认引用同名常量) ──────
+    # 最大账户回撤 (净值从峰值回落阈值)
+    MAX_DRAWDOWN = "paper_max_drawdown"
+    # 单笔最大风险预算 (账户净值百分比, Kelly 计算上限)
+    MAX_RISK_PCT = "paper_max_risk_pct"
+    # 仓位方法论: equal_weight / kelly / vol_adjusted / risk_parity / fixed_fractional
+    SIZING_METHOD = "paper_sizing_method"
+    # 最大行业集中度 (单行业持仓市值占总市值上限)
+    MAX_SECTOR_CONC = "paper_max_sector_conc"
+    # 最大单股集中度 (单股持仓市值占总市值上限)
+    MAX_SINGLE_CONC = "paper_max_single_conc"
+    # 相关性阈值 (拒绝开仓高相关标的, 需外部相关性矩阵)
+    CORRELATION_THRESHOLD = "paper_correlation_threshold"
+    # 波动率调整总开关: 高波动降仓 / 低波动升仓 (ATR 百分位)
+    VOL_ADJUST_ENABLED = "paper_vol_adjust_enabled"
+    # 资金利用率上限 (防止满仓无现金应对机会)
+    MAX_CAPITAL_USAGE = "paper_max_capital_usage"
     # 价值吸筹单仓资金权重
     VA_WEIGHT = "paper_va_weight"
     # 价值吸筹策略总开关: False = 模拟盘完全停用该策略 (不再扫描/生成入场条件单)

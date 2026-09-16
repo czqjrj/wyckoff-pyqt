@@ -1027,6 +1027,8 @@ class PaperWindow(QDialog):
             ("止盈", self.sp_tp),
             ("单边成本", self.sp_cost),
             ("初始资金", self.sp_cash),
+            ("最大回撤", self.sp_drawdown),
+            ("单笔风险", self.sp_risk),
         )
         for i, (label, w) in enumerate(fields):
             grid.addWidget(QLabel(label), 0, i * 2)
@@ -1098,6 +1100,8 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.LIMIT_FILL] = self.ck_limit_fill.isChecked()
         # 止损冷却: 同标止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)
         self._settings[S.Paper.STOP_COOLDOWN] = self.sp_cooldown.value()
+        self._settings[S.Paper.MAX_DRAWDOWN] = self.sp_drawdown.value()
+        self._settings[S.Paper.MAX_RISK_PCT] = self.sp_risk.value()
         # 自动执行模式 (0=关闭 / 900=15m / 1800=30m)
         self._settings[S.Paper.SCAN_INTERVAL] = (
             0, 900, 1800)[self.auto_on.currentIndex()]
