@@ -1,6 +1,6 @@
 # SC/BC 环境门 — 进度存档 (会话恢复用)
 
-- 更新: 2026-09-13
+- 更新: 2026-09-15 (已落地, 见文末"已完成落地")
 - 目标: 给量价事件 SC/BC 加"环境门"/分桶收紧触发, 提升方向命中率
 - 来源: 上一轮事件层 survey 结论里"还有什么可提高"的第 1 项
 
@@ -66,17 +66,77 @@ SC +10.6pt、BC +6.5pt 都是大样本但明显弱于 Spring/UTAD。当前 SC/BC
 4. 回归: `python -m pytest tests -q` (基线 576 passed, 2 个 buypoints 既存失败)。
 5. 提交 (脚本 + 门 + 测试)。
 
-## 同轮列出的其它待办 (未开工)
+## 已完成落地 (2026-09-15)
 
-- SOW 收紧: 69% 命中但 conf 均值仅 31 且样本 306, 可要求 UTAD/LPSY 共振或放量破位再计分。
-- LPS/JOC 链路: LPS 78.9% 最强第二梯队但样本仅 76; `detect_joc_lps_bu` 里 JOC/BU
-  分支 600 只产出 0 (疑死代码), 需先验 JOC 方向 (可能像 SOS 反向) 再决定是否放宽。
-- conf→命中率校准校验: 对弱信号 (BC/SOW) 按 conf 分桶看高 conf 是否真高命中。
-- VSA 看多标签复查: DEM/ETR/SPR/SV 两环境都贴近随机, 可按阶段/量能分位再挖子集。
+调查已重跑 (修复版, 全量 5345 只, 结果存档 `docs/event_env_gate_results.txt`),
+确认的精确分桶拐点:
+
+| 事件 | 分桶 | n | 命中 | 结论 |
+|---|---|---|---|---|
+| SC | 前置 ≤-15% | 1025 | **70.4%** (+11pt) | 深跌环境最强 |
+| SC | 前置 -15~-8% | 1109 | 59.3% (±0) | 中跌无增益 |
+| SC | 前置 >-8% / 横盘 | 1358 | **50.6-51.8%** (-8pt) | 接近随机 → 降权 |
+| BC | 前置 ≥+15% | 5925 | **60.5%** (+5pt) | 深涨环境最强 |
+| BC | 前置 +8~15% | 5124 | 54.2% (-1.4pt) | 靠前无益 |
+| BC | 横盘 ≤+4% | 4677 | **47.8-50.5%** (-5~-8pt) | 反向随机 → 降权 |
+| BC | trend=1 (上升趋势) | 9517 | 53.0% vs 非升 59.3% | 上升趋势内 BC 更弱 |
+
+落地位置选了**保守路线** (保留检测, conf 门): 因为 SC/BC 是 AR/ST/PSY/PSUP
+结构链路锚点, 硬删会破坏吸筹/派发链条。改动全在 `wyckoff/events.py`
+`event_confidence` 中 SC/BC 分支 (原 `if d:` 趋势块对中性事件恒跳过, 补前置动量门):
+
+- SC: `prior_r20 ≤ -0.15` → +8; `> -0.08` → -15; 中间不变。
+- BC: `prior_r20 ≥ +0.15` → +8; `≤ +0.04` → -12; 上升趋势内再 -5。
+- 记录 `feat.prior_r20` 供后续核对 (online_model feature_vector 按名取值, 不受新键影响)。
+- 同时修掉旧逻辑的隐性缺陷: BC 因 `up_i` 恒 False 恒吃 -15 (代码注释与调查结论相左),
+  现 SC/BC 的 -15 分支从弱信号过滤区移出, 由环境门统一接管。
+
+验证:
+- 新增 `tests/test_tags_audit.py` 环境门用例 (SC/BC 深环境 vs 平凡环境 conf 排序)。
+- 全量回归 `616 passed`。
+
+## 同轮列出的其它待办 → 全部完成 (2026-09-15)
+
+1. ✅ **SOW 收紧**: vol_ratio_20 分桶调 conf (≥2.2→+8, <1.6→-8)。
+   调查存档: `docs/sow_tighten_results.txt`。
+
+2. ✅ **LPS/JOC 链路**: JOC/BU 死代码确认 + 方向反向 (-8.9pt) → 降中性。
+   JOC/BU 从 BULL_EVENTS 移出加入 NEUTRAL_EVENTS。
+   调查存档: `docs/joc_lps_chain_results.txt`。
+   (LPS n=75 命中 78.9%, 强信号不受影响。)
+
+3. ✅ **conf→命中率校准校验**: BC conf 排序单调正确 (高≥70→55.9%, 中→43.6%)。
+   环境门有效 (置涨+15%→60.7%, 横盘→47.7%)。SOW 侧倒挂已由放量门修正。
+   结论: BC 校准健康, 无需额外代码改动。
+   存档: `docs/bc_conf_calibration.txt`。
+
+4. ✅ **VSA 看多标签复查**: SV 高量 (vr≥2.2) 反向 (-3.4pt) → 标噪。
+   vsa_classify: `"noise": ... or (lb=="SV" and vr>=2.2)`。
+   存档: `docs/vsa_bull_subsets_results.txt`。
 
 ## 相关文件
 
-- `scripts/event_by_trend.py` (本轮, untracked)
-- `scripts/event_label_survey.py` (已提交 8f05b51)
+- `scripts/event_by_trend.py` (SC/BC 分桶)
+- `scripts/sow_tighten_survey.py` (SOW 分桶)
+- `scripts/joc_lps_survey.py` (JOC/LPS 产出验证)
+- `scripts/joc_direction_survey.py` (JOC 方向验证, 放宽定义)
+- `scripts/bc_conf_buckets.py` (BC conf 分档 × 环境交叉)
+- `scripts/vsa_bull_subsets.py` (VSA 看多多维分桶)
+- `docs/sow_tighten_results.txt` (SOW 调查结果)
+- `docs/joc_lps_chain_results.txt` (JOC/LPS 调查结果)
+- `docs/bc_conf_calibration.txt` (BC conf 校准结论)
+- `docs/vsa_bull_subsets_results.txt` (VSA 调查结果)
+- `docs/event_env_gate_results.txt` (SC/BC 全量调查)
+- `scripts/event_label_survey.py` (全量事件 survey, 已提交 8f05b51)
 - `wyckoff/events.py` `detect_climaxes` (L203) / `_REVERSAL_CONFIRM_DIR`, `wyckoff/config.py` `event_dir`
-- 基线输出存档 (已复制入仓库): `docs/event_by_trend_baseline.txt` (旧版), `docs/event_label_low_n.txt`
+- `wyckoff/vsa.py` vsa_classify (SV 高量噪声标记)
+
+## SOW 放量门落地 (2026-09-15)
+
+- 调查: `scripts/sow_tighten_survey.py --limit 6000` (5345 只, 413s)。
+- 总览: n=306, 命中 68.6%, conf 均值 66.7 (较文档旧记录 31 已由模型接管回升)。
+- 唯一有统计意义的前景分桶 = 放量强度 (vol_ratio_20 ≥2.2 → 85.0% 命中, +16.4pt)。
+- conf 档倒挂 (≥70 命中 63.8% vs 中档 71.7%): 平凡放量混入高 conf。
+- 落地保守 conf 门 (在 event_confidence, detect_sow 不动):
+  SOW vol_ratio_20 ≥2.2 → +8; 1.6~2.2 → +2; <1.6 → -8。记录 feat.sow_vol_gate。
+- 新增 2 用例, 全量回归 621 passed。

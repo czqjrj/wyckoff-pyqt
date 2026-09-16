@@ -1,0 +1,39 @@
+# LPS/JOC 链路调查 — 结果存档 (2026-09-15)
+
+## 1. JOC/BU 死代码确认 (scripts/joc_lps_survey.py, 5345 只)
+
+- JOC 产出 **0**
+- BU 产出 **0**
+- LPS n=75, 命中 78.7% (确认强, 来自 SOS 的前置链, 不受 JOC 影响)
+- SOS n=411 (中性, 8f05b51 已降)
+
+detect_joc_lps_bu L358-369 的 JOC 条件 (vol≥1.8x + close>prev_high_60*1.01
++ 前高锚 hival[i-60:i-14]≥prev_high_60*0.98) 在日线上几乎不可能同时满足,
+600 只时已 0 产出, 全量仍 0。
+
+## 2. JOC 方向验证 (scripts/joc_direction_survey.py, 5345 只, 放宽定义采样)
+
+放宽 JOC 定义 (仅 vol≥1.8x + close>prev_high_60*1.01) 采集候选:
+
+- 候选 n=11453, 20根上涨占比 **42.9%** vs 池基准 51.8% → **-8.9pt 反向**
+- vr≥2.4 子桶: 41.4% (-10.3pt) — 放量越大越反向
+- vr<2.4 子桶: 45.1% (-6.7pt)
+
+结论: **JOC 看多方向实测反向 (与 SOS 同类问题)**。放量突破 60 日高点在
+A 股日线上是"追高陷阱", 越放量越容易均值回归下跌。已有 L361-364 的
+boll_pct>0.8 过滤 (追高过滤) 确实过滤了部分, 但放宽后整体仍反向。
+当前死代码 (0 产出) 实质是"不再触发反向信号"的保护, 无需修复放宽。
+
+## 3. 落地 (与 SOS 降中性对齐)
+
+`wyckoff/config.py`:
+- JOC / BU 从 `BULL_EVENTS` 移出 → 加入 `NEUTRAL_EVENTS`
+- `event_dir("JOC") == 0`, `event_dir("BU") == 0`
+
+影响面: fusion 事件维度本已把 WEAK_EVENT_TYPES (含 JOC) 剔除 (strength 0.5 +
+continue), 降中性后 d==0 更早跳过; 结构/阶段/背反/backtest 用途不受方向影响。
+
+验证:
+- `test_tags_audit.py::test_joc_bu_neutral` (event_dir==0)
+- `test_fusion.py::test_weak_events_excluded_from_score` 更新 (弱事件全中性)
+- 全量回归 623 passed

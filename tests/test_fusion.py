@@ -109,10 +109,10 @@ def test_weak_events_excluded_from_score():
     # 弱事件 (PSY/JOC/SOS/AR/BC) 命中贴近随机 → 不参与事件维度评分
     weak = [{"idx": 100, "type": t, "conf": 100} for t in WEAK_EVENT_TYPES]
     assert _event_score(weak, max_idx=120) == 0.0
-    # 弱事件中含 BULL 方向标签 (BC) 时同样被剔除, 不注入伪多头
-    weak_bull = [{"idx": 100, "type": t, "conf": 100}
-                 for t in WEAK_EVENT_TYPES if event_dir(t) > 0]
-    assert weak_bull and _event_score(weak_bull, max_idx=120) == 0.0
+    # JOC/BU 已实测方向反向 (42.9% vs 51.8% 池基准) → 降中性。弱事件组不再含
+    # 方向标签, 全部走 d==0 跳过, 无任何伪多头/伪空头注入。
+    assert all(event_dir(t) == 0 for t in WEAK_EVENT_TYPES), \
+        "JOC/BU 降中性后弱事件应全为中性, 避免注入伪方向"
     # 强梯队有方向的事件都必须能打进融合评分 (过滤仅限弱事件)
     for t in STRONG_TIER_TYPES:
         if event_dir(t) != 0:

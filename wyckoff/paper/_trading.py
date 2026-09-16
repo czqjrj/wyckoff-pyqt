@@ -248,7 +248,8 @@ def step(st, df_by_code, trading=True):
             # 模拟盘按市价即时成交: 一律以现价(含卖滑点)结算, 不再用 max(stop_px,last)
             # 高估止损价。历史实现止损在 last<stop_px 时按 stop_px 成交, 低估了实际损失。
             sell_price = last * (1 - SLIP_SELL)
-            close_position(st, pos, sell_price, reason, event_type=pos.get("event_type"))
+            close_position(st, pos, sell_price, reason,
+                           event_type=pos.get("event_type"), day=bar_day)
     # 处理待撮合买单 (非交易时段冻结, 待恢复后撮合)
     if trading:
         for o in list(st["pending"]):
@@ -351,7 +352,7 @@ def _rebalance_portfolio(st, df_by_code):
     return rebalanced
 
 
-def close_position(st, pos, sell_price, reason, event_type=None):
+def close_position(st, pos, sell_price, reason, event_type=None, day=None):
     """平仓: 回收现金、记录已平仓与净值。
 
     全面适配A股: 卖出费用按明细拆分 (佣金+过户费+印花税), 买入按佣金+过户费,
@@ -379,7 +380,7 @@ def close_position(st, pos, sell_price, reason, event_type=None):
         "strategy": pos.get("strategy", ""),
     })
     st["positions"] = [p for p in st["positions"] if p is not pos]
-    paper._record_equity(st)
+    paper._record_equity(st, day)
     paper.save_state(st)
     try:
         paper_log.log_sell(

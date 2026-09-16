@@ -27,7 +27,7 @@ from wyckoff.strategies.evaluators import evaluate_strategy_value_accumulation
 # 命中20 81% / 75% / 67%; 左侧不受门禁, 弱市仍可兜底入场)
 STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT)
 STRATEGY_CN = {
-    STRATEGY_DISCIPLINE: "策略4·纪律",
+    STRATEGY_DISCIPLINE: "Spring-only",
     STRATEGY_VALUE_ACC: "价值吸筹",
     STRATEGY_LONG_LEFT: "威科夫左侧买点",
 }
@@ -54,8 +54,12 @@ def is_low_quality(code, price=None, name=None) -> bool:
     return False
 
 
-def discipline_latest(evs, n, min_conf=90, event_types=None):
-    """纪律口径: 最近 N 根内的最新强多头事件 (conf≥min_conf)。"""
+def discipline_latest(evs, n, min_conf=90, event_types=None, st_confirm=False):
+    """纪律口径: 最近 N 根内的最新强多头事件 (conf≥min_conf)。
+
+    st_confirm=True 时，ST 类型事件需 confirmed=True 且当前 bar (n-1) >= avail_idx
+    (即确认窗口已通过); Spring 等其他事件不受影响仍事件即买。
+    """
     event_types = event_types if event_types is not None else LONG_EVENT_TYPES
     latest = None
     for e in evs or []:
@@ -66,6 +70,13 @@ def discipline_latest(evs, n, min_conf=90, event_types=None):
         conf = int(e.get("conf", 0) or 0)
         if conf < min_conf:
             continue
+        # ST 确认门槛: 要求 confirmed 且当前 bar (n-1) >= avail_idx (确认已发生)
+        if st_confirm and e.get("type") == "ST":
+            if not e.get("confirmed"):
+                continue
+            avail = int(e.get("avail_idx") or -1)
+            if avail < 0 or (n - 1) < avail:
+                continue
         if latest is None or (e.get("idx") or 0) > latest["idx"]:
             latest = e
     return latest
@@ -133,7 +144,7 @@ def left_buy_candidate(code, df, evs, piv, name=""):
 # ── 候选 producer 注册表 (每个策略一个 producer, 输入 ctx 输出候选或 None) ──
 def _produce_discipline(ctx):
     latest = discipline_latest(ctx["evs"], ctx["n"], ctx["min_conf"],
-                               ctx["event_types"])
+                               ctx["event_types"], ctx.get("st_confirm", False))
     if latest is None:
         return None
     return {"type": latest["type"], "idx": int(latest.get("idx") or 0),
@@ -158,7 +169,8 @@ CANDIDATE_PRODUCERS = {
 
 
 def scan_individual(code, df=None, min_conf=90, gates_ok=None,
-                    name="", event_types=None, strategies=None):
+                    name="", event_types=None, strategies=None,
+                    st_confirm=False):
     """对单只股票按优先序产出模拟盘候选 (纪律→价值吸筹→左侧买点)。
 
     这是模拟盘选股在管理器中的唯一实现; paper.py 不再内置任何选股逻辑。
@@ -198,6 +210,7 @@ def scan_individual(code, df=None, min_conf=90, gates_ok=None,
         "n": len(df),
         "min_conf": min_conf,
         "event_types": event_types if event_types is not None else LONG_EVENT_TYPES,
+        "st_confirm": st_confirm,
     }
     order = STRATEGY_ORDER if not strategies else \
         [k for k in STRATEGY_ORDER if k in strategies]

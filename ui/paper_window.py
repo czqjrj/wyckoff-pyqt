@@ -2,7 +2,7 @@
 
 复用 wyckoff.paper 引擎 + 策略管理器纪律策略 + extra_windows 的表格/线程模式:
   - 手动执行周期 (run_cycle) 与 定时自动执行周期 (30/15 分钟), 后台线程避免卡 UI。
-  - 右侧策略概览按当前启用的策略 (默认策略4·纪律) 并行统计。
+  - 右侧策略概览按当前启用的策略 (默认 Spring-only) 并行统计。
   - 数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
   策略启停由设置键控制: paper_enable_long_left / paper_enable_va (默认均关,
   即仅纪律)。通过设置键重新启用后, 扫描模式与概览会自动跟随。
@@ -168,7 +168,7 @@ def _strat_cn(s):
 
 # ── 扫描/策略 (活跃策略 + 动态扫描模式) ────────────────────
 # 活跃策略 = 策略管理器注册顺序 且经过设置键启停过滤
-#   paper_enable_long_left / paper_enable_va 默认 False → 现网仅策略4·纪律
+#   paper_enable_long_left / paper_enable_va 默认 False → 现网仅 Spring-only
 def _active_order():
     from wyckoff.paper import _CUR as _PC
     gates = {"long_buy_left": "enable_long_left",
@@ -1049,7 +1049,7 @@ class PaperWindow(QDialog):
         for w in fields:
             w[1].setToolTip({
                 self.sp_maxpos: "同时持有的最大股票数 (1~5)",
-                self.sp_conf: "策略4·纪律只对置信度≥该值的强多头事件开仓",
+                self.sp_conf: "Spring-only 只对置信度≥该值的强多头事件开仓",
                 self.sp_hold: "持有 K 根后到期强制平仓",
                 self.sp_stop: "固定止损兜底幅度 (追踪未激活时控制下行风险)",
                 self.sp_tp: "止盈/移动止盈激活线",
@@ -1446,7 +1446,7 @@ class PaperWindow(QDialog):
 
     # ── 渲染 ──────────────────────────────────────────────
     def _strategy_summary(self, st):
-        """按当前活跃策略统计 (默认仅策略4·纪律)。"""
+        """按当前活跃策略统计 (默认仅 Spring-only)。"""
         order = _active_order()
         by_strat = {}
         for key in order:

@@ -122,6 +122,9 @@ class Paper(_Base):
     ENABLE_VA = "paper_enable_va"
     # 威科夫左侧买点策略总开关: False = 模拟盘完全停用 (不再扫描/生成入场条件单)
     ENABLE_LONG_LEFT = "paper_enable_long_left"
+    # ST 事件确认门槛: True = 仅已 confirmed 且确认后首根已到的 ST 事件可入候选
+    # (Spring/其他强多头事件仍事件即买; 回测验证 +212%→+307% 全组合收益)
+    ST_CONFIRM = "paper_st_confirm"
     # 周期级等权再平衡: 满仓且现金富余时补足低权重持仓到 总权益/max_pos
     REBALANCE = "paper_rebalance"
     # ── 微信推送 (交易发生时通知) ─────────────────────────────
@@ -255,7 +258,7 @@ DEFAULTS = {
     Backtest.RISK_PCT: 0.02,
     Backtest.RISK_MIN_RR: 3.0,
     Paper.INIT_CASH: 1_000_000,
-    Paper.MAX_POS: 3,
+    Paper.MAX_POS: 4,
     Paper.HOLD_BARS: 20,
     Paper.STOP_LOSS: 0.04,
     Paper.TAKE_PROFIT: 0.15,

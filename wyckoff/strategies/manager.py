@@ -13,7 +13,7 @@
 门禁判定 (大盘20日线/板块强度/资金流) 统一收敛于 wyckoff.discipline 单一源,
 本模块与评估器/候选模块均不再反向依赖 wyckoff.paper (解除依赖环)。
 
-策略4: 模拟盘纪律策略 (强多头事件 conf≥90 + 硬门禁, 源自 wyckoff.paper 实证,
+Spring-only: 模拟盘纪律策略 (强多头事件 conf≥90 + 硬门禁, 源自 wyckoff.paper 实证,
        真实K线历史回放胜率~53%、盈亏比~3、累计收益+50%)
 价值吸筹: 综合选股「价值吸筹」预设 (底部整固 + 20根内吸筹事件, 源自
        research/screener_presets_verify.py 2026-09-02 回测: 48只样本胜率49.2%、
@@ -102,7 +102,7 @@ class WyckoffStrategyManager:
     # ── 信号评估 (委托 evaluators, 保持历史方法签名) ──────────────
     def evaluate_strategy_4(self, df, i, wevents, nt, vsa_labels,
                             stock_code=None, min_conf=90):
-        """策略4: 模拟盘纪律策略 (强多头事件 + high conf + 硬门禁)。"""
+        """Spring-only: 模拟盘纪律策略 (强多头事件 + high conf + 硬门禁)。"""
         return _evaluators.evaluate_strategy_4(
             df, i, wevents, nt, vsa_labels,
             stock_code=stock_code, min_conf=min_conf)
@@ -124,17 +124,20 @@ class WyckoffStrategyManager:
 
     # ── 候选生成 (委托 candidates, 保持历史方法签名) ──────────────
     def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
-                        name="", event_types=None, strategies=None):
+                        name="", event_types=None, strategies=None,
+                        st_confirm=False):
         """对单只股票产出模拟盘候选 (纪律→左侧买点→价值吸筹)。"""
         return _candidates.scan_individual(
             code, df=df, min_conf=min_conf, gates_ok=gates_ok,
-            name=name, event_types=event_types, strategies=strategies)
+            name=name, event_types=event_types, strategies=strategies,
+            st_confirm=st_confirm)
 
     @staticmethod
-    def _discipline_latest(evs, n, min_conf=90, event_types=None):
+    def _discipline_latest(evs, n, min_conf=90, event_types=None, st_confirm=False):
         """纪律口径: 最近 N 根内的最新强多头事件 (conf≥min_conf)。"""
         return _candidates.discipline_latest(
-            evs, n, min_conf=min_conf, event_types=event_types)
+            evs, n, min_conf=min_conf, event_types=event_types,
+            st_confirm=st_confirm)
 
     def _value_accum_candidate(self, code, df, evs, piv, name=""):
         """策略管理器·价值吸筹候选 (底部整固 + 20根内吸筹事件, conf 下限)。"""
@@ -151,7 +154,7 @@ class WyckoffStrategyManager:
 
     @staticmethod
     def _trading_discipline(**overrides):
-        """策略4 实证的交易纪律 (止损/止盈/持有/同持上限/结构破位)。"""
+        """Spring-only 实证的交易纪律 (止损/止盈/持有/同持上限/结构破位)。"""
         return _evaluators.trading_discipline(**overrides)
 
     @staticmethod
@@ -196,7 +199,7 @@ class WyckoffStrategyManager:
             # 获取VSA标签
             vsa_labels = vsa_classify(wdf, scale=240)
 
-            # 应用策略4 (模拟盘纪律策略; 离线历史扫描默认关闭实时门禁, 只出选股信号)
+            # 应用 Spring-only (模拟盘纪律策略; 离线历史扫描默认关闭实时门禁, 只出选股信号)
             strategy4_result = self.evaluate_strategy_4(df, i, wevents, nt, vsa_labels)
             if strategy4_result:
                 current_analysis["strategies_found"].append(strategy4_result)

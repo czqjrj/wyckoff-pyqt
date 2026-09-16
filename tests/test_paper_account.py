@@ -21,7 +21,7 @@ class LeftMgr:
     """只产左侧买点候选 (gated=False, 独立赛道不走三重门禁) 的假管理器。"""
 
     def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
-                        name="", event_types=None, strategies=None):
+                        name="", event_types=None, strategies=None, **kw):
         return {"strategy": "long_buy_left", "type": "Spring", "idx": 388,
                 "conf": 82, "kind": "spring", "entry_price": 10.1,
                 "stop_price": 9.4, "target_price": 13.1, "rr": 3.0,
@@ -32,7 +32,7 @@ class DiscMgr:
     """只产纪律候选 (gated=True, 受大盘/板块/资金流门禁约束) 的假管理器。"""
 
     def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
-                        name="", event_types=None, strategies=None):
+                        name="", event_types=None, strategies=None, **kw):
         return {"strategy": "paper_discipline_bull", "type": "Spring",
                 "idx": 388, "conf": 85, "kind": "spring", "entry_price": 10.1,
                 "stop_price": 9.4, "target_price": 13.1, "rr": 3.0,
@@ -43,7 +43,7 @@ class VaMgr:
     """只产价值吸筹候选 (gated=True) 的假管理器。"""
 
     def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
-                        name="", event_types=None, strategies=None):
+                        name="", event_types=None, strategies=None, **kw):
         return {"strategy": "screener_value_accumulation", "type": "Spring",
                 "idx": 388, "conf": 85, "kind": "spring", "entry_price": 10.1,
                 "stop_price": 9.4, "target_price": 13.1, "rr": 3.0,
@@ -418,3 +418,38 @@ def test_notify_trade_wxpusher_missing_receiver_skips(monkeypatch):
     paper._notify_trade("buy", symbol="sh600001", name="A", qty=100,
                         price=10.0, strategy="")
     assert calls == []
+
+
+def test_newest_buyable_st_confirm_semantics():
+    """ST 确认门槛 (require_confirm="st") 语义: 仅 ST 要求 confirmed 且
+    avail_idx+1 已到; Spring 事件即买不受限; all 保留旧全类型确认逻辑。"""
+    import sys
+    import os
+    _rp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "scripts")
+    if _rp not in sys.path:
+        sys.path.insert(0, _rp)
+    from paper_replay_bt import newest_buyable
+
+    rec = {"events": [
+        {"idx": 90, "type": "ST", "conf": 100,
+         "confirmed": False, "avail_idx": None},
+        {"idx": 92, "type": "ST", "conf": 100,
+         "confirmed": True, "avail_idx": 95},
+        {"idx": 94, "type": "Spring", "conf": 100,
+         "confirmed": True, "avail_idx": 96},
+        {"idx": 95, "type": "Spring", "conf": 100,
+         "confirmed": False, "avail_idx": None},
+    ]}
+    # 默认 (事件即买): 取最新 Spring (idx 95)
+    assert newest_buyable(rec, 96)["type"] == "Spring"
+    # st 模式: ST idx92 已确认 (ava+1=96≤96) 可用, 但 Spring idx95 更新 → Spring
+    assert newest_buyable(rec, 96, require_confirm="st")["type"] == "Spring"
+    # st 模式: j=93 早于确认可用根 (ava+1=96), 且 SP不在此窗口 → None
+    assert newest_buyable(rec, 93, require_confirm="st") is None
+    # st 模式: 未确认 ST (idx90) 被拒; 即便窗口内也无其他事件
+    assert newest_buyable(rec, 90, require_confirm="st") is None
+    # all 模式: 需确认且 ava+1 已到 → ST idx92 可用 (j=96)
+    assert newest_buyable(rec, 96, require_confirm="all")["type"] == "ST"
+    # all 模式: 确认当天 j=95 < ava+1=96 → 拦截
+    assert newest_buyable(rec, 95, require_confirm="all") is None
