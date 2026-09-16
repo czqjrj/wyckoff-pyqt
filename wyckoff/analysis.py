@@ -170,10 +170,9 @@ def build_trade_plan(df, pivots, events, phase, structure, targets, pnf_t, tr, l
     # 规则:
     # - 如果 Qlib 买入概率显著高于 0.6 且结构判断为多头方向 → 增强信心, 可能降低止损
     # - 如果 Qlib 卖出/空头概率显著高于 0.6 且结构判断为空头方向 → 增强信心
-    # - 当 Qlib 与结构判断方向相反时 (如结构多头但 Qlib 卖出概率高) → 
+    # - 当 Qlib 与结构判断方向相反时 (如结构多头但 Qlib 卖出概率高) →
     #   视概差幅度决定是否抵消/降级
     qlib_direction_nudge = 0  # +1: 多头增强, -1: 空头增强, 0: 无影响
-    qlib_bull_strength = prob_buy - prob_sell   # (>0 偏多, <0 偏空), 已镜像 normalize
     _veto_lo = qlib_prob.get("veto_lo", QLIB_VETO_LO)
     _veto_hi = qlib_prob.get("veto_hi", QLIB_VETO_HI)
     if base_phase in ("底部整固", "上升趋势"):

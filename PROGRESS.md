@@ -36,3 +36,21 @@
 - 模拟盘纪律策略已加入策略管理器 = 策略4（`evaluate_strategy_4`，强多头 conf≥90 + 硬门禁）
 - `_trading_discipline()` 统一交易纪律（同持3/持20K/-5%止损/+15%止盈/结构破位/cost0.4%），前3策略均已附带 `trading` 字段
 - 每个策略信号新增可读 `name` 字段（4个策略）
+
+---
+
+# 进度记录：主策略4·纪律 提升空间评估（跨机续作用）
+
+> 日期：2026-09-15
+> 详见 **`docs/strategy4_discipline_improvements.md`**（现状参数 / 提升点 / 已证伪项 / 续跑命令 / 相关文件）
+
+## 一句话结论
+主策略4·纪律**有提升空间**，最大且未落地的点是 **移动止盈参数**：最新 80 格网格最优为
+**STOP=-4% · TP=+30% · trail_back=6%（+224.9%）**，而生产仍是 **TP=15% · trail=8%**
+（`wyckoff/paper/_params.py:74,45`）。其余为：QLib 卖出否决未启用、三道硬门禁从未被回测验证（历史快照缺失）、事件集/仓位可分层微调。
+
+## 续跑入口
+- 网格: `python scripts/paper_replay_grid.py --max-codes 200 --conf 100`
+- 单次: `python scripts/paper_replay_bt.py --stop 0.04 --tp 0.30 --conf 100`
+- 产品口径: `python scripts/paper3_backtrader_bt.py --stop 0.04 --tp 0.30 --trail 0.06`
+- QLib 否决: `python scripts/paper_replay_bt.py --qlib-veto --qlib-veto-hi 0.60`

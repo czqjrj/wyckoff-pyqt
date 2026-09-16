@@ -244,3 +244,45 @@ def test_joc_bu_neutral():
     与 SOS 同理降为中性结构标记。event_dir 返回 0。"""
     assert event_dir("JOC") == 0, "JOC 已降中性 (方向反向)"
     assert event_dir("BU") == 0, "BU 已降中性 (依赖 JOC)"
+
+
+# ── A2: 中性事件特征补齐 (docs/project_quality_plan.md Round-1) ──
+
+def _conf_feat(typ, i=150):
+    """在随机行情中求单事件 type 的 feat 字典 (事件日 idx=i)。"""
+    rng = np.random.default_rng(3)
+    closes = 20 + np.cumsum(rng.normal(0, 0.05, 200))
+    df = pd.DataFrame({
+        "day": pd.date_range("2023-01-01", periods=200, freq="D"),
+        "open": np.roll(closes, 1), "close": closes,
+        "high": np.maximum(np.roll(closes, 1), closes) * 1.02,
+        "low": np.minimum(np.roll(closes, 1), closes) * 0.98,
+        "volume": np.full(200, 5e5),
+    })
+    df.loc[0, "open"] = closes[0]
+    df = add_indicators(df, symbol="600104")
+    ctx = E._EventContext(df)
+    ev = E.event_confidence(ctx, [{"type": typ, "idx": i,
+                                   "price": float(closes[i])}])[0]
+    return ev["feat"]
+
+
+def test_neutral_events_carry_full_features():
+    """中性事件 (event_dir=0) 也须携带真实特征: boll_pct/bw_pct/rsi_6/
+    kdj_d/cpos_trend 不再留空 (A2), 供在线模型/回看使用。"""
+    for typ in ("SC", "BC", "AR", "SOS", "PSY", "BU"):
+        assert event_dir(typ) == 0, f"{typ} 应为中性事件"
+        f = _conf_feat(typ)
+        for key in ("boll_pct", "bw_pct", "rsi_6", "kdj_d"):
+            assert f.get(key) is not None, f"{typ} {key} 应为真实值 (A2)"
+        assert f.get("cpos_trend") is not None, f"{typ} cpos_trend 应为真实值"
+
+
+def test_directional_events_features_unchanged():
+    """方向事件特征仍正常填充 (回归保护)。"""
+    f = _conf_feat("Spring")
+    assert f.get("boll_pct") is not None
+    assert f.get("rsi_6") is not None
+    assert f.get("dir") == 1
+    f2 = _conf_feat("UTAD")
+    assert f2.get("dir") == -1

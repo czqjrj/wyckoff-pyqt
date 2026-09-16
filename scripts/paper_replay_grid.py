@@ -334,6 +334,7 @@ def main():
             pass
         else:
             import json as _json
+
             from wyckoff.utils import normalize_symbol
             list_path = os.path.join(repo_root, "wyckoff_all_stocks.json")
             with open(list_path, encoding="utf-8") as f:
@@ -469,7 +470,7 @@ def main():
         f"- 宇宙: {len(stocks)} 只 A 股 · 区间自 {args.start} · datalen {args.datalen} · "
         f"conf≥{args.conf} · 持仓≤{args.maxpos} · 单边成本{base['cost']*100:.2f}% · "
         f"大盘20日线门禁{'开' if args.mkt_gate else '闭'}",
-        f"- 选股策略: 纪律优先(conf≥{args.conf}, 默认) {"+ 价值吸筹回退(--va)" if args.va else '· [价值吸筹回退未启用, 仅纪律]'}",
+        f"- 选股策略: 纪律优先(conf≥{args.conf}, 默认) {'+ 价值吸筹回退(--va)' if args.va else '· [价值吸筹回退未启用, 仅纪律]'}",
         f"- 移动止盈回撤网格: {args.trail_backs} (开启=追踪止损, 源ref用法: 直接修改 params)",
         "- 指标口径: 已平仓单笔收益含双边费用+滑点; 累计收益含未平仓浮盈; 盈亏因子=盈利合计/亏损合计",
         "",

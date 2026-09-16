@@ -285,6 +285,7 @@ def test_run_scan_passes_weak_when_not_weak(monkeypatch):
 
 def test_gate_reason_hours_and_day(monkeypatch):
     import datetime
+
     from wyckoff import trading_time as tt
     monkeypatch.setattr(tt, "is_trading_day", lambda now=None: True)
     # 盘中放行
@@ -299,6 +300,7 @@ def test_gate_reason_hours_and_day(monkeypatch):
 
 def test_gate_reason_non_trading_day(monkeypatch):
     import datetime
+
     from wyckoff import trading_time as tt
     # 周末: 即使盘中时间也拦截
     now = datetime.datetime(2026, 9, 12, 10, 0)  # 周六
@@ -311,6 +313,7 @@ def test_gate_reason_non_trading_day(monkeypatch):
 
 def test_gate_reason_fallback_weekday(monkeypatch):
     import datetime
+
     from wyckoff import trading_time as tt
     monkeypatch.setattr(tt, "_load_trade_dates", lambda: None)
     holiday = datetime.datetime(2026, 9, 10, 10, 0)  # 周四盘中
@@ -423,8 +426,8 @@ def test_notify_trade_wxpusher_missing_receiver_skips(monkeypatch):
 def test_newest_buyable_st_confirm_semantics():
     """ST 确认门槛 (require_confirm="st") 语义: 仅 ST 要求 confirmed 且
     avail_idx+1 已到; Spring 事件即买不受限; all 保留旧全类型确认逻辑。"""
-    import sys
     import os
+    import sys
     _rp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "scripts")
     if _rp not in sys.path:

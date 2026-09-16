@@ -37,9 +37,12 @@ def _write(tmp, rel, data):
 
 def test_settings_whitelist_extracts_domains(tmp_path):
     m = _reload_modules(tmp_path)
+    import wyckoff.storage as st
     s = {k: f"v-{k}" for k in m.SETTINGS_WHITELIST}
     s["ai_api_key"] = "sk-secret123"
     s["calib_repo_url"] = "git@x"
+    # 校准版本对齐, 避免 load_settings 触发 paper_* 回迁覆盖测试用值
+    s[st._CALIBRATION_VERSION_KEY] = st.PAPER_CALIBRATION_VERSION
     _write(tmp_path, "wyckoff_settings.json", s)
     state = m._read_settings_state()
     assert "ai_api_key" not in state
@@ -363,7 +366,6 @@ def test_cloud_pull_paper_overwrites_polluted_local(tmp_path, monkeypatch):
 
     # 云端有另一设备更新的模拟盘
     remote_v = _paper_state(2_000_000)
-    cdb_original = cdb.read_profile_items
     monkeypatch.setattr(
         cdb, "read_profile_items",
         lambda user, t: {"paper": {"v": remote_v, "ts": 12345.0}}
@@ -382,10 +384,12 @@ def test_cloud_pull_paper_overwrites_polluted_local(tmp_path, monkeypatch):
 def test_paper_settings_synced_sensitive_excluded(tmp_path):
     """模拟盘设置进入同步白名单, 但凭据类键 (token/key/secret) 永不跨设备同步。"""
     m = _reload_modules(tmp_path)
-    # 本地配好的模拟盘设置 + 一个敏感凭据
+    import wyckoff.storage as st
+    # 本地配好的模拟盘设置 + 一个敏感凭据 (校准版本对齐, 不触发回迁)
     s = {"paper_limit_fill": True, "paper_max_pos": 4,
          "paper_commission_rate": 0.00025,
          "paper_wxpusher_topics": "n/a"}
+    s[st._CALIBRATION_VERSION_KEY] = st.PAPER_CALIBRATION_VERSION
     s["paper_wxpusher_app_token"] = "AT_supersecret"
     s["paper_server_chan_key"] = "SCKEY_supersecret"
     _write(tmp_path, "wyckoff_settings.json", s)
@@ -405,26 +409,24 @@ def test_paper_settings_synced_sensitive_excluded(tmp_path):
 
 def test_paper_settings_distributed_via_cloud(tmp_path, monkeypatch):
     """云端下发的模拟盘设置 (用户改过、非默认) 能被拉回本地应用。"""
-    import wyckoff.cloud_db as cdb
-
     m = _reload_modules(tmp_path)
     # 本地默认 (未改过) → 首同步打保守 ts=0, 云端配置胜出
     st = m._collect_type("settings")
     assert st.get("paper_max_pos", {}).get("ts") == 0.0, \
         "默认模拟盘参数首同步应为保守时间戳"
 
-    # 云端有用户改过的模拟盘配置
-    remote = {"paper_max_pos": {"v": 5, "ts": 9999.0},
+    # 云端有用户改过的模拟盘配置 (≠ 本地默认5)
+    remote = {"paper_max_pos": {"v": 6, "ts": 9999.0},
               "paper_wxpusher_app_token": {"v": "AT_remote",
                                            "ts": 9999.0}}
     merged = m._merge_items(st, remote)
-    assert merged["paper_max_pos"]["v"] == 5, "云端策略参数应覆盖本地默认"
+    assert merged["paper_max_pos"]["v"] == 6, "云端策略参数应覆盖本地默认"
     assert merged["paper_wxpusher_app_token"]["v"] == "AT_remote", \
         "token 出现在云端凭据? 应被上层敏感过滤拦截"
 
     rc = m.apply_profile(
         {"schema": m.SCHEMA,
          "types": {"settings": {"items": {
-             "paper_max_pos": {"v": 5, "ts": 9999.0}}}}})
+             "paper_max_pos": {"v": 6, "ts": 9999.0}}}}})
     assert rc["changed"] is True
-    assert m._read_settings_state().get("paper_max_pos") == 5
+    assert m._read_settings_state().get("paper_max_pos") == 6

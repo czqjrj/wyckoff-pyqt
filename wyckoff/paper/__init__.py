@@ -22,14 +22,10 @@
 from __future__ import annotations
 
 import itertools
-import json
+import logging
 import os
-import statistics
 import threading
-import time
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
 
 try:
     import numpy as np
@@ -37,9 +33,16 @@ except Exception:  # pragma: no cover
     np = None
 
 from .. import paper_log, paper_strategy_accuracy
+from ..discipline import flow_net5 as _flow_net5  # noqa: E402  测试会 monkeypatch paper._flow_net5
+from ..discipline import market_trend_ok as _market_trend_ok
+from ..discipline import sector_strength_ok as _sector_strength_ok
 from ..market_rules import (
     buy_fee as _mr_buy_fee,
+)
+from ..market_rules import (
     limit_blocked as _mr_limit_blocked,
+)
+from ..market_rules import (
     sell_fee as _mr_sell_fee,
 )
 from ..paths import PAPER_FILE
@@ -50,88 +53,116 @@ from ..strategies.constants import (
     STRATEGY_VALUE_ACC,
 )
 from ..trading_time import gate_reason
-
-from ._params import *  # noqa: F401,F403  常量/枚举/数据类 (可配置+风控+订单)
-from ._params import _POS_WEIGHT  # noqa: F401
-from ._state import file_path, load_state, _new_state, save_state
-from ._push import _notify_trade, _push_dispatch, _split_list
-from ._risk import (
-    check_drawdown_limit,
-    check_risk_budget,
-    check_sector_concentration,
-    check_single_concentration,
-    check_capital_usage,
-    _risk_blocks_entry,
-    calculate_kelly_fraction,
-    calculate_position_size,
-    calculate_var,
-    calculate_position_risk,
-    update_portfolio_risk,
-)
-from ._orders import (
-    create_oco_order,
-    create_bracket_order,
-    create_scale_in_order,
-    create_scale_out_order,
-    create_trailing_stop_order,
-    check_advanced_orders,
-    _cancel_sibling_orders,
-    cancel_advanced_order,
-)
-from ._stats import (
-    net_cost_rate,
-    float_ret,
-    equity,
-    _record_equity,
-    stats,
-    advanced_stats,
-    signal_stats_text,
-)
-
-
-from ..discipline import flow_net5 as _flow_net5  # noqa: E402  测试会 monkeypatch paper._flow_net5
-from ..discipline import market_trend_ok as _market_trend_ok
-from ..discipline import sector_strength_ok as _sector_strength_ok
-
-from ._selection import (
-    _weak_market_flag,
-    _strategy_manager,
-    _value_accum_candidate,
-    _long_buy_candidate,
-    _is_low_quality,
-    _probe_workers,
-    _mainboard_universe,
-    pick_candidates,
-    _stock_name,
-)
 from ._conditions import (
-    _cond,
-    add_condition,
     _apply_auto_conditions,
-    place_condition,
-    _create_position_conditions,
     _backfill_position_protection,
-    cancel_condition,
-    _match_trigger,
     _check_conditions,
+    _create_position_conditions,
     _find_pos,
     _t1_blocked,
-    _judge_condition_correct,
-    _fire_condition,
+    cancel_condition,
+    place_condition,
 )
+from ._params import (
+    COMMISSION_RATE,
+    CORRELATION_THRESHOLD,
+    COST,
+    ENABLE_LONG_LEFT,
+    ENABLE_VA,
+    HOLD_BARS,
+    INIT_CASH,
+    LIMIT_FILL,
+    MAX_CAPITAL_USAGE,
+    MAX_DRAWDOWN_PCT,
+    MAX_POSITIONS,
+    MAX_RISK_PCT,
+    MAX_SECTOR_CONCENTRATION,
+    MAX_SINGLE_CONCENTRATION,
+    MIN_COMMISSION,
+    MIN_CONF,
+    MIN_LOT,
+    PUSH_ENABLED,
+    PUSH_METHOD,
+    PUSH_SERVER_CHAN_KEY,
+    PUSH_WECHAT_AGENT_ID,
+    PUSH_WECHAT_CORP_ID,
+    PUSH_WECHAT_CORP_SECRET,
+    PUSH_WECHAT_TO_USER,
+    PUSH_WXPUSHER_APP_TOKEN,
+    PUSH_WXPUSHER_TOPIC_IDS,
+    PUSH_WXPUSHER_UIDS,
+    REBALANCE,
+    SLIP_BUY,
+    SLIP_SELL,
+    ST_CONFIRM,
+    STAMP_TAX_RATE,
+    STOP_COOLDOWN,
+    STOP_LOSS,
+    TAKE_PROFIT,
+    TRAIL_ACTIVATE_PCT,
+    TRAIL_ATR_MULT,
+    TRAIL_BACK_PCT,
+    TRAILING_STOP,
+    TRANSFER_FEE_RATE,
+    VA_WEIGHT,
+    VOL_ADJUST_ENABLED,
+    VOL_PERCENTILE_HIGH,
+    VOL_PERCENTILE_LOW,
+    WEAK_FILTER,
+    WEAK_INDEX_CODE,
+    WEAK_MAX_POS,
+    AdvancedOrder,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    PositionRisk,
+    PositionSizingMethod,
+)
+from ._push import _notify_trade, _push_dispatch, _split_list
+from ._risk import _risk_blocks_entry
+from ._selection import (
+    _mainboard_universe,
+    _strategy_manager,
+    _weak_market_flag,
+    pick_candidates,
+)
+from ._state import _new_state, load_state, save_state
+from ._stats import _record_equity, equity, float_ret, net_cost_rate, stats
 from ._trading import (
-    _next_open,
-    execute_date,
-    has_position,
     _make_order,
-    place_buy_order,
-    _enqueue_buy,
-    fill_buy,
-    step,
+    _next_open,
     _rebalance_portfolio,
     close_position,
+    fill_buy,
     force_close_position,
+    has_position,
+    step,
 )
+
+# 公开/再导出的符号: 供 sub._xxx 模块经 `import wyckoff.paper as paper` 跨模块调用,
+# 以及 UI/脚本 `from wyckoff.paper import ...`。声明在 __all__ 以消除 Ruff F401
+# ("imported but unused") —— 这些名在本 facade 未必直接使用, 但属对外 API。
+__all__ = [
+    # 子模块再导出 (内部跨模块经 paper.<name> 引用)
+    "_flow_net5", "_market_trend_ok", "_sector_strength_ok",
+    "_check_conditions", "_find_pos", "_t1_blocked", "_create_position_conditions",
+    "cancel_condition", "place_condition",
+    "_notify_trade", "_push_dispatch", "_split_list",
+    "_strategy_manager",
+    "_new_state",
+    "float_ret", "net_cost_rate",
+    "close_position", "force_close_position",
+    # 公共 API
+    "paper_log", "paper_strategy_accuracy", "S", "gate_reason", "PAPER_FILE",
+    "apply_paper_params", "run_cycle", "run_scan",
+    "fee_buy", "fee_sell", "_limit_blocked", "LONG_EVENT_TYPES", "PAPER_BUSY_MSG",
+    "_CUR", "_LOCK",
+    # _params 常量/枚举/数据类 (经 `paper.<name>` 被脚本/引擎子模块引用)
+    "SLIP_BUY", "SLIP_SELL", "MIN_LOT", "VOL_PERCENTILE_HIGH", "VOL_PERCENTILE_LOW",
+    "OrderType", "OrderSide", "OrderStatus", "AdvancedOrder", "PositionRisk",
+]
+
+logger = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
 
@@ -190,6 +221,8 @@ def apply_paper_params(settings=None):
         "correlation_threshold": float(_get("paper_correlation_threshold", CORRELATION_THRESHOLD)),
         "vol_adjust_enabled": bool(_get("paper_vol_adjust_enabled", VOL_ADJUST_ENABLED)),
         "max_capital_usage": float(_get("paper_max_capital_usage", MAX_CAPITAL_USAGE)),
+        # 止损后再入冷却 (交易日根数, 0=关闭)
+        "stop_cooldown": int(_get("paper_stop_cooldown", STOP_COOLDOWN)),
         # 资金管理方式
         "sizing_method": _get("paper_sizing_method", PositionSizingMethod.EQUAL_WEIGHT.value),
         # 板块权限: 未开通创业板/科创板 → 扫描/选股排除对应代码
@@ -227,6 +260,24 @@ def apply_paper_params(settings=None):
         "wxpusher_topic_ids": _get(S.Paper.WXPUSHER_TOPIC_IDS, PUSH_WXPUSHER_TOPIC_IDS),
         "wxpusher_uids": _get(S.Paper.WXPUSHER_UIDS, PUSH_WXPUSHER_UIDS),
     }
+    # 风控上限钳制 (实盘地基): 磁盘/云端/UI 均可能回灌更宽松的风控值 (如把
+    # 最大回撤调到 30%、单笔风险 5%), 引擎一律不得高于校准上限 —— 更严可、
+    # 更松不行, 防止陈旧配置静默弱化风控。操作参数 (止损/止盈/持仓数等) 仍
+    # 可按研究需要放开, 供回测网格/配置页调试, 不在本钳制范围内。
+    _RISK_CEILING = {
+        "max_drawdown": MAX_DRAWDOWN_PCT,
+        "max_risk_pct": MAX_RISK_PCT,
+        "max_sector_conc": MAX_SECTOR_CONCENTRATION,
+        "max_single_conc": MAX_SINGLE_CONCENTRATION,
+        "correlation_threshold": CORRELATION_THRESHOLD,
+        "max_capital_usage": MAX_CAPITAL_USAGE,
+    }
+    for _k, _cap in _RISK_CEILING.items():
+        _v = float(_CUR.get(_k) or 0.0)
+        if _v > _cap:
+            logger.warning("apply_paper_params: %s=%s 超校准上限 %.4f, 钳制为上限",
+                           _k, _v, _cap)
+            _CUR[_k] = _cap
     return _CUR
 
 
@@ -296,14 +347,18 @@ def fee_sell(amount) -> float:
 
 
 def _limit_blocked(code, side, df=None) -> bool:
-    """最新 bar 涨跌停封板无法成交 (涨跌停成交约束); 未启用/无行情 → False。"""
+    """最新 bar 涨跌停封板无法成交 (涨跌停成交约束)。
+
+    未启用 limit_fill → 不拦截 (False); 行情不可得时 fail-closed:
+    _next_open 失败按"可能封板"处理 (True), 不撮合无法确认价位的订单。
+    """
     if not _CUR.get("limit_fill", True):
         return False
     if df is None:
         try:
             df = _next_open(code)
         except Exception:
-            return False
+            return True
     return _mr_limit_blocked(df, side, code)
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (见 docs/winrate_improve_eval.md §五)
@@ -498,6 +553,7 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     #    不直接成交, 交给下方 buy_price 条件单 (below) 等回踩。
     if trading:
         # 冻结交割时段模式: cand 在非交易时段被截留为空/复用, 不执行任何撮合。
+        _limit_unknown = 0
         for e in cand:
             eff_max = _CUR["weak_max_pos"] if weak else _CUR["max_pos"]
             if len(st["positions"]) >= eff_max:
@@ -530,13 +586,21 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
                 continue
             # 涨跌停成交约束: 最新 bar 涨停封板 → 按市价买不进, 顺延该候选
             if _CUR.get("limit_fill", True):
+                _lim_ok = False
                 try:
                     _df_l = add_indicators(
                         fetch_kline(code, datalen=90, scale=240), symbol=code)
-                    if _mr_limit_blocked(_df_l, "buy", code):
+                    _lim_ok = _df_l is not None and len(_df_l) > 0
+                    if _lim_ok and _mr_limit_blocked(_df_l, "buy", code):
                         continue
                 except Exception:
-                    pass
+                    _lim_ok = False
+                if not _lim_ok:
+                    # fail-close: 封板状态未知时按"可能封板"处理, 本期不买
+                    _limit_unknown += 1
+                    st.setdefault("risk_metrics", {})["limit_unknown"] = _limit_unknown
+                    logger.warning("run_cycle: %s 封板状态未知(行情不可用), 顺延买入", code)
+                    continue
             # 直接按候选现价撮合成交, 不再依赖 step 二次拉行情的待撮合;
             # 避免全市场大扫描后行情接口节流导致 pending 悬空、界面永不显示建仓。
             stop_pct = take_pct = None
@@ -574,12 +638,22 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
     df_by_code = {}
     codes = {p["symbol"] for p in st["positions"]}
     codes |= {o["symbol"] for o in st["pending"]}
+    _kline_missing = 0
     for code in codes:
         try:
-            df_by_code[code] = add_indicators(
+            _df_cur = add_indicators(
                 fetch_kline(code, datalen=420, scale=240), symbol=code)
+            if _df_cur is None or len(_df_cur) == 0:
+                _kline_missing += 1
+                logger.warning("run_cycle: %s 行情为空, 本期跳过止盈止损判定", code)
+            else:
+                df_by_code[code] = _df_cur
         except Exception:
-            pass
+            _kline_missing += 1
+            logger.warning("run_cycle: %s 行情获取失败, 本期跳过止盈止损判定", code)
+    if _kline_missing:
+        risk_m = st.setdefault("risk_metrics", {})
+        risk_m["kline_missing"] = int(risk_m.get("kline_missing") or 0) + _kline_missing
     step(st, df_by_code, trading=trading)
     # 4) 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到等权目标,
     #    消除资金利用率不足(~66%)与单仓过度集中。
@@ -593,7 +667,9 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         except Exception:
             continue
     _record_equity(st, _day or None)
-    save_state(st)
+    if not save_state(st):
+        logger.error("run_cycle 落盘失败, 交易状态可能未持久化")
+        st.setdefault("meta", {})["save_failed"] = True
     try:
         paper_log.log_account_snapshot(
             equity_value=equity(st, {}), cash=st["cash"],
@@ -697,9 +773,8 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
         fresh['last_scan_result'] = result_str
         fresh['weak'] = bool(st.get('weak', False))
         _apply_auto_conditions(fresh, cand, weak=fresh['weak'])
-        try:
-            save_state(fresh)
-        except Exception:
-            pass
+        if not save_state(fresh):
+            logger.error("run_scan 落盘失败, 候选更新可能未持久化")
+            fresh.setdefault("meta", {})["save_failed"] = True
 
     return result_str

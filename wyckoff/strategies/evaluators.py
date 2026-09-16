@@ -16,7 +16,7 @@ def trading_discipline(**overrides):
     """Spring-only 实证的交易纪律 (止损/止盈/持有/同持上限/结构破位),
     供各策略共用, 保证信号落地时执行相同的出场规则。"""
     d = {
-        "max_pos": 4,          # 同持上限
+        "max_pos": 5,          # 同持上限
         "hold_bars": 20,       # 最大持有K数
         "stop_loss": 0.05,     # 止损 -5%
         "take_profit": 0.15,   # 止盈 +15%

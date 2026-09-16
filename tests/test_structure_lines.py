@@ -6,8 +6,13 @@ Throwback 突破后回踩 / SOT 推力衰减。算法见 wyckoff/market.py。
 import numpy as np
 import pandas as pd
 
-from wyckoff.market import (_detect_sot, _detect_throwbacks, _node_bands,
-                            structure_lines, volume_profile)
+from wyckoff.market import (
+    _detect_sot,
+    _detect_throwbacks,
+    _node_bands,
+    structure_lines,
+    volume_profile,
+)
 
 
 def _kline(closes, open_offs=None, high_mult=1.005, low_mult=0.995,
@@ -90,7 +95,6 @@ def test_throwback_detected_after_joc():
 
 def test_throwback_no_pullback_skipped():
     """突破后直接强上行、没有真实回踩 → 不标 Throwback (防误标)。"""
-    n = 100
     closes = list(np.random.RandomState(3).uniform(87, 92, 90))
     closes += [95, 100, 105, 112, 118, 122, 126]
     # 纯拉升, low 止损只回落到峰值以下 0.3 (< 0.01×TR宽=0.14 OK?), 检查无回踩

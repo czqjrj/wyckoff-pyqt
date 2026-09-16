@@ -157,6 +157,15 @@ _CN_SIG_HEAD = ("日期", "策略", "代码", "名称", "事件", "置信", "信
                 "5根", "10根", "20根", "状态")
 
 # 策略管理器信号来源 → 界面中文标签 (策略注册信息唯一来源: 策略管理器)
+from wyckoff.paper._params import (
+    MAX_DRAWDOWN_PCT as _DEF_MAX_DRAWDOWN,
+)
+from wyckoff.paper._params import (
+    MAX_RISK_PCT as _DEF_MAX_RISK,
+)
+from wyckoff.paper._params import (
+    TRAILING_STOP as _DEF_TRAILING_STOP,
+)
 from wyckoff.settings_keys import S
 from wyckoff.strategies.manager import STRATEGY_CN as _STRAT_CN
 from wyckoff.strategies.manager import STRATEGY_ORDER as _STRAT_ORDER
@@ -891,8 +900,9 @@ class PaperWindow(QDialog):
         grid.setSpacing(6)
 
         self.sp_maxpos = QSpinBox()
-        self.sp_maxpos.setRange(1, 5)
-        self.sp_maxpos.setValue(int(self._settings.get(S.Paper.MAX_POS, 3)))
+        self.sp_maxpos.setRange(1, 8)
+        self.sp_maxpos.setValue(int(self._settings.get(S.Paper.MAX_POS, 5)))
+        self.sp_maxpos.setToolTip("同时持有的最大股票数 (回测最优 5; 6 起收益回落)")
 
         self.sp_conf = QSpinBox()
         self.sp_conf.setRange(50, 100)
@@ -969,7 +979,7 @@ class PaperWindow(QDialog):
 
         self.ck_trailing = QCheckBox("追踪止损")
         self.ck_trailing.setChecked(
-            bool(self._settings.get(S.Paper.TRAILING_STOP, False)))
+            bool(self._settings.get(S.Paper.TRAILING_STOP, _DEF_TRAILING_STOP)))
         self.ck_trailing.setToolTip(
             "从持仓期内最高价回撤触发平仓, 而非固定百分比止损; "
             "可避免强势股被结构位 -3% 噪音洗出")
@@ -1009,6 +1019,32 @@ class PaperWindow(QDialog):
         self.ck_weak.setToolTip(
             "上证收盘<MA20 判定弱市 → 新开仓上限 1 只")
 
+        self.sp_cooldown = QSpinBox()
+        self.sp_cooldown.setRange(0, 60)
+        self.sp_cooldown.setSuffix(" 根")
+        self.sp_cooldown.setValue(
+            int(self._settings.get(S.Paper.STOP_COOLDOWN, 20)))
+        self.sp_cooldown.setToolTip(
+            "止损后再入冷却: 同标的止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)")
+
+        self.sp_drawdown = QDoubleSpinBox()
+        self.sp_drawdown.setRange(0.05, _DEF_MAX_DRAWDOWN)
+        self.sp_drawdown.setSingleStep(0.01)
+        self.sp_drawdown.setDecimals(3)
+        self.sp_drawdown.setValue(
+            float(self._settings.get(S.Paper.MAX_DRAWDOWN, _DEF_MAX_DRAWDOWN)))
+        self.sp_drawdown.setToolTip(
+            "最大账户回撤: 净值自峰值回撤超此值停止开新仓 (校准上限, 引擎钳制不再放宽)")
+
+        self.sp_risk = QDoubleSpinBox()
+        self.sp_risk.setRange(0.001, _DEF_MAX_RISK)
+        self.sp_risk.setSingleStep(0.005)
+        self.sp_risk.setDecimals(3)
+        self.sp_risk.setValue(
+            float(self._settings.get(S.Paper.MAX_RISK_PCT, _DEF_MAX_RISK)))
+        self.sp_risk.setToolTip(
+            "单笔最大风险预算: 账户净值% (Kelly 上限; 校准上限, 引擎钳制不再放宽)")
+
         fields = (
             ("同持上限", self.sp_maxpos),
             ("置信度≥", self.sp_conf),
@@ -1017,6 +1053,8 @@ class PaperWindow(QDialog):
             ("止盈", self.sp_tp),
             ("单边成本", self.sp_cost),
             ("初始资金", self.sp_cash),
+            ("最大回撤", self.sp_drawdown),
+            ("单笔风险", self.sp_risk),
         )
         for i, (label, w) in enumerate(fields):
             grid.addWidget(QLabel(label), 0, i * 2)
@@ -1055,6 +1093,8 @@ class PaperWindow(QDialog):
                 self.sp_tp: "止盈/移动止盈激活线",
                 self.sp_cost: "单边成本 (佣金+印花税+滑点), 旧口径兜底",
                 self.sp_cash: "模拟盘初始资金 (更改后需重置账户)",
+                self.sp_drawdown: "账户最大回撤熔断: 净值从峰值回撤达到该比例即暂停开仓",
+                self.sp_risk: "单笔风险: 单次开仓允许承担的资金比例上限",
             }[w[1]])
         hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+15%·回落 8% / "
                       "弱市过滤开")
@@ -1086,6 +1126,10 @@ class PaperWindow(QDialog):
         self._settings[S.Paper.STAMP_TAX_RATE] = self.sp_stamp.value() / 100
         self._settings[S.Paper.TRANSFER_FEE_RATE] = self.sp_transfer.value() / 100
         self._settings[S.Paper.LIMIT_FILL] = self.ck_limit_fill.isChecked()
+        # 止损冷却: 同标止损平仓后 N 个交易日内禁止再开仓 (回测最优 20)
+        self._settings[S.Paper.STOP_COOLDOWN] = self.sp_cooldown.value()
+        self._settings[S.Paper.MAX_DRAWDOWN] = self.sp_drawdown.value()
+        self._settings[S.Paper.MAX_RISK_PCT] = self.sp_risk.value()
         # 自动执行模式 (0=关闭 / 900=15m / 1800=30m)
         self._settings[S.Paper.SCAN_INTERVAL] = (
             0, 900, 1800)[self.auto_on.currentIndex()]

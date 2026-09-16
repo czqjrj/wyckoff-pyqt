@@ -9,16 +9,14 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
-
 # ── 可配置策略参数 ─────────────────────────────────────────
 # 持仓周期 K 根 (日线, ~1 个月)
 HOLD_BARS = 20
 # 同持最大股票数 (资金/风险分散)。Spring-only 回测 (200只全A, conf=100):
-# 3→4 收益/胜率/回撤三项同时改善 (+465%/54.1%/-16.4% → +494%/59.1%/-13.1%),
-# 5 起回撤再降但收益回落, 6 显著衰减, 故取 4。
-MAX_POSITIONS = 4
+# 4→5 + 止损冷却20根 收益/回撤双改善 (+494%/-13.1% → +551%/-11.9%),
+# 6 起回撤再降但收益回落, 故取 5。
+MAX_POSITIONS = 5
 # 每笔资金占比 (1/MAX_POSITIONS 等权)
-_POS_WEIGHT = 1.0 / MAX_POSITIONS
 # 单边成本 (含佣金+印花税+滑点, 参考 backtest.cost=0.004)
 # 全面适配A股后: 撮合改用下方明细费率 (佣金/印花税/过户费), 该扁平率仅作
 # 旧口径兼容/无明细设置时的兜底, 与 backtest.py 等 flat cost 参数保持一致。
@@ -102,6 +100,10 @@ VOL_PERCENTILE_HIGH = 0.80
 VOL_PERCENTILE_LOW = 0.20
 # 资金利用率上限 (防止满仓无现金应对机会)
 MAX_CAPITAL_USAGE = 0.95
+# 止损后再入冷却 (交易日根数): 标的止损平仓后 N 个交易日内禁止再开仓。
+# 实证 (200只全A, conf=100): 消除回撤窗口同标反复止损重入 (2024-06 sh605338
+# 三连损 -14%), maxpos=5+冷却20 → +551%/胜率60.1%/-11.9% (对照 -13.1%)。
+STOP_COOLDOWN = 20
 
 # ── 订单类型 ──────────────────────────────────────────────
 class OrderType(Enum):
@@ -240,4 +242,28 @@ class PositionRisk:
             "concentration_risk": self.concentration_risk,
             "liquidity_risk": self.liquidity_risk,
         }
+
+
+# 公开导出 (配置常量 / 枚举 / 数据类), 供 facade `from ._params import *` 引用。
+__all__ = [
+    # 可配置策略参数
+    "HOLD_BARS", "MAX_POSITIONS", "COST", "COMMISSION_RATE", "MIN_COMMISSION",
+    "STAMP_TAX_RATE", "TRANSFER_FEE_RATE", "LIMIT_FILL", "SLIP_BUY", "SLIP_SELL",
+    "STOP_LOSS", "TRAILING_STOP", "TRAIL_ATR_MULT", "TRAIL_BACK_PCT",
+    "TRAIL_ACTIVATE_PCT", "WEAK_FILTER", "WEAK_MAX_POS", "WEAK_INDEX_CODE",
+    "VA_WEIGHT", "ENABLE_VA", "ENABLE_LONG_LEFT", "REBALANCE",
+    "PUSH_ENABLED", "PUSH_METHOD", "PUSH_SERVER_CHAN_KEY",
+    "PUSH_WECHAT_CORP_ID", "PUSH_WECHAT_CORP_SECRET", "PUSH_WECHAT_AGENT_ID",
+    "PUSH_WECHAT_TO_USER", "PUSH_WXPUSHER_APP_TOKEN", "PUSH_WXPUSHER_TOPIC_IDS",
+    "PUSH_WXPUSHER_UIDS", "TAKE_PROFIT", "INIT_CASH", "MIN_LOT", "MIN_CONF",
+    "ST_CONFIRM",
+    # 风控参数
+    "MAX_DRAWDOWN_PCT", "MAX_RISK_PCT", "MAX_SECTOR_CONCENTRATION",
+    "MAX_SINGLE_CONCENTRATION", "CORRELATION_THRESHOLD", "VOL_ADJUST_ENABLED",
+    "VOL_PERCENTILE_HIGH", "VOL_PERCENTILE_LOW", "MAX_CAPITAL_USAGE",
+    "STOP_COOLDOWN",
+    # 订单/枚举/数据类
+    "OrderType", "OrderSide", "OrderStatus", "PositionSizingMethod",
+    "AdvancedOrder", "PositionRisk",
+]
 

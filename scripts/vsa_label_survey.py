@@ -17,9 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
+from wyckoff import sqldb
 from wyckoff.config import vsa_dir
 from wyckoff.indicators import add_indicators
-from wyckoff import sqldb
 from wyckoff.vsa import vsa_classify
 
 HORIZONS = (5, 20, 40)

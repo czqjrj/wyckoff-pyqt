@@ -18,10 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
+from wyckoff import sqldb
 from wyckoff.events import detect_all
 from wyckoff.indicators import add_indicators, find_pivots
 from wyckoff.phases import phase_segments
-from wyckoff import sqldb
 
 HORIZON = 20
 EXPECT = {"accumulation": 1, "markdown": 1, "distribution": -1, "markup": -1}
@@ -104,7 +104,6 @@ def main():
     print(f"完成 {done} 只, 用时 {time.time() - t0:.0f}s\n", flush=True)
 
     for name, st in stats.items():
-        totals = {k: r["n"] for k, r in st.items()}
         print(f"== {name} ==")
         allups = [u for r in st.values() for u in r["ups"]]
         base = np.mean([u > 0 for u in allups]) if allups else 0.0

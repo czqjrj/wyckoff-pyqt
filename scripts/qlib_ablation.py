@@ -20,19 +20,17 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import numpy as np
 import pandas as pd
 
+from wyckoff.analysis import _plan_from_lines, build_trade_plan
 from wyckoff.datasource import fetch_kline
-from wyckoff.indicators import add_indicators, find_pivots
 from wyckoff.events import detect_all
-from wyckoff.phases import judge_phase
-from wyckoff.waves import calc_targets
-from wyckoff.pnf import build_pnf, pnf_targets
+from wyckoff.indicators import add_indicators, find_pivots
 from wyckoff.market import find_trading_range
+from wyckoff.phases import judge_phase
+from wyckoff.pnf import build_pnf, pnf_targets
 from wyckoff.structure import structure_progress
-from wyckoff.vsa import vsa_classify
-from wyckoff.analysis import build_trade_plan, _plan_from_lines
+from wyckoff.waves import calc_targets
 
 _HORIZONS = (5, 10, 20)
 NEUTRAL = {"prob_buy": 0.5, "prob_sell": 0.5, "confidence": 0.0}

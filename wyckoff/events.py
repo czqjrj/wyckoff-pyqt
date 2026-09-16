@@ -2,6 +2,8 @@
 import numpy as np
 import pandas as pd
 
+from .calib_registry import bucket_value
+from .calib_registry import get as _calib
 from .config import EVENT_COLORS, confirm_dir, event_dir
 
 USE_EMPIRICAL_CONF = True
@@ -358,9 +360,10 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
     idx = np.where((raw_joc | raw_sos) & (np.arange(ctx.n) >= 61))[0]
     for i in idx:
         i = int(i)
-        # 高位过滤: boll_pct>0.8 时多头突破信号易失败 (SOS 48% / JOC 42% 胜率)
+        # 高位过滤: boll_pct>0.8 时多头突破信号易失败 (SOS 48% / JOC 42% 胜率)。
+        # 阈值登记在 calib_registry (sos_joc_boll_cap); 过期/无结论时回退放行。
         bp_i = ctx.boll_pct[i] if ctx.boll_pct is not None and i < len(ctx.boll_pct) else 0.5
-        if bp_i > 0.8:
+        if bucket_value(_calib("sos_joc_boll_cap"), bp_i) <= 0:
             continue
         if raw_joc[i]:
             if i < 75:
@@ -751,8 +754,18 @@ def event_confidence(ctx: _EventContext, events):
         up_i = False
         confluent = 0
         bw_pct_val = None
+        # 趋势/布林宽度/RSI/KDJ 取值 与方向无关, 统一计算并保留到 feat:
+        # 中性事件 (SC/BC/AR/SOS/PSY/BU) 也能携带真实特征供在线模型/回看使用;
+        # 打分仍按方向在下方 `if d:` 分支内进行, 中性事件的 score 不受影响。
+        up_i = np.isfinite(ma20[i]) and np.isfinite(ma50[i]) and ma20[i] > ma50[i] and close[i] > ma50[i]
+        if bw_series is not None and np.isfinite(bw_series[i]):
+            trail = bw_series[max(0, i - 120):i + 1]
+            trail = trail[np.isfinite(trail)]
+            if len(trail) >= 20:
+                bw_pct_val = float((trail < bw_series[i]).mean()) * 100
+        rsi_val = rsi_6[i] if rsi_6 is not None and i < len(rsi_6) and np.isfinite(rsi_6[i]) else None
+        kdj_val = kdj_d[i] if kdj_d is not None and i < len(kdj_d) and np.isfinite(kdj_d[i]) else None
         if d:
-            up_i = np.isfinite(ma20[i]) and np.isfinite(ma50[i]) and ma20[i] > ma50[i] and close[i] > ma50[i]
             # trend 交互: 数据显示底部反转在非上升趋势更有效, 顶部反转在上升趋势更有效
             if e["type"] in ("Spring", "ST", "Shakeout"):
                 # 底部反转: 非上升趋势加分 (Spring 83.9% vs 50%)
@@ -779,13 +792,7 @@ def event_confidence(ctx: _EventContext, events):
                     score += min(12, max(0, (bp - 0.7)) * 40)
                     score -= min(8, max(0, (0.3 - bp)) * 27)
             # bw_pct (布林宽度百分位) 保留记录但不参与打分 (rho=+0.007, 无预测力)
-            if bw_series is not None and np.isfinite(bw_series[i]):
-                trail = bw_series[max(0, i - 120):i + 1]
-                trail = trail[np.isfinite(trail)]
-                if len(trail) >= 20:
-                    bw_pct_val = float((trail < bw_series[i]).mean()) * 100
             # RSI_6 打分: 多头信号 RSI 越低越有效 (rho=-0.126, 74.8% vs 56.9%)
-            rsi_val = rsi_6[i] if rsi_6 is not None and i < len(rsi_6) and np.isfinite(rsi_6[i]) else None
             if rsi_val is not None and d > 0:
                 if rsi_val < 30:
                     score += 10
@@ -794,7 +801,6 @@ def event_confidence(ctx: _EventContext, events):
                 elif rsi_val > 70:
                     score -= 8
             # KDJ_D 打分: 多头信号 KDJ_D 越低越有效 (rho=-0.159, 74.5% vs 63.2%)
-            kdj_val = kdj_d[i] if kdj_d is not None and i < len(kdj_d) and np.isfinite(kdj_d[i]) else None
             if kdj_val is not None and d > 0:
                 if kdj_val < 20:
                     score += 10
@@ -873,7 +879,8 @@ def event_confidence(ctx: _EventContext, events):
 
         # SC/BC 环境门 (docs/event_env_gate_progress.md 全量调查分桶结论):
         # SC/BC 是中性高潮事件, 上方 `if d:` 趋势块恒被跳过 (up_i 恒 False, BC
-        # 恒吃 -15 而 SC 恒不吃)。这里补上前置 20 根动量门, 用数据选定阈值:
+        # 恒吃 -15 而 SC 恒不吃)。这里补上前置 20 根动量门, 阈值与样本量统一
+        # 登记在 wyckoff/calib_registry.py (sc_env_gate / bc_env_gate / bc_uptrend):
         #   SC: 前置大跌 ≤-15% → 20根上涨命中 70.4% (n=1025, +11pt);
         #       前置未大跌 (>-8%) 命中仅 51% 接近随机 → 重罚。
         #   BC: 前置大涨 ≥+15% → 20根下跌命中 60.5% (n=5925, +5pt);
@@ -884,34 +891,21 @@ def event_confidence(ctx: _EventContext, events):
                 ma20[i] > ma50[i] and close[i] > ma50[i]
             e["feat"]["prior_r20"] = round(prior_r20, 4)
             if e["type"] == "SC":
-                if prior_r20 <= -0.15:
-                    score += 8      # 深度超卖环境: SC 方向价值最强
-                elif prior_r20 > -0.08:
-                    score -= 15     # 无前置大跌: SC 接近随机, 降权
+                score += bucket_value(_calib("sc_env_gate"), prior_r20)
             else:  # BC
-                if prior_r20 >= 0.15:
-                    score += 8      # 深度超买环境: BC 方向价值最强
-                elif prior_r20 <= 0.04:
-                    score -= 12     # 横盘: BC 反向失效, 降权
-                if up_i:
-                    score -= 5      # 上升趋势内 BC 命中降 (53.0% vs 非升 59.3%)
+                score += bucket_value(_calib("bc_env_gate"), prior_r20)
+                score += bucket_value(_calib("bc_uptrend"), 1.0 if up_i else 0.0)
 
         # SOW 放量门 (docs/event_env_gate_progress.md + sow_tighten_survey 全量):
         # SOW 已由 detect_sow 强制前置 base ∈ (UTAD/LPSY/BC) + vol≥vol_ma*1.25,
         # 但全量调查显示平凡放量 (<1.6) 命中仅 66.5% (n=230), 而深层放量
         # (≥2.2) 命中 85.0% (n=20, +16.4pt)。同时 conf 高反命中低 (≥70 仅
-        # 63.8%) 主要由平凡放量 SOW 混入高 conf 造成 → 按 vol_ratio_20 分桶:
-        #   < 1.6: 平凡放量, 方向价值弱 → 重罚;  1.6~2.2: 中量, 轻加分;
-        #   ≥ 2.2: 深层放量破位, 方向价值最强 → 加分。
+        # 63.8%) 主要由平凡放量 SOW 混入高 conf 造成 → 按 vol_ratio_20 分桶,
+        # 阈值与样本量统一登记在 wyckoff/calib_registry.py (sow_vol_gate)。
         if e["type"] == "SOW":
             sow_vr = vr  # vr=vol/vol_ma20, 与 vol_ratio_20 同列
             e["feat"]["sow_vol_gate"] = round(float(sow_vr) if np.isfinite(sow_vr) else 0.0, 3)
-            if sow_vr >= 2.2:
-                score += 8
-            elif sow_vr >= 1.6:
-                score += 2
-            else:
-                score -= 8
+            score += bucket_value(_calib("sow_vol_gate"), sow_vr)
 
         # 确保分数不会低于 0
         score = max(0, score)

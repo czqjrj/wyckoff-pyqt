@@ -6,7 +6,7 @@
 
 用法:
   python scripts/spring_only_dd_analysis.py
-  python scripts/spring_only_dd_analysis.py --maxpos 4 --stop 0.04 --trail-back 0.08
+  python scripts/spring_only_dd_analysis.py --maxpos 5 --stop 0.04 --trail-back 0.08 --stop-cooldown 20
   python scripts/spring_only_dd_analysis.py --cache data/paper_replay_data/spring_only_conf100.pkl
 
 缓存生成 (首次, 需联网拉取 200 只):
@@ -38,7 +38,7 @@ def main():
     ap = argparse.ArgumentParser(description="Spring-only 回撤分析")
     ap.add_argument("--cache", default=DEFAULT_CACHE, help="股票事件缓存 pickle")
     ap.add_argument("--conf", type=int, default=100)
-    ap.add_argument("--maxpos", type=int, default=4)
+    ap.add_argument("--maxpos", type=int, default=5)
     ap.add_argument("--hold", type=int, default=20)
     ap.add_argument("--stop", type=float, default=0.04)
     ap.add_argument("--tp", type=float, default=0.15)
@@ -47,6 +47,8 @@ def main():
     ap.add_argument("--no-trail", action="store_false", dest="trailing_stop")
     ap.add_argument("--bear-exit", action="store_true", help="事件型空头信号卖出")
     ap.add_argument("--mkt-gate", action="store_true", help="大盘20日线门禁")
+    ap.add_argument("--stop-cooldown", type=int, default=0,
+                    help="止损后再入冷却(交易日根数, 0=关闭)")
     ap.add_argument("--start", default="2023-06-01")
     args = ap.parse_args()
 
@@ -68,6 +70,7 @@ def main():
         "trail_back_pct": args.trail_back,
         "trail_activate_pct": 0.0,
         "trail_atr_mult": 0.0,
+        "stop_cooldown": args.stop_cooldown,
         "bear_exit": args.bear_exit,
         "qlib_veto": False,
         "qlib_veto_hi": 0.9,

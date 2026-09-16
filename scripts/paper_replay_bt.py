@@ -44,17 +44,23 @@ def _sdate(s):
     return s
 
 
-def load_stock_events(code, min_conf, datalen):
+def load_stock_events(code, min_conf, datalen, event_types=None):
     """对单只股票跑完整检测, 返回 (day列表, open, low, high, close, events, df, pivots, all_evs)。
 
-    events: [{idx, type, conf}] 强多头事件 (已经 conf≥min_conf 过滤), 供纪律策略用。
+    events: [{idx, type, conf}] 强多头事件 (已按 conf≥min_conf 与 event_types 过滤),
+    供纪律策略用。
     df/pivots/all_evs: 完整指标K线/枢轴/全量事件 (含低 conf), 供价值吸筹判据用
     (wyckoff_strategies_manager.evaluate_strategy_value_accumulation 需要完整 df 在任意 bar 求阶段)。
+
+    event_types: 入库事件类型集合 (None → 当前现网口径 paper.LONG_EVENT_TYPES)。
+    传扩充集 (如 Spring,Shakeout,ST,LPS,SC) 可让同一份 stocks 缓存同时支撑
+    "Spring-only vs 含 Shakeout/ST/SC" 的多组事件集对照实验 (见 --events)。
     """
     from wyckoff.datasource import fetch_kline
     from wyckoff.events import detect_all
     from wyckoff.indicators import add_indicators, find_pivots
 
+    event_types = event_types if event_types is not None else paper.LONG_EVENT_TYPES
     df = add_indicators(fetch_kline(code, datalen=datalen, scale=240), symbol=code)
     if df is None or len(df) < 120:
         return None
@@ -62,7 +68,7 @@ def load_stock_events(code, min_conf, datalen):
     evs = detect_all(df, piv)
     events = []
     for e in evs or []:
-        if e.get("type") not in paper.LONG_EVENT_TYPES:
+        if e.get("type") not in event_types:
             continue
         conf = int(e.get("conf", 0) or 0)
         if conf < min_conf:
@@ -131,8 +137,12 @@ def load_market_gate(datalen=850):
         return None
 
 
-def newest_buyable(rec, j, window=10, require_confirm=False):
+def newest_buyable(rec, j, window=10, require_confirm=False, event_types=None):
     """返回该股票在 bar j 处可买入的最新事件 (事件在 j 之前 ≤window 根内)。
+
+    event_types: 可选事件类型白名单 (None=全部已入库类型)。与 load_stock_events
+    解耦: 同一份 superset 缓存可换不同 --events 子集对照 (Spring-only 不启用时,
+    仍可用同一缓存跑 Spring,Shakeout / Shakeout-only 等实验, 无需重新拉K线)。
 
     require_confirm:
       - False: 无条件放行 (事件即买)
@@ -144,6 +154,8 @@ def newest_buyable(rec, j, window=10, require_confirm=False):
     ST_CONFIRM_TYPES = {"ST"}
     best = None
     for e in rec["events"]:
+        if event_types and e.get("type") not in event_types:
+            continue
         if e["idx"] <= j and (j - e["idx"]) <= window:
             if require_confirm == "st" and e.get("type") in ST_CONFIRM_TYPES:
                 # ST 事件: 需 confirmed 且 avail_idx+1 已到
@@ -299,7 +311,7 @@ def bear_signal_on(rec, j, window=10):
 _va_cache = {}
 
 
-def va_candidate(rec, j, va_m):
+def va_candidate(rec, j, va_m, event_types=None):
     """价值吸筹候选 (与 paper._value_accum_candidate/pick_candidates 回退同口径)。
 
     无 conf 门槛: 阶段=底部整固 且 近20根内出现 {Spring,Shakeout,SC,ST,LPS}。
@@ -316,7 +328,7 @@ def va_candidate(rec, j, va_m):
         return None if hit is False else dict(hit)
     evs = rec["all_evs"]
     if not any(
-        e.get("type") in paper.LONG_EVENT_TYPES and 0 <= j - (e.get("idx") or -1) <= 20 for e in evs
+        e.get("type") in (event_types or paper.LONG_EVENT_TYPES) and 0 <= j - (e.get("idx") or -1) <= 20 for e in evs
     ):
         _va_cache[key] = False
         return None
@@ -463,6 +475,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             # (max_risk_pct=2%) 会与宽止损(如-8%)冲突而系统性压死纪律策略
             # (33%等权仓位×8%=2.6%>2%)。回放里让风险由止盈止损参数本身决定。
             "paper_max_risk_pct": 1.0,
+            # 止损后再入冷却 (交易日根数; 0=关闭)
+            "paper_stop_cooldown": int(params.get("stop_cooldown") or 0),
             # 账户回撤门禁同样放开: 回测目标是最优止盈止损参数本身,
             # 回撤期的入场裁量由统计表(回撤指标)呈现, 不由该门禁压制买入。
             "paper_max_drawdown": 1.0,
@@ -473,6 +487,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
     st["_gathered_signals"] = []
     track_on = params.get("strategy_track")
     va_m = paper._strategy_manager()
+    # 事件集白名单: --events 指定 (None→全部已入库类型, 即加载时的 event_types)。
+    event_set = params.get("event_types")
 
     day_to_j = []
     code_to_idx = {}
@@ -553,13 +569,14 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             if j is None:
                 continue
             ev = newest_buyable(rec, j, window=params["window"],
-                                require_confirm=params.get("disc_confirm"))
+                                require_confirm=params.get("disc_confirm"),
+                                event_types=event_set)
             strategy = "paper_discipline_bull"
             if ev is None:
                 # 价值吸筹回退默认关闭 (纪律-only); 显式 --va 才启用
                 if not params.get("va"):
                     continue
-                va = va_candidate(rec, j, va_m)
+                va = va_candidate(rec, j, va_m, event_types=event_set)
                 if va is None:
                     continue
                 ev, strategy = va, va["strategy"]
@@ -682,18 +699,26 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                         s["fired"] = True
                         break
 
-        # 独立槽位: 先给纪律填 (最多 max_pos - va_slots), 再给价值吸筹填专属槽
+        # 独立槽位: 先填 Spring 等 Tier-1 事件 (最多 max_pos - va_slots - sec_slots),
+        # 再用剩余槽位依次填 二级事件 (--secondary-events) 与 价值吸筹。
         va_slots = int(params.get("va_slots") or 0)
-        for cand in cands:
-            if cand["strategy"] == "screener_value_accumulation":
-                continue
-            if len(st["positions"]) >= cfg["max_pos"] - va_slots:
-                break
-            _try_fill(cand)
-        for cand in cands:
-            if cand["strategy"] != "screener_value_accumulation":
-                continue
-            _try_fill(cand)
+        sec_slots = int(params.get("sec_slots") or 0)
+        sec_types = params.get("sec_event_types") or frozenset()
+
+        def _is_sec(cand):
+            return bool(sec_types) and cand.get("type") in sec_types
+
+        def _fill(tier_cond):
+            for cand in cands:
+                if not tier_cond(cand):
+                    continue
+                if len(st["positions"]) >= cfg["max_pos"] - va_slots - sec_slots:
+                    break
+                _try_fill(cand)
+
+        _fill(lambda c: not _is_sec(c) and c["strategy"] != "screener_value_accumulation")
+        _fill(lambda c: _is_sec(c) and c["strategy"] != "screener_value_accumulation")
+        _fill(lambda c: c["strategy"] == "screener_value_accumulation")
 
         # 3) 引擎周期再平衡 (等权收敛, 满仓才触发)
         paper._rebalance_portfolio(st, df_by_code)
@@ -712,12 +737,14 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
 
 
 def build_report(st, params):
+    from datetime import datetime
+
     s = paper.stats(st)
     hist = st.get("equity_hist") or []
     L = []
     L.append("# 模拟盘引擎·真实K线历史回放回测")
     L.append("")
-    L.append(f"- 生成: {paper.time.strftime('%Y-%m-%d')}")
+    L.append(f"- 生成: {datetime.now().strftime('%Y-%m-%d')}")
     L.append(
         f"- 口径: 初始资金 {params['init_cash']:,.0f} · 持仓上限 {params['max_pos']} · "
         f"conf≥{params['min_conf']} · 持{params['hold_bars']}K · "
@@ -922,11 +949,23 @@ def main():
     ap = argparse.ArgumentParser(description="模拟盘引擎·真实K线历史回放回测")
     ap.add_argument("--max-codes", type=int, default=60, help="扫描股票数上限")
     ap.add_argument(
+        "--universe-file",
+        default="",
+        help="自定义股票池文件 (每行一个代码, 如 600104 或 sh600104; 覆盖默认全A前N只)",
+    )
+    ap.add_argument(
         "--qlib-pool",
         action="store_true",
         help="用 qlib 训练池 (train_pool.txt) 作为 universe (保证 qlib 概率覆盖, 供 --qlib-veto 对照)",
     )
     ap.add_argument("--conf", type=int, default=None, help="最低置信度 (默认取模块值)")
+    ap.add_argument(
+        "--events",
+        default="",
+        help="纪律事件类型白名单, 逗号分隔 (如 Spring / Spring,Shakeout / "
+             "Shakeout,SC / Spring,Shakeout,ST,LPS,SC)。默认空=现网 Spring-only。"
+             "加载时的 union 决定 stocks 缓存可覆盖的集合; 空串则为 Spring-only。",
+    )
     ap.add_argument("--maxpos", type=int, default=None, help="持仓上限")
     ap.add_argument("--hold", type=int, default=None, help="持有K数")
     ap.add_argument("--stop", type=float, default=None, help="止损(小数, 如0.05)")
@@ -952,6 +991,12 @@ def main():
     ap.add_argument("--cost", type=float, default=None, help="单边成本")
     ap.add_argument("--cash", type=float, default=None, help="初始资金")
     ap.add_argument("--window", type=int, default=10, help="信号可买入窗口(根)")
+    ap.add_argument(
+        "--stop-cooldown",
+        type=int,
+        default=0,
+        help="止损后再入冷却(交易日根数, 0=关闭): 同标止损平仓后 N 个交易日内禁止再开仓",
+    )
     ap.add_argument(
         "--chain-cap",
         type=int,
@@ -1034,6 +1079,19 @@ def main():
         help="价值吸筹·空头卖出宽限期(根, 0=关闭)",
     )
     ap.add_argument(
+        "--secondary-events",
+        default="",
+        help="二级独立仓位事件集 (逗号分隔, 如 Shakeout / Shakeout,ST): 这些事件与主事件"
+             "分槽位并行, 不挤占主事件仓位 (需配 --secondary-slots, 默认仅当主事件未满时"
+             "才占用剩余槽)",
+    )
+    ap.add_argument(
+        "--secondary-slots",
+        type=int,
+        default=0,
+        help="二级事件独立槽位数 (默认0=关闭, 二级事件并入主赛道按最新事件优先)",
+    )
+    ap.add_argument(
         "--va",
         action="store_true",
         help="启用价值吸筹回退 (默认关闭: 只跑纪律策略 paper_discipline_bull)",
@@ -1049,6 +1107,16 @@ def main():
     args = ap.parse_args()
 
     defaults = paper.apply_paper_params(None)
+    event_set = None
+    if args.events:
+        parts = [t.strip() for t in args.events.split(",") if t.strip()]
+        if parts:
+            event_set = frozenset(parts)
+    sec_event_set = frozenset()
+    if args.secondary_events:
+        parts = [t.strip() for t in args.secondary_events.split(",") if t.strip()]
+        if parts:
+            sec_event_set = frozenset(parts)
     params = {
         "min_conf": args.conf if args.conf is not None else defaults["min_conf"],
         "max_pos": args.maxpos if args.maxpos is not None else defaults["max_pos"],
@@ -1061,6 +1129,7 @@ def main():
         "trail_activate_pct": args.trail_activate if args.trail_activate is not None
         else defaults["trail_activate_pct"],
         "trail_atr_mult": defaults["trail_atr_mult"],
+        "stop_cooldown": args.stop_cooldown,
         "cost": args.cost if args.cost is not None else defaults["cost"],
         "init_cash": args.cash if args.cash is not None else defaults["init_cash"],
         "window": args.window,
@@ -1075,6 +1144,9 @@ def main():
         "qlib_veto_hi": args.qlib_veto_hi,
         "strategy_track": args.strategy_track,
         "va_confirm": args.va_confirm,
+        "event_types": event_set,
+        "sec_event_types": sec_event_set,
+        "sec_slots": args.secondary_slots,
         "disc_confirm": args.disc_confirm,
         "va": args.va,
         "va_slots": args.va_slots,
@@ -1086,7 +1158,15 @@ def main():
     # wyckoff_all_stocks.json → local_universe 会返回 0, 导致"扫描 0 只"。
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     uni = []
-    if args.qlib_pool:
+    if args.universe_file:
+        try:
+            from wyckoff.utils import normalize_symbol
+
+            with open(args.universe_file, encoding="utf-8") as f:
+                uni = [normalize_symbol(c.strip()) for c in f if c.strip()]
+        except Exception:
+            uni = []
+    if not uni and args.qlib_pool:
         try:
             from wyckoff.utils import normalize_symbol
 
@@ -1133,7 +1213,8 @@ def main():
         f"扫描 {len(uni)} 只: conf≥{params['min_conf']} 持仓≤{params['max_pos']} "
         f"持{params['hold_bars']}K 止损-{params['stop_loss'] * 100:.0f}% "
         f"止盈+{params['take_profit'] * 100:.0f}% 成本{params['cost'] * 100:.2f}% "
-        f"门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
+        f"事件集={','.join(sorted(event_set)) if event_set else '现网Spring-only'}"
+        f" 门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
         f"/板块{'开' if args.sect_gate else '闭'}"
         f"/策略追踪{'开' if args.strategy_track else '闭'}"
     )
@@ -1152,7 +1233,8 @@ def main():
         stocks = []
         for i, code in enumerate(uni):
             try:
-                rec = load_stock_events(code, params["min_conf"], datalen=args.datalen)
+                rec = load_stock_events(code, params["min_conf"], datalen=args.datalen,
+                                    event_types=event_set)
             except Exception as e:
                 print(f"  [{i + 1}/{len(uni)}] {code} 失败: {e}")
                 rec = None

@@ -33,6 +33,38 @@ def test_all_events_explained():
     assert not missing, f"事件无解释: {missing}"
 
 
+def test_explain_tables_keys_unique():
+    """F601: 解释表源码内标签键只能出现一次 (重复键静默覆盖会丢解释)。
+
+    旧版 ER/EF 各在 EVENT_EXPLAIN 字典字面量中出现两次, 前者被后者覆盖
+    (ruff F601)。运行期 dict 天然只留末键, 须扫描源码字面量才能防回归。
+    只扫描 EVENT_EXPLAIN / VSA_EXPLAIN 顶层赋值字典, 避免误伤合法短键。
+    """
+    import ast
+
+    from wyckoff import vsa_explain
+
+    with open(vsa_explain.__file__, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    targets = {"EVENT_EXPLAIN", "VSA_EXPLAIN"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets
+                 if isinstance(t, ast.Name) and t.id in targets]
+        if not names:
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        keys = [k.value for k in node.value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        dups = {k for k in keys if keys.count(k) > 1}
+        assert not dups, f"{names[0]} 存在重复标签键: {dups}"
+
+    assert "ER" in VSA_EXPLAIN and "EF" in VSA_EXPLAIN
+    assert VSA_EXPLAIN["ER"]["direction"] == "中性 (盘整提示)"
+
+
 def test_event_explain_lines():
     """事件标签解释行格式与 VSA 一致。"""
     for lb in EVENT_EXPLAIN:

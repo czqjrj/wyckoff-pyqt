@@ -17,10 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from wyckoff.config import _REVERSAL_CONFIRM_DIR, event_dir
-from wyckoff.indicators import add_indicators, find_pivots
-from wyckoff.events import detect_all
 from wyckoff import sqldb
+from wyckoff.config import _REVERSAL_CONFIRM_DIR, event_dir
+from wyckoff.events import detect_all
+from wyckoff.indicators import add_indicators, find_pivots
 
 HORIZON = 20
 COOLDOWN = 15
@@ -126,7 +126,6 @@ def main():
                 continue
             last[typ] = i
             d = _dir(typ)
-            feat = e.get("feat") or {}
             r = float(close[i + HORIZON] / close[i] - 1)
             r20 = float(close[i] / close[i - 20] - 1)
             rec_o = overall[typ]

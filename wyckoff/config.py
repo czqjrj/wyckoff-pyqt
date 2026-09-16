@@ -427,7 +427,7 @@ DEFAULT_SETTINGS = {
     # 反向顶掉云端配置。凭据类 (server_chan_key / corp_secret / wxpusher_app_token)
     # 虽列于此, 但同步层 _sensitive 过滤永不跨设备上传。
     "paper_init_cash": 1_000_000,
-    "paper_max_pos": 4,
+    "paper_max_pos": 5,
     "paper_hold_bars": 20,
     "paper_stop_loss": 0.04,
     "paper_take_profit": 0.15,
@@ -435,6 +435,7 @@ DEFAULT_SETTINGS = {
     "paper_min_conf": 100,
     "paper_st_confirm": True,
     "paper_scan_interval": 1800,
+    "paper_stop_cooldown": 20,
     "paper_commission_rate": 0.00025,
     "paper_min_commission": 5.0,
     "paper_stamp_tax_rate": 0.0005,
@@ -463,6 +464,23 @@ DEFAULT_SETTINGS = {
     "paper_wxpusher_app_token": "",
     "paper_wxpusher_topic_ids": "",
     "paper_wxpusher_uids": "",
+    # ── 风控 8 键 (S5; 引擎真源 _params.py, 默认引用同名常量) ─────────
+    # 最大账户回撤 (净值从峰值回落阈值)
+    "paper_max_drawdown": 0.15,
+    # 单笔最大风险预算 (账户净值% , Kelly 计算上限)
+    "paper_max_risk_pct": 0.02,
+    # 最大行业集中度 (单行业持仓市值占总市值上限)
+    "paper_max_sector_conc": 0.40,
+    # 最大单股集中度 (单股持仓市值占总市值上限)
+    "paper_max_single_conc": 0.25,
+    # 相关性阈值 (拒绝高相关标的开仓)
+    "paper_correlation_threshold": 0.70,
+    # 波动率调整总开关 (高波动降仓/低波动升仓)
+    "paper_vol_adjust_enabled": True,
+    # 资金利用率上限 (防满仓无现金应对机会)
+    "paper_max_capital_usage": 0.95,
+    # 仓位方法论 (equal_weight / kelly / vol_adjusted / risk_parity / fixed_fractional)
+    "paper_sizing_method": "equal_weight",
     # 点数图格值来源: pct=最新价百分比 / atr=动态ATR(0.5×ATR14, 随波动率自适应)
     "pnf_box_mode": "pct",
     "pnf_atr_factor": 0.5,

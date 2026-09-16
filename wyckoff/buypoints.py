@@ -91,7 +91,7 @@ DISABLED_KINDS = frozenset({"sos_break", "markup_break", "markup_bu"})
 
 
 # 自适应门控参数: 根据结构类型和波动率返回 (GATE_LEFT_LOOK, RIGHT_LOWER)
-# 原则: 
+# 原则:
 # - 底部吸筹结构 (acc): 左侧窗口可适当缩短 (更集中), 右侧比例可宽容一点
 # - 派发/顶部结构 (dist): 左侧窗口需扩大 (需更多确认), 右侧比例需严格
 # - 高波动市: 左侧窗口扩大 (给更多寻找确认的时间), 右侧比例收紧
@@ -122,8 +122,6 @@ def _get_adaptive_gate_params(kind: str, vol_ma20: float) -> tuple:
         lower_adj = 0
 
     # 2) 根据波动率进一步微调
-    # 波动率基准: 20% (0.20)
-    vol_ref = 0.20
     if vol_ma20 is not None and vol_ma20 > 0:
         # 波动率 > 25%: 扩大左侧窗口, 收紧右侧比例
         if vol_ma20 > 0.25:

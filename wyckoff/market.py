@@ -645,7 +645,7 @@ def _detect_sot(df, pivots, phase=None, look=_STRUCT_SOT_LOOK,
         return []
     last = legs[-1]
     prevs = legs[-min_legs:-1]
-    mean_thrust = float(np.mean([l["thrust"] for l in prevs]))
+    mean_thrust = float(np.mean([leg["thrust"] for leg in prevs]))
     if mean_thrust <= 0:
         return []
     if last["thrust"] > shrink * mean_thrust:
@@ -653,7 +653,7 @@ def _detect_sot(df, pivots, phase=None, look=_STRUCT_SOT_LOOK,
     if last["idx"] < n - recent:
         return []
     vol_shrink = (len(prevs) > 0
-                  and last["vol"] <= min(l["vol"] for l in prevs) * 1.05)
+                  and last["vol"] <= min(leg["vol"] for leg in prevs) * 1.05)
     conf = 55 + (20 if last["thrust"] <= 0.5 * mean_thrust else 10)
     if vol_shrink:
         conf += 15

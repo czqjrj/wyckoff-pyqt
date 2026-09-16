@@ -7,7 +7,7 @@ import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
 from ..strategies.constants import STRATEGY_VALUE_ACC
-from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAIL_ATR_MULT, TRAILING_STOP, WEAK_MAX_POS
+from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAIL_ATR_MULT, TRAILING_STOP
 
 
 # ── 撮合: 买入/卖出 ─────────────────────────────────────
@@ -376,6 +376,7 @@ def close_position(st, pos, sell_price, reason, event_type=None, day=None):
         "sell_px": price, "ret": round(ret_total, 4),
         "reason": reason, "entry_ts": pos["entry_ts"],
         "close_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "day": str(day)[:10] if day else time.strftime("%Y-%m-%d"),
         "bars": int(pos.get("entry_bars", 0)),
         "strategy": pos.get("strategy", ""),
     })

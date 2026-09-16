@@ -7,8 +7,7 @@ import numpy as np
 
 import wyckoff.paper as paper
 
-from .. import paper_strategy_accuracy
-from ._params import SLIP_BUY, SLIP_SELL
+from ._params import SLIP_SELL
 
 
 def _fee_factors(amount: float = 100000.0):
@@ -17,7 +16,6 @@ def _fee_factors(amount: float = 100000.0):
     佣金/过户费/印花税按月付明细计算后折算为单边费率, 供统计口径展示;
     代表性金额取 10 万元, 规避最低佣金 5 元对小单的失真。
     """
-    c = paper._CUR
     b = paper.fee_buy(amount) / amount
     s = paper.fee_sell(amount) / amount
     return b, s
@@ -290,103 +288,3 @@ def stats(st):
                 out["recovery_factor"] = round(out["total_return"] / abs(out["max_drawdown"]), 3)
 
     return out
-
-
-def advanced_stats(st, benchmark_returns: list[float] = None) -> dict:
-    """高级绩效分析，包含相对基准指标。
-
-    Args:
-        st: 模拟盘状态
-        benchmark_returns: 基准日收益率序列 (如沪深300)
-
-    Returns:
-        包含 Alpha, Beta, 信息比率, 跟踪误差等的字典
-    """
-    base = stats(st)
-    hist = st.get("equity_hist") or []
-    if len(hist) < 2:
-        return base
-
-    eqs = [h.get("equity", paper._CUR["init_cash"]) for h in hist]
-    daily_rets = []
-    for i in range(1, len(eqs)):
-        if eqs[i-1] > 0:
-            daily_rets.append(eqs[i] / eqs[i-1] - 1)
-
-    if not daily_rets or np is None:
-        return base
-
-    arr = np.asarray(daily_rets, dtype=float)
-    out = base.copy()
-
-    if benchmark_returns and len(benchmark_returns) == len(arr):
-        bench = np.asarray(benchmark_returns, dtype=float)
-        # Beta
-        cov = np.cov(arr, bench)[0, 1]
-        bench_var = np.var(bench)
-        beta = cov / bench_var if bench_var > 0 else 1.0
-        out["beta"] = round(float(beta), 3)
-        # Alpha (年化)
-        alpha = (arr.mean() - beta * bench.mean()) * 250
-        out["alpha"] = round(float(alpha), 4)
-        # 跟踪误差
-        active_rets = arr - beta * bench
-        tracking_error = active_rets.std() * np.sqrt(250)
-        out["tracking_error"] = round(float(tracking_error), 4)
-        # 信息比率
-        if tracking_error > 0:
-            out["information_ratio"] = round(float(active_rets.mean() * np.sqrt(250) / tracking_error), 3)
-        # 上行/下行捕获率
-        up_market = bench > 0
-        down_market = bench < 0
-        if any(up_market):
-            out["up_capture"] = round(float(arr[up_market].mean() / bench[up_market].mean()), 3)
-        if any(down_market):
-            out["down_capture"] = round(float(arr[down_market].mean() / bench[down_market].mean()), 3)
-
-    # 交易成本分析
-    total_cost = sum(c.get("cost", 0) for c in st.get("closed", []) if "cost" in c)
-    out["total_cost"] = round(total_cost, 2)
-    out["cost_drag"] = round(total_cost / paper._CUR["init_cash"] * 100, 2) if paper._CUR["init_cash"] > 0 else 0
-
-    return out
-
-
-def signal_stats_text(st):
-    """Markdown 统计段 (报告导出用)。"""
-    s = stats(st)
-    L = []
-    L.append("### 模拟盘收益统计")
-    L.append("")
-    L.append(f"- 总资产: **{s['cash']:,}** 当前持仓 {s['n_positions']} 只, "
-             f"已平仓 {s['n_closed']} 笔, 订单 {s['n_orders']} 笔")
-    L.append(f"- 条件单: 激活 {s['n_cond_active']} · 已触发 {s['n_cond_done']}")
-    # 修复: 原先三元表达式被字符串化 (max_drawdown 为 None 时也强制格式化),
-    # 造成 "最大回撤: ... if ... is not None else '-'" 的样式错误与崩溃。
-    dd = s["max_drawdown"]
-    dd_txt = "-" if dd is None else f"{dd*100:.2f}%"
-    L.append(f"- 累计收益: **{s['total_return']*100:+.2f}%**  最大回撤: {dd_txt}")
-    if s["win_rate"] is not None:
-        L.append(f"- 胜率: **{s['win_rate']*100:.1f}%**  平均每笔: "
-                 f"{s['avg_ret']*100:+.2f}%  盈亏比: {s['pl_ratio']}")
-    if s["by_type"]:
-        L.append("")
-        L.append("| 事件 | 笔数 | 胜率 | 平均收益 |")
-        L.append("|------|------|------|----------|")
-        for t, b in sorted(s["by_type"].items(), key=lambda kv: -kv[1]["n"]):
-            L.append(f"| {t} | {b['n']} | {b['win']*100:.0f}% | "
-                     f"{b['avg']*100:+.2f}% |")
-    if s.get("by_strategy"):
-        L.append("")
-        L.append("| 策略 | 笔数 | 胜率 | 平均收益 | 累计 | 盈亏比 | 期望 | 平均持有 |")
-        L.append("|------|------|------|----------|------|--------|------|----------|")
-        for strat, b in sorted(s["by_strategy"].items(),
-                               key=lambda kv: -kv[1]["n"]):
-            plr = (f"{b['pl_ratio']:.2f}" if b.get("pl_ratio") is not None
-                   else "-")
-            L.append(f"| {paper_strategy_accuracy.STRATEGY_CN.get(strat, strat)} "
-                     f"| {b['n']} | {b['win']*100:.0f}% | "
-                     f"{b['avg']*100:+.2f}% | {b['cum']*100:+.2f}% | {plr} "
-                     f"| {b['expectancy']:+.4f} | {b.get('avg_hold', 0):.1f}根 |")
-    L.append("")
-    return "\n".join(L)
