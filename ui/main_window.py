@@ -72,6 +72,7 @@ from .extra_windows import (
     CompareWindow,
     EtfMonitorWindow,
     HoldingsWindow,
+    NationalTeamFlowWindow,
     NotesWindow,
     NteamWindow,
     PortfolioWindow,
@@ -392,6 +393,7 @@ class MainWindow(QMainWindow):
 
         # 资金: 国家队/宽基ETF 资金流向跟踪
         g = m.addMenu("资金")
+        g.addAction("国家队资金流向判定", self.open_nt_flow)
         g.addAction("国家队持仓透视", self.open_holdings)
         g.addAction("ETF 三因子份额监测", self.open_etf_monitor)
         g.addAction("国家队ETF跟踪", self.open_nteam)
@@ -3242,6 +3244,9 @@ class MainWindow(QMainWindow):
                        refresh=False)
 
     # ── 国家队工具 ──
+    def open_nt_flow(self):
+        self._show_win("_nt_flow_win", lambda: NationalTeamFlowWindow(self))
+
     def open_nteam(self):
         self._show_win("_nteam_win",
                        lambda: NteamWindow(self, on_load=self._load_code))

@@ -7,6 +7,7 @@
 - NteamWindow: 国家队 ETF 跟踪 (track_nteam)
 - HoldingsWindow: 国家队持仓透视 (fetch_nt_holdings)
 - EtfMonitorWindow: ETF 三因子份额监测 (monitor_etfs)
+- NationalTeamFlowWindow: 国家队资金流向统一判定 (national_team_flow)
 """
 import threading
 import time
@@ -117,6 +118,11 @@ def _ghost_btn_qss():
 
 def _flabel_qss():
     return f"color:{theme.C_MUTED};font-weight:bold;font-size:{theme.font_pt('caption')};"
+
+
+def _flow_fmt(v):
+    """资金流数值格式化: None → '-', 否则 +1 位小数带符号。"""
+    return f"{v:+.1f}" if v is not None else "-"
 
 
 def retheme_children(root):
@@ -2213,6 +2219,170 @@ class EtfMonitorWindow(QDialog):
                 self.table.item(ri, 10).setForeground(QColor(theme.C_DOWN))
         for c, w in ((0, 130), (1, 70), (2, 60), (3, 60), (4, 50), (5, 70),
                      (6, 70), (7, 75), (8, 75), (9, 50), (10, 100)):
+            self.table.horizontalHeader().resizeSection(c, w)
+
+
+# ──────────────────────────────────────── 自选股预警管理 ────────────────────────────────────────
+
+class _NationalFlowThread(QThread):
+    finished = pyqtSignal(object)
+
+    def run(self):
+        from wyckoff.national_team import national_team_flow
+        try:
+            res = national_team_flow()
+        except Exception as e:
+            log_exc("国家队资金流向判定失败", e)
+            res = {"verdict": "数据不足", "score": 0.0, "bias": "平衡",
+                   "reasoning": [f"判定失败: {e}"], "channel_states": {},
+                   "etf": {}, "factor": {}, "holdings": {},
+                   "etf_rows": [], "factor_rows": [], "holdings_rows": []}
+        self.finished.emit(res)
+
+
+class NationalTeamFlowWindow(QDialog):
+    """国家队资金流入/流出统一判定: 聚合 ETF主力资金流 + 三因子 + 季报持仓。"""
+
+    COLS = ("代码", "名称", "近1日(亿)", "近5日(亿)", "近20日(亿)", "信号", "数据源")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("国家队资金流向判定")
+        self.resize(1080, 640)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
+        root.addWidget(_accent_header("国家队资金流入/流出判定"))
+
+        self.status = QLabel("正在并发聚合三通道 (资金流+三因子+季报) ...")
+        self.status.setStyleSheet(
+            f"color:{theme.C_AMBER};font-weight:bold;font-size:{theme.font_pt('body')};")
+        root.addWidget(self.status)
+
+        # 三通道评分条: 日频 / 三因子 / 季报 (权重 50% / 25% / 25%)
+        bars = QHBoxLayout()
+        bars.setSpacing(12)
+        self._bars = {}
+        self._bar_labels = {}
+        for key, name, w in (("daily", "ETF日频资金流", 0.5),
+                             ("factor", "ETF三因子", 0.25),
+                             ("holdings", "季报十大股东", 0.25)):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            head = QLabel(f"{name} (权重{w:.0%})")
+            head.setStyleSheet(f"color:{theme.C_MUTED};font-size:{theme.font_pt('caption')};")
+            col.addWidget(head)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setTextVisible(False)
+            bar.setFixedHeight(12)
+            bar.setStyleSheet(
+                f"QProgressBar{{background:{theme.C_PANEL};border:1px solid {theme.C_BORDER};"
+                f"border-radius:4px;}}"
+                f"QProgressBar::chunk{{background:{theme.C_ACCENT};border-radius:4px;}}")
+            col.addWidget(bar)
+            lab = QLabel("-")
+            lab.setStyleSheet(f"font-size:{theme.font_pt('caption')};")
+            col.addWidget(lab)
+            bars.addLayout(col)
+            self._bars[key] = bar
+            self._bar_labels[key] = lab
+        root.addLayout(bars)
+
+        self.reason = QTextEdit()
+        self.reason.setReadOnly(True)
+        self.reason.setMaximumHeight(150)
+        self.reason.setStyleSheet(
+            f"background:{theme.C_PANEL};border:1px solid {theme.C_BORDER};")
+        root.addWidget(self.reason)
+
+        self.table = _table()
+        self.table.setColumnCount(len(self.COLS))
+        self.table.setHorizontalHeaderLabels(list(self.COLS))
+        root.addWidget(self.table, 1)
+
+        hb = QHBoxLayout()
+        btn = QPushButton("刷新")
+        btn.clicked.connect(self.refresh)
+        hb.addWidget(btn)
+        note = QLabel("判定 = 日频资金流50% + 三因子25% + 季报25% (可剔除断连通道); "
+                      "均为概率性代理, 非官方国家队数据")
+        note.setStyleSheet(f"color:{theme.C_MUTED};")
+        hb.addWidget(note, 1)
+        root.addLayout(hb)
+        self.refresh()
+
+    def refresh(self):
+        self.status.setText("正在并发聚合三通道 (资金流+三因子+季报) ...")
+        self.status.setStyleSheet(
+            f"color:{theme.C_AMBER};font-weight:bold;font-size:{theme.font_pt('body')};")
+        self._th = _NationalFlowThread(self)
+        self._th.finished.connect(self._on_done)
+        self._th.start()
+
+    def _on_done(self, res):
+        verdict = res.get("verdict", "数据不足")
+        score = res.get("score", 0.0)
+        color = theme.C_UP if verdict == "净流入" else (
+            theme.C_DOWN if verdict == "净流出" else
+            theme.C_AMBER if verdict == "双向平衡" else theme.C_MUTED)
+        made = res.get("fetched_at") or res.get("made_at") or ""
+        self.status.setText(
+            f"国家队资金[{verdict}]  总分 {score:+.2f}   {made}")
+        self.status.setStyleSheet(
+            f"color:{color};font-weight:bold;font-size:{theme.font_pt('body')};")
+
+        for key, bar in self._bars.items():
+            lv = (res.get("levels") or {}).get(key) or {}
+            avail = lv.get("avail", False)
+            s = lv.get("score", 0.0)
+            bar.setValue(int((s + 1) / 2 * 100))
+            if not avail:
+                lv_color = theme.C_MUTED
+                txt = "数据断连"
+            else:
+                lv_color = theme.C_UP if s >= 0.2 else (
+                    theme.C_DOWN if s <= -0.2 else theme.C_AMBER)
+                txt = f"{s:+.2f}"
+            self._bar_labels[key].setText(txt)
+            self._bar_labels[key].setStyleSheet(
+                f"color:{lv_color};font-weight:bold;font-size:{theme.font_pt('caption')};")
+
+        self.reason.setPlainText(
+            "\n".join(f"· {t}" for t in res.get("reasoning", []))
+            or "无有效通道数据, 请检查网络后刷新。")
+
+        self._fill_table(res.get("etf_rows") or [])
+        etf = res.get("etf") or {}
+        if etf:
+            self.status.setText(self.status.text() + f"   (ETF净流 {etf.get('net_y1') or 0:+.1f}亿/20日 {etf.get('net_y20') or 0:+.1f}亿)")
+
+    def _fill_table(self, rows):
+        self.table.setRowCount(len(rows))
+        if not rows:
+            return
+        src_cn = {"flow": "资金流", "proxy": "量价代理", "none": "无"}
+        from PyQt6.QtGui import QColor
+        for ri, r in enumerate(rows):
+            vals = (r.get("code", ""), r.get("name", ""),
+                    _flow_fmt(r.get("y1")), _flow_fmt(r.get("y5")),
+                    _flow_fmt(r.get("y20")),
+                    r.get("verdict", ""), src_cn.get(r.get("source"), "-"))
+            for ci, v in enumerate(vals):
+                it = QTableWidgetItem(str(v))
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(ri, ci, it)
+            it = self.table.item(ri, 5)
+            if it is not None:
+                if "买入" in r.get("verdict", ""):
+                    it.setForeground(QColor(theme.C_UP))
+                elif "减仓" in r.get("verdict", ""):
+                    it.setForeground(QColor(theme.C_DOWN))
+                elif r.get("verdict") == "净流入":
+                    it.setForeground(QColor(theme.C_UP))
+                elif r.get("verdict") == "净流出":
+                    it.setForeground(QColor(theme.C_DOWN))
+        for c, w in ((0, 60), (1, 150), (2, 80), (3, 80), (4, 90), (5, 120), (6, 80)):
             self.table.horizontalHeader().resizeSection(c, w)
 
 
