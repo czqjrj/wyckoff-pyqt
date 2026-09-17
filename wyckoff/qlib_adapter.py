@@ -468,6 +468,57 @@ def qlib_probability_series(
     return _spread_probabilities(np.asarray(raw, dtype=float), float(model_obj.get("auc", 0.55)))
 
 
+# 模型推理路径分离: qlib_signal_probability (在线概率, 含降级) 与 qlib_probe_live
+# (卖出否决, 仅真实模型) 共用同一套因子提取+分位归一化推理, 保证两入口口径一致。
+def _model_last_prob(symbol, start_date, end_date):
+    """用已训练 QLib 模型推算 symbol 最新根 buy 概率。
+
+    仅在 qlib 可用且模型已训练时返回 (prob_buy, prob_sell, confidence), 否则 None。
+    训练特征含 wy_ 域特征 (compute_domain_features) 时自动补齐域特征列再推理。
+    """
+    model_obj = _load_qlib_model()
+    if model_obj is None:
+        return None
+    try:
+        df, names = fetch_alpha158_features(symbol, start_date, end_date)
+        if df is None or not len(df):
+            return None
+        fnames = model_obj["feature_names"]
+        if any(f.startswith("wy_") for f in fnames):
+            dfeat, _ = compute_domain_features(symbol, start_date, end_date)
+            if dfeat is not None and len(dfeat):
+                df = df.join(dfeat, how="inner")
+        series = qlib_probability_series(df, model_obj)
+        if series is None or not len(series):
+            return None
+        prob_buy = float(series[-1])
+        return (min(max(prob_buy, 0.01), 0.99),
+                min(max(1.0 - prob_buy, 0.01), 0.99),
+                float(model_obj.get("auc", 0.55)))
+    except Exception as e:
+        logger.error(f"qlib model inference error: {e}")
+        return None
+
+
+def qlib_probe_live(symbol, veto_hi=0.60, days=365):
+    """QLib 卖出否决探针 (试点): 仅真实模型路径。
+
+    返回 (否决, prob_buy) 当已训练 QLib 模型且能推出最新 buy 概率: prob_buy ≥
+    veto_hi → 否决=True (极强看多)。模型未训练/qlib 数据不可用 → None (fail-open,
+    不否决) —— 经验/结构降级估计一律不参与否决, 避免启发式噪音误拦截卖出。
+    与回测 scripts/paper_replay_bt.py qlib_probe(prob_map, veto_hi=0.60) 同口径。
+    """
+    import pandas as pd
+
+    end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+    start_date = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+    res = _model_last_prob(symbol, start_date, end_date)
+    if res is None:
+        return None
+    prob_buy = res[0]
+    return bool(prob_buy >= veto_hi), prob_buy
+
+
 def qlib_signal_probability(
     symbol: str,
     datalen: int = 250,
@@ -493,29 +544,13 @@ def qlib_signal_probability(
     start_date = (pd.Timestamp.now() - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
 
     if available:
-        model_obj = _load_qlib_model()
-        if model_obj is not None:
-            try:
-                df, names = fetch_alpha158_features(symbol, start_date, end_date)
-                if df is not None and len(df):
-                    fnames = model_obj["feature_names"]
-                    if any(f.startswith("wy_") for f in fnames):
-                        dfeat, _ = compute_domain_features(
-                            symbol, start_date, end_date)
-                        if dfeat is not None and len(dfeat):
-                            df = df.join(dfeat, how="inner")
-                    series = qlib_probability_series(df, model_obj)
-                    if series is not None and len(series):
-                        prob_buy = float(series[-1])
-                        prob_sell = 1.0 - prob_buy
-                        confidence = float(model_obj.get("auc", 0.55))
-                        return {
-                            "prob_buy": min(max(prob_buy, 0.01), 0.99),
-                            "prob_sell": min(max(prob_sell, 0.01), 0.99),
-                            "confidence": confidence,
-                        }
-            except Exception as e:
-                logger.error(f"qlib model inference error: {e}")
+        res = _model_last_prob(symbol, start_date, end_date)
+        if res is not None:
+            return {
+                "prob_buy": res[0],
+                "prob_sell": res[1],
+                "confidence": res[2],
+            }
 
         try:
             features = fetch_qlib_features(symbol, start_date=start_date, end_date=end_date)

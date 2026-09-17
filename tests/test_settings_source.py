@@ -58,6 +58,8 @@ AAA = {
     "paper_correlation_threshold": P.CORRELATION_THRESHOLD,
     "paper_vol_adjust_enabled": P.VOL_ADJUST_ENABLED,
     "paper_max_capital_usage": P.MAX_CAPITAL_USAGE,
+    "paper_qlib_veto": P.QLIB_VETO_ENABLED,
+    "paper_qlib_veto_hi": P.QLIB_VETO_HI,
 }
 
 
@@ -188,3 +190,29 @@ def test_load_settings_warns_on_post_migration_drift(tmp_path, monkeypatch, capl
     assert "paper_max_pos" in caplog.text
     assert "paper_stop_loss" in caplog.text
     assert "paper_min_conf" in caplog.text
+
+
+def test_load_settings_migrates_v1_to_v2_tp_trail(tmp_path, monkeypatch, caplog):
+    """v2 校准: 旧 v1 磁盘值 (止盈 15% / 追踪 8%) 一次性回迁为网格最优
+    (30% / 6%), 并打版本戳; 二次加载不再回迁。"""
+    import wyckoff.storage as storage
+    v1 = {
+        "_paper_calibration_version": 1,
+        "paper_take_profit": 0.15,
+        "paper_trail_back_pct": 0.08,
+    }
+    f = tmp_path / "wyckoff_settings.json"
+    f.write_text(json.dumps(v1), encoding="utf-8")
+    monkeypatch.setattr(storage, "SETTINGS_FILE", str(f))
+    storage._PAPER_DRIFT_SEEN.clear()
+    with caplog.at_level(logging.WARNING, logger="wyckoff.storage"):
+        s = storage.load_settings()
+    assert s["paper_take_profit"] == P.TAKE_PROFIT == 0.30
+    assert s["paper_trail_back_pct"] == P.TRAIL_BACK_PCT == 0.06
+    assert "回迁" in caplog.text
+    on_disk = json.loads(f.read_text(encoding="utf-8"))
+    assert on_disk[storage._CALIBRATION_VERSION_KEY] == storage.PAPER_CALIBRATION_VERSION
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="wyckoff.storage"):
+        storage.load_settings()
+    assert "回迁" not in caplog.text

@@ -245,6 +245,12 @@ def step(st, df_by_code, trading=True):
         elif held >= paper._CUR["hold_bars"]:
             reason = "到期"
         if reason:
+            # QLib 卖出否决 (试点): 主动性卖出 (止盈/到期) 前查 qlib 极强看多则否决
+            # 一次; 止损/破位为风险保护卖出, 永不被否决。
+            # 否决 = 跳过本 bar 平仓 (标记已打, 下一触发 bar 不再拦), 而非 reason=None
+            # 继续成交 — 后者会把一笔正常卖出以 reason=None 错误落账。
+            if reason in ("止盈", "到期") and paper._qlib_veto_exit(st, pos):
+                continue
             # 模拟盘按市价即时成交: 一律以现价(含卖滑点)结算, 不再用 max(stop_px,last)
             # 高估止损价。历史实现止损在 last<stop_px 时按 stop_px 成交, 低估了实际损失。
             sell_price = last * (1 - SLIP_SELL)

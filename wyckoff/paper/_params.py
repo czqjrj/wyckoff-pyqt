@@ -41,10 +41,19 @@ STOP_LOSS = 0.04
 TRAILING_STOP = True
 # 追踪止损 ATR 缓冲: 仅在 TRAILING_STOP=True 时生效 (无网格实证, 默认关闭)
 TRAIL_ATR_MULT = 0.0
-# 移动止盈: 高位回落触发幅度 (峰值* (1-此值) 平仓)
-TRAIL_BACK_PCT = 0.08
+# 移动止盈: 高位回落触发幅度 (峰值* (1-此值) 平仓)。
+# 对齐回测网格最优 trail_back=6% (PROGRESS.md: 网格 STOP=-4%·TP=+30%·trail=6%
+# → 全周期 +224.9%; 8% 回落会让持仓从峰值多吐 2% 利润再离场, 6% 为网格峰值)。
+TRAIL_BACK_PCT = 0.06
 # 移动止盈激活浮盈比例: 浮盈达到该值后才启用回落卖出; <=0 表示取 TAKE_PROFIT
 TRAIL_ACTIVATE_PCT = 0.0
+# QLib 卖出否决 (试点, 默认关闭): 主动性卖出 (止盈/移动止盈/到期/上破) 决策前查
+# QLib 模型 prob_buy, 若 ≥ QLIB_VETO_HI 判定"极强看多"则否决本次卖出一次 (防踏空),
+# 与回测 scripts/paper_replay_bt.py --qlib-veto veto_hi=0.60 同口径。仅真实已训练
+# 模型路径生效 (经验/结构降级估计不参与否决); 模型/数据不可用 → fail-open 不否决。
+# 止损/破位等风险保护卖出永不被否决。
+QLIB_VETO_ENABLED = False
+QLIB_VETO_HI = 0.60
 # 弱市过滤: 指数收盘 < MA20 判定为弱势 → 新开仓上限 WEAK_MAX_POS 且停用价值吸筹
 WEAK_FILTER = True
 WEAK_MAX_POS = 1
@@ -70,8 +79,10 @@ PUSH_WECHAT_TO_USER = ""
 PUSH_WXPUSHER_APP_TOKEN = ""
 PUSH_WXPUSHER_TOPIC_IDS = ""  # 逗号分隔主题 ID
 PUSH_WXPUSHER_UIDS = ""       # 逗号分隔用户 UID
-# 止盈: 盈利 +15% 落袋 (结合止损的不对称盈亏比)
-TAKE_PROFIT = 0.15
+# 止盈: 对齐回测网格最优 TP=+30% (PROGRESS.md: STOP=-4%·TP=+30%·trail=6%
+# → +224.9%, 显著优于生产 TP=15%·trail=8% 的顺风区间)。移动止盈模式下它不再
+# 是"固定落袋价", 而是"浮盈达该线才放行峰值回落跟踪"的激活门槛 (见 TRAIL_ACTIVATE_PCT)。
+TAKE_PROFIT = 0.30
 # 初始终端资金 (模拟资产)
 INIT_CASH = 1_000_000.0
 # 单笔最低可交易金额 (避免碎股/零股本)
@@ -250,7 +261,8 @@ __all__ = [
     "HOLD_BARS", "MAX_POSITIONS", "COST", "COMMISSION_RATE", "MIN_COMMISSION",
     "STAMP_TAX_RATE", "TRANSFER_FEE_RATE", "LIMIT_FILL", "SLIP_BUY", "SLIP_SELL",
     "STOP_LOSS", "TRAILING_STOP", "TRAIL_ATR_MULT", "TRAIL_BACK_PCT",
-    "TRAIL_ACTIVATE_PCT", "WEAK_FILTER", "WEAK_MAX_POS", "WEAK_INDEX_CODE",
+    "TRAIL_ACTIVATE_PCT", "QLIB_VETO_ENABLED", "QLIB_VETO_HI",
+    "WEAK_FILTER", "WEAK_MAX_POS", "WEAK_INDEX_CODE",
     "VA_WEIGHT", "ENABLE_VA", "ENABLE_LONG_LEFT", "REBALANCE",
     "PUSH_ENABLED", "PUSH_METHOD", "PUSH_SERVER_CHAN_KEY",
     "PUSH_WECHAT_CORP_ID", "PUSH_WECHAT_CORP_SECRET", "PUSH_WECHAT_AGENT_ID",

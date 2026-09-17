@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 # ── 三重共振纪律硬门禁 (统一数据源见 discipline.py) ──
 # 门禁经 paper._market_trend_ok / paper._sector_strength_ok / paper._flow_net5
 # 运行时解析 (paper/discipline 单一源, 测试 monkeypatch 到 paper.*)。
+from ..events import sort_candidates
 from ..strategies.constants import (
     STRATEGY_DISCIPLINE,
     STRATEGY_LONG_LEFT,
@@ -367,7 +368,9 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
         else:
             # 完全无资金流数据 → 门禁降级跳过 (见注释)
             pass
-    out.sort(key=lambda e: -(int(e.get("conf", 0) or 0)))
+    # conf 排序融合「方向化均值期望」: 单笔期望高的类型在排序中提前,
+    # 期望为负的类型被压后 (edge_conf = conf ± 期望偏离映射), 见 events.sort_candidates。
+    out = sort_candidates(out)
     return out
 
 

@@ -49,6 +49,20 @@
 **STOP=-4% · TP=+30% · trail_back=6%（+224.9%）**，而生产仍是 **TP=15% · trail=8%**
 （`wyckoff/paper/_params.py:74,45`）。其余为：QLib 卖出否决未启用、三道硬门禁从未被回测验证（历史快照缺失）、事件集/仓位可分层微调。
 
+## 落地状态 (2026-09-17 会话收尾)
+
+- **✅ 参数对齐 (校准 v2)**: 止盈 15%→30% (移动止盈激活线) / 追踪 8%→6% 已落
+  `_params`+`config`+UI; storage 校准版本 1→2 对磁盘旧值一次性回迁, 版本对齐后
+  用户主动调优仅告警不覆盖。
+- **✅ QLib 卖出否决 (试点, 默认关)**: `_qlib_veto_exit` 接入 step/条件单
+  (止盈/到期/追踪否决一次, 止损永不), 真实模型路径才生效; 回测参考
+  `scripts/paper_replay_bt.py --qlib-veto`。
+- **✅ 选股排序·期望融合**: `events.sort_candidates` 按方向化均值期望
+  (edge_conf = conf ± 期望偏离映射) 取代纯 conf 降序; 缺样本退化为原 conf。
+- **✅ 实盘验证点自动化**: `paper/_verify.py` run_cycle 每周期末观测
+  (窗口胜率/累计期望/连败/盈亏比), 幂等推送, 只告警不改交易行为。
+- 仍待办: 三道硬门禁历史快照回测 (bear_exit 门禁保持开启)、事件集/仓位分层微调。
+
 ## 续跑入口
 - 网格: `python scripts/paper_replay_grid.py --max-codes 200 --conf 100`
 - 单次: `python scripts/paper_replay_bt.py --stop 0.04 --tp 0.30 --conf 100`

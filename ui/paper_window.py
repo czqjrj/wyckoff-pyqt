@@ -164,6 +164,12 @@ from wyckoff.paper._params import (
     MAX_RISK_PCT as _DEF_MAX_RISK,
 )
 from wyckoff.paper._params import (
+    TAKE_PROFIT as _DEF_TAKE_PROFIT,
+)
+from wyckoff.paper._params import (
+    TRAIL_BACK_PCT as _DEF_TRAIL_BACK,
+)
+from wyckoff.paper._params import (
     TRAILING_STOP as _DEF_TRAILING_STOP,
 )
 from wyckoff.settings_keys import S
@@ -923,7 +929,7 @@ class PaperWindow(QDialog):
         self.sp_tp.setRange(0.05, 1.00)
         self.sp_tp.setSingleStep(0.05)
         self.sp_tp.setDecimals(3)
-        self.sp_tp.setValue(float(self._settings.get(S.Paper.TAKE_PROFIT, 0.15)))
+        self.sp_tp.setValue(float(self._settings.get(S.Paper.TAKE_PROFIT, _DEF_TAKE_PROFIT)))
 
         self.sp_cost = QDoubleSpinBox()
         self.sp_cost.setRange(0, 0.02)
@@ -1008,10 +1014,10 @@ class PaperWindow(QDialog):
         self.sp_trail_back.setSingleStep(0.005)
         self.sp_trail_back.setDecimals(3)
         self.sp_trail_back.setValue(
-            float(self._settings.get(S.Paper.TRAIL_BACK_PCT, 0.08)))
+            float(self._settings.get(S.Paper.TRAIL_BACK_PCT, _DEF_TRAIL_BACK)))
         self.sp_trail_back.setSuffix(" %")
         self.sp_trail_back.setToolTip(
-            "移动止盈回落: 激活后从持仓峰值回撤该比例平仓 (回测推荐 8%)")
+            "移动止盈回落: 激活后从持仓峰值回撤该比例平仓 (回测推荐 6%)")
 
         self.ck_weak = QCheckBox("弱市过滤")
         self.ck_weak.setChecked(
@@ -1096,7 +1102,7 @@ class PaperWindow(QDialog):
                 self.sp_drawdown: "账户最大回撤熔断: 净值从峰值回撤达到该比例即暂停开仓",
                 self.sp_risk: "单笔风险: 单次开仓允许承担的资金比例上限",
             }[w[1]])
-        hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+15%·回落 8% / "
+        hint = QLabel("回测最优参考: 止损 -4% / 移动止盈激活+30%·回落 6% / "
                       "弱市过滤开")
         hint.setStyleSheet(f"color: {theme.C_MUTED};")
         grid.addWidget(hint, 4, 0, 1, len(fields) * 2 + 1)

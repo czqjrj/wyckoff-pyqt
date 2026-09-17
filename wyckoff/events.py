@@ -22,6 +22,16 @@ EVENT_CONF_BLEND: dict[str, float] = {
     "default": 0.20,     # 其他/中性类型
 }
 
+# ── 方向化均值期望 (edge) 维度: 候选排序融合 ─────────────────
+# 原排序只按"命中率"conf: 命中率高的类型若单笔期望 (方向化均值收益) 低甚至为负,
+# 组合实际不赚钱 ("选得准≠选得赚")。此处把期望维度融合进候选排序:
+#   edge_conf = conf + clamp((dir_mean - EDGE_BASELINE) * EDGE_SCALE, ±EDGE_MAX_ADJ)
+# dir_mean 为类型 20 根方向化均值收益 (见 signal_accuracy.load_win_rates), 相对全池
+# 基线 (Σ n·dir_mean / Σ n) 的偏离量按 EDGE_SCALE 映射为 conf 增减, 上限 ±8 分,
+# 保证胜率 conf 仍主导排序, 期望只做同级微调并抬升"高期望强类型"的优先级。
+EDGE_SCALE = 300.0        # 每 +1% 方向化均值收益 → +3 conf 分
+EDGE_MAX_ADJ = 8.0        # ±8 分封顶 (防弱类型高分幻觉反哺排序)
+
 
 def _empirical_reliability(type_, d=0):
     """取某类型信号的历史方向命中占比 (L1 贝叶斯收缩值)。
@@ -106,6 +116,84 @@ def _apply_empirical_calibration(events):
         e["conf"] = int(round(min(100, max(0,
             conf * (1.0 - blend) + rel * 100 * blend))))
     return events
+
+
+def _winrate_rec(type_, kind="event"):
+    """取类型的历史胜率表记录 (样本不足/无追踪 → None)。"""
+    try:
+        from .signal_accuracy import load_win_rates
+        rates = load_win_rates(20)
+        return rates.get((kind, str(type_)))
+    except Exception:
+        return None
+
+
+def expected_edge(type_, kind="event", d=0):
+    """该类型的方向化均值收益 (期望维度, 20根); 样本不足/无记录返回 None。
+
+    d 兼容旧签名 (事件方向), 统一按 load_win_rates["dir_mean"] 口径 (已方向化:
+    空头类型做对=下跌的反向均值)。
+    """
+    rec = _winrate_rec(type_, kind=kind)
+    if rec is None:
+        return None
+    return rec.get("dir_mean")
+
+
+def _edge_baseline():
+    """全池方向化均值收益基线 (按样本量加权); 无样本返回 0。
+
+    与 load_win_rates 的 p0 同构: 跨 (kind,type) 用 n 加权, 作为期望维度的
+    "零收益基准" — 高于基线的类型在排序里加分, 低于/为负的减分。
+    """
+    rates = _winrate_rec
+    try:
+        from .signal_accuracy import load_win_rates as _lwr
+        rates = _lwr(20)
+    except Exception:
+        return 0.0
+    total, n = 0.0, 0
+    for key, rec in rates.items():
+        d = rec.get("dir_mean")
+        if d is None:
+            continue
+        total += d * int(rec.get("n", 0))
+        n += int(rec.get("n", 0))
+    return round(total / n, 6) if n else 0.0
+
+
+def apply_edge_adjust(cands):
+    """把「方向化均值期望」融合进候选: 为每个候选写 edge / edge_conf。
+
+    edge_conf = conf ± clamp((dir_mean - baseline) * EDGE_SCALE, ±EDGE_MAX_ADJ)
+    edge 保留方向化均值收益供展示。无期望样本 (类型样本不足) 的候选 edge=0,
+    edge_conf=conf (完全退化为原 conf 排序, 与旧行为一致)。
+    """
+    baseline = _edge_baseline()
+    out = []
+    for e in cands or []:
+        conf = max(1, int(e.get("conf", 0) or 0))
+        edge = expected_edge(e.get("type", ""), kind=e.get("kind", "event"))
+        if edge is None:
+            e["edge"] = 0.0
+            e["edge_conf"] = conf
+        else:
+            adj = max(-EDGE_MAX_ADJ, min(EDGE_MAX_ADJ, (edge - baseline) * EDGE_SCALE))
+            e["edge"] = round(float(edge), 6)
+            e["edge_conf"] = max(1, min(100, int(round(conf + adj))))
+        out.append(e)
+    return out
+
+
+def sort_candidates(cands):
+    """候选排序: 期望融合后的 edge_conf 降序 (同分按 code)。
+
+    供论文/模拟盘选股统一调用; 与旧版 conf 降序的最大差异:
+    类型单笔期望高时在排序中提前, 期望为负时被压后。
+    """
+    cands = apply_edge_adjust(cands)
+    cands.sort(key=lambda e: -(int(e.get("edge_conf") or e.get("conf", 0) or 0)))
+    return cands
 
 
 def _dedup(events, span: int = 8):

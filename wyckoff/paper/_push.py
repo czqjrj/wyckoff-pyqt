@@ -74,6 +74,11 @@ def _notify_trade(kind, **info):
             f"- 金额: {info.get('amount', '')}",
             f"- 时间: {info.get('ts', '')}",
         ]
+    elif kind == "verify":
+        # 实盘验证点告警 (见 paper/_verify.py): 只推送, 不改交易行为
+        title = "[模拟盘] 验证点告警"
+        lines = [f"> **{info.get('msg', '实盘验证点触发')}**"]
+        lines += [f"- {ln}" for ln in (info.get("lines") or [])]
     else:
         ret = info.get("ret")
         ret_txt = f"{ret * 100:+.2f}%" if isinstance(ret, (int, float)) else ""

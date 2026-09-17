@@ -25,7 +25,9 @@ _PAPER_DRIFT_SEEN = set()
 # 加载时把磁盘旧值一次性回迁到新校准默认 (见 load_settings)。落盘键名以 "_"
 # 开头, 不在同步白名单 (SK 枚举) 内, 故不参与跨设备同步, 也不会被 collect 当
 # tombstone。旧客户端/首装文件无此键 → 视为过期, 走一次回迁。
-PAPER_CALIBRATION_VERSION = 1
+# v1→v2: 生产参数对齐回测网格最优 — TAKE_PROFIT 15%→30%, TRAIL_BACK_PCT 8%→6%
+# (PROGRESS.md 网格 STOP=-4%·TP=+30%·trail=6% → +224.9%)。
+PAPER_CALIBRATION_VERSION = 2
 _CALIBRATION_VERSION_KEY = "_paper_calibration_version"
 
 # 推送凭据/开关等个人渠道键: 属用户配置而非校准参数, 不参与回迁与漂移告警。

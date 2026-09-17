@@ -426,7 +426,8 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
 
     返回 { (kind, type): {"n": 已评估数, "win": 原始方向命中占比(0~1),
     "shrunk": 贝叶斯收缩占比, "ci_lo"/"ci_hi": Wilson 95% CI,
-    "mean": 均收益, "p0": 全池基线} }。n<MIN_SHRUNK_N 的类型不入表。
+    "mean": 均收益, "dir_mean": 方向化均值收益 (做对方向的平均幅度, 期望维度),
+    "p0": 全池基线} }。n<MIN_SHRUNK_N 的类型不入表。
     shrunk 是校准用的主力值 (消除小样本噪声); win 保留原始口径供展示。
     方向化命中: 标称多头/中性 → ret>0 记命中; 标称空头 (event_dir/vsa_dir<0)
     → ret<0 记命中 (下跌才对)。
@@ -492,10 +493,15 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
             wins = sum(1 for v in s["rets"] if _hit(key[0], key[1], v))
             win = wins / s["n"]
             ci_lo, ci_hi = _wilson_ci(s["n"], wins)
+            # 方向化均值收益: 标称空头取 -ret (做对=下跌), 其余取原 ret ——
+            # "做对方向的平均幅度", 作为期望维度供候选按 edge 排序融合 (事件 ①)。
+            d = vsa_dir(key[1]) if key[0] == "vsa" else event_dir(key[1])
+            dir_rets = [v if d >= 0 else -v for v in s["rets"]]
             result[key] = {"n": s["n"], "win": round(win, 4),
                            "shrunk": round(_bayes_shrink(wins, s["n"], p0), 4),
                            "ci_lo": round(ci_lo, 4), "ci_hi": round(ci_hi, 4),
                            "mean": round(statistics.mean(s["rets"]), 6),
+                           "dir_mean": round(statistics.mean(dir_rets), 6),
                            "p0": round(p0, 4), "alpha0": PRIOR_ALPHA0}
         _WINRATE_CACHE[horizon] = result
         return result

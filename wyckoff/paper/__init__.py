@@ -25,6 +25,7 @@ import itertools
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 
 try:
@@ -91,6 +92,8 @@ from ._params import (
     PUSH_WXPUSHER_APP_TOKEN,
     PUSH_WXPUSHER_TOPIC_IDS,
     PUSH_WXPUSHER_UIDS,
+    QLIB_VETO_ENABLED,
+    QLIB_VETO_HI,
     REBALANCE,
     SLIP_BUY,
     SLIP_SELL,
@@ -138,6 +141,7 @@ from ._trading import (
     has_position,
     step,
 )
+from ._verify import _verification_check
 
 # 公开/再导出的符号: 供 sub._xxx 模块经 `import wyckoff.paper as paper` 跨模块调用,
 # 以及 UI/脚本 `from wyckoff.paper import ...`。声明在 __all__ 以消除 Ruff F401
@@ -148,6 +152,7 @@ __all__ = [
     "_check_conditions", "_find_pos", "_t1_blocked", "_create_position_conditions",
     "cancel_condition", "place_condition",
     "_notify_trade", "_push_dispatch", "_split_list",
+    "_verification_check",
     "_strategy_manager",
     "_new_state",
     "float_ret", "net_cost_rate",
@@ -236,6 +241,9 @@ def apply_paper_params(settings=None):
         "trail_back_pct": float(_get(S.Paper.TRAIL_BACK_PCT, TRAIL_BACK_PCT)),
         "trail_activate_pct": float(_get(S.Paper.TRAIL_ACTIVATE_PCT,
                                          TRAIL_ACTIVATE_PCT)),
+        # QLib 卖出否决 (试点): 主动性卖出前查 qlib 模型极强看多则否决一次
+        "qlib_veto": bool(_get(S.Paper.QLIB_VETO, QLIB_VETO_ENABLED)),
+        "qlib_veto_hi": float(_get(S.Paper.QLIB_VETO_HI, QLIB_VETO_HI)),
         # 弱市降仓过滤
         "weak_filter": bool(_get(S.Paper.WEAK_FILTER, WEAK_FILTER)),
         "weak_max_pos": max(1, int(_get(S.Paper.WEAK_MAX_POS, WEAK_MAX_POS))),
@@ -310,6 +318,8 @@ _CUR = {
     "trail_atr_mult": TRAIL_ATR_MULT,
     "trail_back_pct": TRAIL_BACK_PCT,
     "trail_activate_pct": TRAIL_ACTIVATE_PCT,
+    "qlib_veto": QLIB_VETO_ENABLED,
+    "qlib_veto_hi": QLIB_VETO_HI,
     "weak_filter": WEAK_FILTER,
     "weak_max_pos": WEAK_MAX_POS,
     "weak_index_code": WEAK_INDEX_CODE,
@@ -360,6 +370,43 @@ def _limit_blocked(code, side, df=None) -> bool:
         except Exception:
             return True
     return _mr_limit_blocked(df, side, code)
+
+
+def _qlib_veto_exit(st, pos):
+    """QLib 卖出否决 (试点, 默认关闭): 主动性卖出前查模型 prob_buy 是否极强看多。
+
+    语义 (与回测 scripts/paper_replay_bt.py --qlib-veto 一致): 若已训练 QLib 模型
+    对当前标的最新概率 ≥ qlib_veto_hi (0.60), 判定"极强看多" → 否决本次卖出一次
+    (打上 pos['qlib_veto_used'] 标记, 下一触发 bar 起不再否决, 防踏空不防黑天鹅)。
+
+    仅真实模型路径生效 (纳入因子/domain 特征推断); 模型未训练/数据不可用/样本侧
+    prob 缺失 → fail-open 返回 False (不否决)。止损/破位等风险保护卖出不调用本函数。
+    否决事实记入 st['meta']['qlib_veto_hits'] 供核查。返回是否否决本次卖出。
+    """
+    if not bool(_CUR.get("qlib_veto")):
+        return False
+    if pos.get("qlib_veto_used"):
+        return False
+    try:
+        from ..qlib_adapter import qlib_probe_live
+        probe = qlib_probe_live(str(pos["symbol"]), veto_hi=_CUR.get("qlib_veto_hi", 0.60))
+    except Exception:
+        return False
+    if not probe:
+        return False
+    veto, prob = probe
+    if not veto:
+        return False
+    pos["qlib_veto_used"] = True
+    try:
+        st.setdefault("meta", {}).setdefault("qlib_veto_hits", []).append({
+            "symbol": pos["symbol"], "day": time.strftime("%Y-%m-%d"),
+            "prob_buy": round(float(prob), 4)})
+    except Exception:
+        pass
+    logger.info("QLib 否决卖出: %s prob_buy=%.3f ≥ %.2f (第1次否决, 下次不再拦)",
+                pos["symbol"], prob, _CUR.get("qlib_veto_hi", 0.60))
+    return True
 
 # 强多头事件: 方向命中显著优于随机且可裸多落地 (见 docs/winrate_improve_eval.md §五)
 # 采用完整强梯队 {Spring,Shakeout,UTAD,LPSY,ST,LPS,SC} (沿 config.STRONG_TIER_TYPES),
@@ -667,6 +714,12 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
         except Exception:
             continue
     _record_equity(st, _day or None)
+    # 实盘验证点观测 (docs/execution_expectations.md): 只写 meta + 新触发项推送,
+    # 不改交易行为; 异常静默 (占位告警不应中断周期落盘)。
+    try:
+        _verification_check(st)
+    except Exception:
+        pass
     if not save_state(st):
         logger.error("run_cycle 落盘失败, 交易状态可能未持久化")
         st.setdefault("meta", {})["save_failed"] = True
@@ -734,7 +787,8 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
                                progress=progress, strategies=strategies)
     except Exception:
         cand = []
-    cand.sort(key=lambda e: (-int(e.get("conf", 0) or 0), e.get("code", "")))
+    cand.sort(key=lambda e: (-int(e.get("edge_conf") or e.get("conf", 0) or 0),
+                             e.get("code", "")))
     st["candidates"] = cand
     try:
         paper_log.log_scan(

@@ -112,6 +112,10 @@ class Paper(_Base):
     TRAIL_ACTIVATE_PCT = "paper_trail_activate_pct"
     # 追踪止损 ATR 缓冲: stop = 杆位*(1-止损) - atr_mult*ATR (仅追踪开启时生效)
     TRAIL_ATR_MULT = "paper_trail_atr_mult"
+    # QLib 卖出否决 (试点, 默认关): 主动性卖出 (止盈/移动止盈/到期) 前查 qlib 模型
+    # prob_buy, ≥ PAPER_QLIB_VETO_HI 则否决一次防踏空 (与回测 --qlib-veto 同口径)
+    QLIB_VETO = "paper_qlib_veto"
+    QLIB_VETO_HI = "paper_qlib_veto_hi"
     # 弱市过滤: 指数(上证)收盘<MA20 → 新开仓上限 WEAK_MAX_POS 且停用价值吸筹
     WEAK_FILTER = "paper_weak_filter"
     WEAK_MAX_POS = "paper_weak_max_pos"
@@ -327,9 +331,11 @@ DEFAULTS = {
     Paper.WEAK_MAX_POS: 1,
     Paper.WEAK_INDEX_CODE: "sh000001",
     Paper.TRAILING_STOP: True,
-    Paper.TRAIL_BACK_PCT: 0.08,
+    Paper.TRAIL_BACK_PCT: 0.06,
     Paper.TRAIL_ACTIVATE_PCT: 0.0,
     Paper.TRAIL_ATR_MULT: 0.0,
+    Paper.QLIB_VETO: False,
+    Paper.QLIB_VETO_HI: 0.60,
     Paper.ST_CONFIRM: True,
     Paper.REBALANCE: True,
     Paper.VA_WEIGHT: 0.6,
@@ -389,6 +395,8 @@ def _engine_paper_defaults():
         Paper.TRAIL_BACK_PCT: _p.TRAIL_BACK_PCT,
         Paper.TRAIL_ACTIVATE_PCT: _p.TRAIL_ACTIVATE_PCT,
         Paper.TRAIL_ATR_MULT: _p.TRAIL_ATR_MULT,
+        Paper.QLIB_VETO: _p.QLIB_VETO_ENABLED,
+        Paper.QLIB_VETO_HI: _p.QLIB_VETO_HI,
         Paper.MAX_DRAWDOWN: _p.MAX_DRAWDOWN_PCT,
         Paper.MAX_RISK_PCT: _p.MAX_RISK_PCT,
         Paper.MAX_SECTOR_CONC: _p.MAX_SECTOR_CONCENTRATION,

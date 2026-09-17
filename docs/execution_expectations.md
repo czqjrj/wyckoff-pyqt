@@ -10,9 +10,13 @@
 - 价值吸筹 (screener_value_accumulation): 底部整固+20根事件, 无 conf 门槛
 - 左侧买点 (long_buy_left): KIND_LEFT (st_bottom/lps/spring/spring_retest),
   买点自带 stop/target 出场, 不受大盘门禁
-- 全局: STOP_LOSS=3% / TAKE_PROFIT=15% / HOLD_BARS=20 / MAX_POS=3 /
-  COST=0.004; STRATEGY_ORDER = 纪律 > 价值 > 左侧 (fill_buy 策略级止损
-  VALUE_STOP_PCT=None, 沿用全局 3%)
+- 全局: STOP_LOSS=4% / TAKE_PROFIT=30% (移动止盈激活线) / TRAIL_BACK=6% /
+  TRAILING_STOP=开 / HOLD_BARS=20 / MAX_POS=3 / COST=0.004; STRATEGY_ORDER =
+  纪律 > 价值 > 左侧 (fill_buy 策略级止损 VALUE_STOP_PCT=None, 沿用全局 4%)
+
+> 参数口径已按回测网格最优对齐 (PROGRESS.md): 2026-09 校准 v2 起止盈 15%→30%、
+> 追踪回撤 8%→6% (STOP=-4%·TP=+30%·trail=6% → +224.9%)。旧 v1 磁盘值由
+> storage.py 校准回迁一次性纠正, 用户后续主动调优不再被覆盖。
 
 ## 实证汇总 (证据基础)
 
@@ -44,5 +48,9 @@
 - 连续 10 笔正期望失败 (胜率 <35%) 触发复核
 - 纪律/左侧成笔若出现"止损频繁且无大赢补偿" (盈亏比 <1.8), 复核事件口径
 - 大盘门禁触发频率若显著上升 (市场转熊), 维持低仓位或空仓
+
+> 上述验证点已落代码 (wyckoff/paper/_verify.py): run_cycle 每周期末自动观测,
+> 阈值与本节一致, 新触发项经微信推送一次 (幂等), 只告警不改交易行为;
+> QLib 卖出否决 (缺省关) 可对止盈/到期主动性卖出做一次否决 (止损永不)。
 
 *历史回放 (240分钟K线), 不构成投资建议。*

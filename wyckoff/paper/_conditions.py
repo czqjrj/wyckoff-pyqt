@@ -293,8 +293,11 @@ def _check_conditions(st, df_by_code):
             entry = float(pos["buy_px"])
             ret = last / entry - 1
             if kind == "take_profit" and ret >= c["pct"]:
-                _fire_condition(st, c, last, df, side="sell", pos=pos)
-                triggered += 1
+                # QLib 卖出否决 (试点): 止盈属主动性卖出, 模型极强看多时否决一次。
+                # 止损 (stop_loss) 属性下行保护, 永不被否决。
+                if not paper._qlib_veto_exit(st, pos):
+                    _fire_condition(st, c, last, df, side="sell", pos=pos)
+                    triggered += 1
             elif kind == "stop_loss" and ret <= -c["pct"]:
                 _fire_condition(st, c, last, df, side="sell", pos=pos)
                 triggered += 1
@@ -318,8 +321,10 @@ def _check_conditions(st, df_by_code):
                 peak = last
             c["peak"] = peak
             if peak and last <= peak * (1 - c["pct"]):
-                _fire_condition(st, c, last, df, side="sell", pos=pos)
-                triggered += 1
+                # 移动止盈属主动性卖出: QLib 极强看多时否决一次 (防踏空)
+                if not paper._qlib_veto_exit(st, pos):
+                    _fire_condition(st, c, last, df, side="sell", pos=pos)
+                    triggered += 1
     return triggered
 
 
