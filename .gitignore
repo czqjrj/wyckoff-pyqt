@@ -77,3 +77,5 @@ debian/
 # ── 回测/回放运行产物 (缓存/独立状态/行情库, 本地生成勿入库) ──
 /data/
 /buypoint_backtest_data/
+# 板块强度回填的东财板块日线磁盘缓存 (本地生成, 勿入库)
+/wyckoff_board_klines.json
