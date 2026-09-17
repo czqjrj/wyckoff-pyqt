@@ -9,6 +9,8 @@
   当前快照对刚发生的信号因果成立, 历史事件填充会前视泄漏 → 保持缺省)。
 - snapshot_board_strength(): 把当日全板块强度写成周期性快照 (wx_board_snap.json),
   供回填层用 strength_at() 按信号日期就近取当时真实强度 (P4 无偏采样)。
+- backfill_board_strength_series(): 用板块历史日线(东财)回填历史周频快照,
+  使 strength_at() 在回测区间内也取得到可信分位 (板块门禁免于空转)。
 """
 import json
 import os
@@ -228,6 +230,191 @@ def strength_at(board_name, ts, max_gap_days=45):
         return None
     v = best[1].get(str(board_name).strip())
     return None if v is None else float(v)
+
+
+# ── P4.2: 历史回填 (板块强度无偏采样补库) ──
+# 板块门禁在历史回测(2023-06~2026-08)中近乎空转, 因 wx_board_snap.json 仅自
+# 2026-08 起有快照; strength_at 对更早信号取不到分位 → fail-open。本节回填:
+#   数据源: 东财 push2his 板块日线 (secid=90.BKxxxx, 历史日线 OHLCV, 板块映射
+#           _load_board_map 与实盘抓取名同源, f127二级行业可精确命中)。
+#   强度代理: 板块级近 _BACKFILL_WIN 根量价净流入占比 Σ(C-O)*V / Σ|C-O|*V
+#             (与回测个股资金流门禁同构), 逐日对全部板块求截面分位 —— 即实盘
+#             "当日主力净流入排名"的因果代理, 零前视。
+#   落盘: 每周最后一个交易日 1 条快照 {ts, strengths}, 与实盘快照按 ts 合并。
+#   抓取策略: 东财对高频连续请求会 IP 级临时限流 (RemoteDisconnected), 故按
+#   节流串行抓取 + 原始日线磁盘缓存 (中断可续), 失败板 fail-soft 跳过。
+_BACKFILL_WIN = 5          # 净流入代理回看窗口 (根)
+_BACKFILL_MIN_BOARDS = 30  # 当日有效板块数低于此不生成该周快照 (同 _rank_to_pct)
+_BACKFILL_THROTTLE = 0.6   # 相邻板请求最小间隔 (秒); 东财对持续 >4req/s 会间歇断连
+_BACKFILL_FAIL_GAP = 3.0   # 单板失败后额外退避 (秒), 降低被断连概率
+_BACKFILL_MAX_TRY = 3      # 单板重试次数
+_BACKFILL_CACHE_FILE = os.path.join(DATA_DIR, "wyckoff_board_klines.json")
+
+_BF_LAST_REQ = {"ts": 0.0}
+
+
+def _fetch_board_daily(board_code, beg):
+    """板块BK码 → 历史日线 [(day, open, close, volume), ...] 或 None (失败)。
+
+    节流: 相邻请求至少 _BACKFILL_THROTTLE 秒; 失败退避 _BACKFILL_FAIL_GAP 后
+    重试 (最多 _BACKFILL_MAX_TRY 次)。cache_fail=False: 不写东财负缓存, 限流
+    恢复后不会被残留的失败记录短路。
+    """
+    for attempt in range(_BACKFILL_MAX_TRY):
+        with _LOCK:
+            wait = _BF_LAST_REQ["ts"] - (time.time() - _BACKFILL_THROTTLE)
+            if wait > 0:
+                time.sleep(wait)
+            _BF_LAST_REQ["ts"] = time.time()
+        r = _get("https://push2his.eastmoney.com/api/qt/stock/kline/get",
+                 {"secid": f"90.{board_code}", "klt": "101", "fqt": "1",
+                  "beg": beg, "end": "20500101", "lmt": "100000",
+                  "fields1": "f1,f2,f3,f4,f5,f6",
+                  "fields2": "f51,f52,f53,f54,f55,f56"},
+                 {"User-Agent": "Mozilla/5.0",
+                  "Referer": "https://quote.eastmoney.com/"},
+                 retries=1, cache_fail=False)
+        rows = []
+        if r is not None:
+            try:
+                kl = ((r.json().get("data") or {}).get("klines")) or []
+            except (ValueError, KeyError):
+                kl = []
+            for line in kl:
+                f = line.split(",")
+                if len(f) < 6:
+                    continue
+                rows.append((f[0], float(f[1]), float(f[2]), float(f[5])))
+        if rows:
+            return rows
+        if attempt < _BACKFILL_MAX_TRY - 1:
+            time.sleep(_BACKFILL_FAIL_GAP + attempt * 2)
+    return None
+
+
+def _load_kline_cache():
+    try:
+        with open(_BACKFILL_CACHE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_kline_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(_BACKFILL_CACHE_FILE), exist_ok=True)
+        atomic_write_json(_BACKFILL_CACHE_FILE, cache)
+    except Exception:
+        pass
+
+
+def backfill_board_strength_series(start="2020-01-01", max_boards=None,
+                                   progress_cb=None, write=True):
+    """回填 wx_board_snap.json 的历史板块强度周频快照 (与实盘快照合并)。
+
+    - 逐板块拉东财历史日线 (beg 留 30 天热身后延), 按 _BACKFILL_WIN 根量价净
+      流入占比代理强度, 逐日求跨板块截面分位 (1=最强, 语义同实盘净流入排名);
+    - 每周取最后一个交易日落 1 条 {ts, strengths}, 与现有快照按 ts 合并去重,
+      经 _SNAP_MAX 保留最近窗后原子写回 BOARD_SNAP_FILE (write=False 时只计算);
+    - 原始日线缓存在 _BACKFILL_CACHE_FILE, 中断后重跑只补抓失败板 (幂等);
+    - 东财限流/板块失败按 fail-soft 跳过, 计数在返回 stats 暴露。
+
+    返回 dict: ok / boards_fetched / boards_failed / weeks_written /
+    snapshots_total / first_ts / last_ts / error。
+    """
+    from .fundamental import _load_board_map
+
+    bmap = _load_board_map()
+    if not bmap:
+        return {"ok": False, "error": "板块映射表为空"}
+    items = sorted(bmap.items())
+    if max_boards:
+        items = items[:max_boards]
+
+    beg = (pd.Timestamp(start) - pd.Timedelta(days=30)).strftime("%Y%m%d")
+    cache = _load_kline_cache()
+    fresh_key = f"raw|{beg}"
+    cached_ok = cache.get("_meta", {}).get("beg") == beg
+
+    fetched = failed = 0
+    per_board = {}
+    n_total = len(items)
+    last_saved = 0
+    try:
+        for i, (name, code) in enumerate(items):
+            rec = cache.get(code) if cached_ok else None
+            if rec is None:
+                rec = _fetch_board_daily(code, beg)
+                if rec is not None:
+                    cache[code] = rec
+                    fetched += 1
+                else:
+                    failed += 1
+            else:
+                fetched += 1  # 命中磁盘缓存, 免重抓
+            if rec is not None:
+                per_board[name] = rec
+            # 增量落盘: 被杀进程/断网中断也能从缓存续跑
+            if fetched - last_saved >= 20:
+                _save_kline_cache(cache)
+                last_saved = fetched
+                if progress_cb:
+                    progress_cb(i + 1, n_total, fetched)
+    except BaseException:
+        _save_kline_cache(cache)  # 中断兜底, 保留已抓部分
+        raise
+    if cache.get("_meta", {}).get("beg") != beg:
+        cache["_meta"] = {"beg": beg, "fetched_at": int(time.time())}
+    _save_kline_cache(cache)
+    if not per_board:
+        return {"ok": False, "error": "板块日线全部拉取失败",
+                "boards_fetched": 0, "boards_failed": failed,
+                "weeks_written": 0}
+
+    ratios = []
+    for name, rows in per_board.items():
+        df = pd.DataFrame(rows, columns=["day", "open", "close", "volume"])
+        df["day"] = pd.to_datetime(df["day"])
+        df = df.set_index("day").sort_index()
+        mv = (df["close"] - df["open"]) * df["volume"]
+        av = (df["close"] - df["open"]).abs() * df["volume"]
+        num = mv.rolling(_BACKFILL_WIN, min_periods=_BACKFILL_WIN).sum()
+        den = av.rolling(_BACKFILL_WIN, min_periods=_BACKFILL_WIN).sum()
+        ratios.append((num / den.mask(den.eq(0))).clip(-1.0, 1.0).rename(name))
+    wide = pd.concat(ratios, axis=1)          # 交易日 × 板块
+    # 截面分位, 高=强; 与实盘 _rank_to_pct 同语义 (最强=1.0, 最弱=0.0)。
+    # pandas 3.x 的 rank(pct=True) 分母是 n (最小=1/n), 故手动 (rank-1)/(cnt-1)。
+    cnt = wide.notna().sum(axis=1).clip(lower=2)
+    pct = (wide.rank(axis=1, method="average") - 1).div(cnt - 1, axis=0)
+
+    snaps = []
+    for wk, grp in pct.groupby(pct.index.to_period("W")):
+        sub = grp.dropna(how="all")
+        if not len(sub):
+            continue
+        row = sub.iloc[-1]                    # 该周最后一个交易日
+        if int(row.notna().sum()) < _BACKFILL_MIN_BOARDS:
+            continue
+        strengths = {k: round(float(v), 4) for k, v in row.items()
+                     if pd.notna(v)}
+        snaps.append({"ts": int(pd.Timestamp(sub.index[-1]).timestamp()),
+                      "strengths": strengths})
+    if not snaps:
+        return {"ok": False, "error": "无有效周快照生成", "boards_fetched": fetched,
+                "boards_failed": failed, "weeks_written": 0}
+
+    existing = {s["ts"]: s for s in _load_snaps()}
+    for s in snaps:
+        existing.setdefault(s["ts"], s)
+    merged = sorted(existing.values(), key=lambda s: s["ts"])
+    if write:
+        os.makedirs(os.path.dirname(BOARD_SNAP_FILE), exist_ok=True)
+        atomic_write_json(BOARD_SNAP_FILE, merged[-_SNAP_MAX:])
+
+    return {"ok": True, "boards_fetched": fetched, "boards_failed": failed,
+            "weeks_written": len(snaps), "snapshots_total": len(merged),
+            "first_ts": snaps[0]["ts"], "last_ts": snaps[-1]["ts"]}
 
 
 def main(argv=None):
