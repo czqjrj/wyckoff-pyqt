@@ -205,14 +205,12 @@ def _eval_against(df, idx, rec):
     return changed
 
 
-def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=None,
-                   name="", cooldown_bars=15):
-    """记录一次分析中检测到的全部信号 (事件 + VSA), 并立即评估已出未来行情的部分。
+def _build_records(df, symbol, code, scale, datalen, events=None, vsa_signals=None,
+                   name=""):
+    """检测(若省略)并构建事件/VSA 记录 dict 列表, 不含去重/落盘。
 
-    events / vsa_signals 省略时内部重新检测 (find_pivots + detect_all + vsa_classify)。
-    同 symbol+scale+kind+type+date 视为同一信号, 去重 (已评估的保留原结果)。
-    cooldown_bars: 同一标的同一类型信号在 N 根内不重复新建记录 (如连续多日 NS/ND
-    洪水式信号只留一条代表), 防止同类型信号在回测统计里刷屏。
+    与 record_signals 共享同一套"弱类型剔除 / VSA 噪声剔除 / conf 实证天花板"
+    口径, 供批量入库 (record_events_batch) 复用, 避免逐股全量读写大 JSON。
     """
     if events is None or vsa_signals is None:
         pivots = find_pivots(df, order=6)
@@ -287,6 +285,61 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
                          conf=vconf, price=0.0, created_ts=time.time(),
                          last_eval_ts=0, status="pending", eval_fails=0, results={},
                          features=s.get("features")))
+    return recs
+
+
+def _merge_and_eval(existing, recs, df, cooldown_bars=15):
+    """把 recs 合并进 existing (原地 {_key: rec}) 并立即评估已出未来行情的部分。
+
+    同 symbol+scale+kind+type+date 视为同一信号, 已评估的保留原结果;
+    冷却窗内同标的同类型未评估记录合并更新。返回新增记录数。
+    """
+    n_new = 0
+    for rec in recs:
+        key = _key(rec)
+        old = existing.get(key)
+        if old is not None:
+            # 已评估的保留原结果, 仅更新未评估快照
+            if old.get("results"):
+                continue
+            existing[key] = rec
+            continue
+        # 冷却窗去重: 同标的+同类型 在 cooldown_bars 根内有未评估记录 → 合并更新
+        if cooldown_bars > 0 and not old:
+            dup = _cooldown_dup(existing, rec, df, cooldown_bars)
+            if dup is not None:
+                existing[dup] = _merge_cooldown(existing[dup], rec)
+                continue
+        existing[key] = rec
+        n_new += 1
+    # 立即评估 (无需等 cron): 历史信号在当次 df 内已有未来行情
+    for rec in recs:
+        idx = _locate(df, rec["date"])
+        if idx is not None:
+            _eval_against(df, idx, rec)
+    # 把评估结果同步回存储记录:
+    # - 新建/替换的记录与 rec 是同一对象, 评估已就地生效;
+    # - 同键保留的旧记录 (已有结果被跳过的) 用新评估刷新 (口径与数据更新)。
+    for rec in recs:
+        target = existing.get(_key(rec))
+        if target is not None and target is not rec and rec.get("results"):
+            target["results"] = rec["results"]
+            target["status"] = rec["status"]
+            target["waiting"] = rec.get("waiting", False)
+    return n_new
+
+
+def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=None,
+                   name="", cooldown_bars=15):
+    """记录一次分析中检测到的全部信号 (事件 + VSA), 并立即评估已出未来行情的部分。
+
+    events / vsa_signals 省略时内部重新检测 (find_pivots + detect_all + vsa_classify)。
+    同 symbol+scale+kind+type+date 视为同一信号, 去重 (已评估的保留原结果)。
+    cooldown_bars: 同一标的同一类型信号在 N 根内不重复新建记录 (如连续多日 NS/ND
+    洪水式信号只留一条代表), 防止同类型信号在回测统计里刷屏。
+    """
+    recs = _build_records(df, symbol, code, scale, datalen,
+                          events=events, vsa_signals=vsa_signals, name=name)
     if not recs:
         return 0
     # 单次事务: 去重合并 + 立即评估 + 落盘都在一把锁内完成。
@@ -295,41 +348,49 @@ def record_signals(df, symbol, code, scale, datalen, events=None, vsa_signals=No
     with _LOCK:
         records = load_signals()
         existing = {_key(r): r for r in records}
-        n_new = 0
-        for rec in recs:
-            key = _key(rec)
-            old = existing.get(key)
-            if old is not None:
-                # 已评估的保留原结果, 仅更新未评估快照
-                if old.get("results"):
-                    continue
-                existing[key] = rec
-                continue
-            # 冷却窗去重: 同标的+同类型 在 cooldown_bars 根内有未评估记录 → 合并更新
-            if cooldown_bars > 0 and not old:
-                dup = _cooldown_dup(existing, rec, df, cooldown_bars)
-                if dup is not None:
-                    existing[dup] = _merge_cooldown(existing[dup], rec)
-                    continue
-            existing[key] = rec
-            n_new += 1
-        # 立即评估 (无需等 cron): 历史信号在当次 df 内已有未来行情
-        for rec in recs:
-            idx = _locate(df, rec["date"])
-            if idx is not None:
-                _eval_against(df, idx, rec)
-        # 把评估结果同步回存储记录:
-        # - 新建/替换的记录与 rec 是同一对象, 评估已就地生效;
-        # - 同键保留的旧记录 (已有结果被跳过的) 用新评估刷新 (口径与数据更新)。
-        for rec in recs:
-            target = existing.get(_key(rec))
-            if target is not None and target is not rec and rec.get("results"):
-                target["results"] = rec["results"]
-                target["status"] = rec["status"]
-                target["waiting"] = rec.get("waiting", False)
+        n_new = _merge_and_eval(existing, recs, df, cooldown_bars)
         save_signals(list(existing.values()))
     invalidate_win_rate_cache()
     return n_new
+
+
+def record_events_batch(items, cooldown_bars=15):
+    """批量记录一次扫描产生的强事件信号, 合并 + 评估 + 落盘只做一次。
+
+    用途: 实盘全市场扫描 (~3100 只主板) 若逐股调用 record_signals, 每次都要
+    全量读写 wx_signal_accuracy.json (数 MB), 会把扫描周期拖垮。故在
+    pick_candidates 内把带强事件的标的积累起来, 用本函数一次性入库, 把统计
+    基座从"只覆盖自选股"扩展到真实扫描宇宙 (消除选择偏差)。
+
+    items: 形如 (df, symbol, code, scale, datalen, events, name) 或
+           (df, symbol, code, scale, datalen, events, vsa_signals, name) 的元组。
+           events / vsa_signals 可省略 (None 触发内部重检; 传 [] 表示跳过该维度)。
+    返回 {"added": 新增记录数, "evaluated": 完成评估的记录数}。
+    """
+    stats = {"added": 0, "evaluated": 0}
+    batch = []
+    for it in items:
+        if len(it) == 7:
+            df, symbol, code, scale, datalen, events, name = it
+            vsa_signals = []
+        else:
+            df, symbol, code, scale, datalen, events, vsa_signals, name = it
+        recs = _build_records(df, symbol, code, scale, datalen,
+                              events=events, vsa_signals=vsa_signals, name=name)
+        if recs:
+            batch.append((df, recs))
+    if not batch:
+        return stats
+    with _LOCK:
+        records = load_signals()
+        existing = {_key(r): r for r in records}
+        for df, recs in batch:
+            stats["added"] += _merge_and_eval(existing, recs, df, cooldown_bars)
+            stats["evaluated"] += sum(
+                1 for r in recs if r.get("status") == "done" and r.get("results"))
+        save_signals(list(existing.values()))
+    invalidate_win_rate_cache()
+    return stats
 
 
 # ── 评估 ──

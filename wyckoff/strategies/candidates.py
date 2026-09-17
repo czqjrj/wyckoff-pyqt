@@ -170,7 +170,7 @@ CANDIDATE_PRODUCERS = {
 
 def scan_individual(code, df=None, min_conf=90, gates_ok=None,
                     name="", event_types=None, strategies=None,
-                    st_confirm=False):
+                    st_confirm=False, events_out=None):
     """对单只股票按优先序产出模拟盘候选 (纪律→价值吸筹→左侧买点)。
 
     这是模拟盘选股在管理器中的唯一实现; paper.py 不再内置任何选股逻辑。
@@ -183,6 +183,9 @@ def scan_individual(code, df=None, min_conf=90, gates_ok=None,
     strategies: 可选策略 key 子集 (如 ("long_buy_left",)); None/空表示全策略
                 按 STRATEGY_ORDER 并线。用于「单策略扫描」模式, 避免优先序
                 掩盖低优先级策略的候选。
+    events_out: 可选 sink dict ({"evs": events, "piv": pivots})。传入时把本次
+                检测出的全部事件(含 conf, detect_all 已校准)回传给调用方,
+                供选股之外的无偏样本入库 (实盘扫描全覆盖), 与候选结果解耦。
     返回: 候选 dict (含 "gated": 是否受板块/资金流门禁管束) 或 None。
     """
     # 数据源/指标模块在调用时按属性解析 (单测会 monkeypatch 模块属性),
@@ -200,6 +203,9 @@ def scan_individual(code, df=None, min_conf=90, gates_ok=None,
         return None
     piv = find_pivots(df, order=6)
     evs = detect_all(df, piv)
+    if events_out is not None:
+        events_out["evs"] = evs
+        events_out["piv"] = piv
     market_ok = bool(gates_ok[0] if gates_ok else True)
     ctx = {
         "symbol": symbol,

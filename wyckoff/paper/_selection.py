@@ -2,10 +2,18 @@
 
 import logging
 import os
+import threading
 
 import wyckoff.paper as paper
 
 logger = logging.getLogger(__name__)
+
+# 扫描样本入库积累器: 全市场扫描时每只股票的完整强事件(含 conf)与 df 在此暂存,
+# 整个扫描周期结束后经 record_events_batch 一次性写入 wx_signal_accuracy,
+# 使信号统计基座覆盖真实扫描宇宙 (而非仅自选股), 消除选择偏差。线程池内
+# 多 worker 并发 append 由锁保护; 失败无害 (下次扫描会继续补)。
+_SCAN_EVENTS_ACCUM = []
+_SCAN_EVENTS_LOCK = threading.Lock()
 
 # ── 选股: 全市场自动筛选并自动生成条件单 ─────────────────────
 # ── 三重共振纪律硬门禁 (统一数据源见 discipline.py) ──
@@ -184,6 +192,45 @@ def _mainboard_universe(max_codes=6000):
     return [c for c in universe if is_main_board(c)]
 
 
+def _collect_scan_events(df, code, name, cand, eo):
+    """把单只扫描股票检测出的强事件积累进批处理队列 (供扫描末期一次性入库)。
+
+    只积累"可入池口径"的标的 (跳过 ST/退市/新股等低质池, 与候选投资域一致),
+    避免低质标的把统计基座带到不可交易样本。events_out 缺失 (如测试假管理器)
+    或该股无事件时零成本跳过。df 引用保留到批量入库时用于立即评估未来收益。
+    """
+    evs = (eo or {}).get("evs")
+    if not evs:
+        return
+    if _is_low_quality(code, price=None, name=name):
+        return
+    with _SCAN_EVENTS_LOCK:
+        _SCAN_EVENTS_ACCUM.append(
+            (df, code, str(code)[-6:], 240, int(len(df)), evs, [], name))
+
+
+def _flush_scan_events():
+    """把本次扫描积累的强事件一次性写入 wx_signal_accuracy (单次落盘)。
+
+    幂等: 空队列直接返回; 失败记日志不抛出 (扫描主流程不因统计入库失败中断)。
+    """
+    if not _SCAN_EVENTS_ACCUM:
+        return 0
+    items = []
+    with _SCAN_EVENTS_LOCK:
+        items, _SCAN_EVENTS_ACCUM[:] = _SCAN_EVENTS_ACCUM[:], []
+    try:
+        from ..signal_accuracy import record_events_batch
+        st = record_events_batch(items)
+        logger.info("扫描样本入库: 标的 %d, 新增信号 %d, 已评估 %d",
+                    len(items), st.get("added", 0), st.get("evaluated", 0))
+        return st.get("added", 0)
+    except Exception as e:
+        from .._log import log_exc
+        log_exc(f"record_events_batch({len(items)} 标的) 失败", e)
+        return 0
+
+
 def pick_candidates(universe=None, max_codes=6000, min_conf=None,
                     cancel_event=None, progress=None, skip_gates=False,
                     strategies=None):
@@ -265,11 +312,14 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             m = paper._strategy_manager()
             if m is None:
                 return code, None, None
+            eo = {}  # scan_individual 回传的检测事件, 供无偏样本入库 (与候选解耦)
             cand = m.scan_individual(
                 code, df, min_conf=min_conf,
                 gates_ok=(market_ok, _market_reason), name=name,
                 event_types=paper.LONG_EVENT_TYPES, strategies=strategies,
-                st_confirm=paper._CUR.get("st_confirm", True))
+                st_confirm=paper._CUR.get("st_confirm", True),
+                events_out=eo)
+            _collect_scan_events(df, code, name, cand, eo)
             if cand is None:
                 return code, None, None
             cand["code"] = code
@@ -371,6 +421,8 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     # conf 排序融合「方向化均值期望」: 单笔期望高的类型在排序中提前,
     # 期望为负的类型被压后 (edge_conf = conf ± 期望偏离映射), 见 events.sort_candidates。
     out = sort_candidates(out)
+    # 扫描样本统一入库 (一次落盘): 让 wx_signal_accuracy 覆盖真实扫描宇宙。
+    _flush_scan_events()
     return out
 
 
