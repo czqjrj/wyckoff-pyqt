@@ -68,3 +68,35 @@
 - 单次: `python scripts/paper_replay_bt.py --stop 0.04 --tp 0.30 --conf 100`
 - 产品口径: `python scripts/paper3_backtrader_bt.py --stop 0.04 --tp 0.30 --trail 0.06`
 - QLib 否决: `python scripts/paper_replay_bt.py --qlib-veto --qlib-veto-hi 0.60`
+
+---
+
+# 进度记录：5.2 多周期共振门 + 事件+VSA 双因 (2026-09-18)
+
+## 多周期共振门 (ENTRY_HTF_GATE) — ✅ 已证伪, 默认关闭
+- survey `scripts/htf_gate_survey.py` (n=2419 强多头事件, 本地缓存回放, 无前视):
+  周/月线合并偏空组命中率 68.6%(740条) **不低于**非偏空组 67.2%(320条),
+  均值收益亦持平 —— 弹簧/震仓本就诞生于短期超跌环境, 高周期"偏空"不构成反向;
+- fail-open 会拦下 30.6% 样本 (压线验收), fail-close 拦下 86.8% 严重过度。
+- **落地**: `entries.ENTRY_HTF_GATE=False` 默认关闭, 保留实现+开关供未来口径重测;
+  `multitime.htf_direction` 收敛为融合/入场两处唯一实现 (防漂移);
+  `entries._scan_one` 顺带修复宏观因子污染 bug (板块强度/资金流原被首股写进共享
+  macro_ctx 污染整批, 改为标的级就地计算)。
+- 测试: `tests/test_entries_htf.py` (门开关/偏空拦截/偏多放行/fail-open 两档/单源收敛)。
+
+## 事件+VSA 双因策略 (STRATEGY_EVENT_VSA, paper_enable_event_vsa) — ✅ 实现, 回测证伪, 默认关
+- 口径: 强多头事件 conf≥85 ∧ 高价值VSA标签 {CHOC,DEM,SUP,TEST,SPR,SC} ∧ vr≥1.5 ∧
+  与事件共时 ≤4 根; 独立赛道不受大盘门禁, 兜底最低优先
+  (`wyckoff/strategies/candidates.event_vsa_candidate`)。
+- 回测 (paper_priority_bt.py --event-vsa, 修复 evsa_on 未传入 replay_once 的断链):
+  - 24 白马池: evsa 仅 4 笔, 25% 胜 / +0.0% 均值;
+  - 133 只抽样池: evsa 5 笔, 0% 胜 / -6.3% 均值 —— 两池均不增厚, 维持默认停用。
+- 落地: `_params`+`config`+`settings_keys`+`_conditions`/`_selection` 开关联动,
+  UI 策略概览跟随, 候选层面兜底剔除; 测试 `tests/test_candidates_event_vsa.py` +
+  `tests/test_paper_account.py` 开关两档。
+- 仍待办: 三道硬门禁历史快照回测 / 事件集·仓位分层微调 (同上期)。
+
+## 续跑入口
+- HTF 门重测: `python scripts/htf_gate_survey.py` (需改 `entries.ENTRY_HTF_GATE=True`)
+- 事件+VSA 回测: `python scripts/paper_priority_bt.py --event-vsa [--pool-size N]`
+- 事件+VSA 口径调优: `wyckoff/strategies/constants.py` EVENT_VSA_MIN_CONF/MIN_VR/CO_WINDOW/HIGH_LABELS
