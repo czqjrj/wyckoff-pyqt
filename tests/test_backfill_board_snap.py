@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
 """板块强度历史回填 (chain.backfill_board_strength_series) 专项测试。
 
 网络与磁盘全部打桩: 合成板块日线验证周频快照生成 / 截面分位 / 合并幂等 /
 fail-soft, 以及回填后 strength_at 能取到历史分位 (板块门禁不再空转)。
 """
 import json
-import os
 
 import pytest
 

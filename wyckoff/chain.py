@@ -334,7 +334,6 @@ def backfill_board_strength_series(start="2020-01-01", max_boards=None,
 
     beg = (pd.Timestamp(start) - pd.Timedelta(days=30)).strftime("%Y%m%d")
     cache = _load_kline_cache()
-    fresh_key = f"raw|{beg}"
     cached_ok = cache.get("_meta", {}).get("beg") == beg
 
     fetched = failed = 0

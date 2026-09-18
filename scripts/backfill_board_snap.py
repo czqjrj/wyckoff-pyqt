@@ -24,7 +24,7 @@ from wyckoff import chain  # noqa: E402
 
 
 def _verify():
-    from wyckoff.chain import BOARD_SNAP_FILE, _load_snaps, strength_at
+    from wyckoff.chain import _load_snaps, strength_at
     from wyckoff.fundamental import _load_board_map
 
     snaps = _load_snaps()
