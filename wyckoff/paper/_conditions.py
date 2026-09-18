@@ -5,7 +5,11 @@ import time
 import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
-from ..strategies.constants import STRATEGY_LONG_LEFT, STRATEGY_VALUE_ACC
+from ..strategies.constants import (
+    STRATEGY_EVENT_VSA,
+    STRATEGY_LONG_LEFT,
+    STRATEGY_VALUE_ACC,
+)
 from ._params import SLIP_SELL
 
 # ── 条件单 (价格触发 / 止盈止损 / 追踪止损) ─────────────────
@@ -79,6 +83,7 @@ def _apply_auto_conditions(st, cand, weak=False):
     seen = {}
     va_off = not paper._CUR.get("enable_va", True)
     long_off = not paper._CUR.get("enable_long_left", True)
+    vsa_off = not paper._CUR.get("enable_event_vsa", True)
     for c in conds:
         if c.get("kind") != "buy_price" or c.get("status") != "active":
             continue
@@ -92,6 +97,11 @@ def _apply_auto_conditions(st, cand, weak=False):
             c["status"] = "cancelled"
             c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
             c["note"] = "停用威科夫左侧买点, 取消入场条件单"
+            continue
+        if vsa_off and c.get("strategy") == STRATEGY_EVENT_VSA:
+            c["status"] = "cancelled"
+            c["cancelled_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            c["note"] = "停用事件+VSA, 取消入场条件单"
             continue
         if code in held:
             c["status"] = "cancelled"

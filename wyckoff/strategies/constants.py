@@ -18,6 +18,18 @@ SPRING_CONFIRM_WINDOW = 8
 STRATEGY_DISCIPLINE = "paper_discipline_bull"
 STRATEGY_VALUE_ACC = "screener_value_accumulation"
 STRATEGY_LONG_LEFT = "long_buy_left"
+# 事件 + 高价值 VSA 双因共振 (策略2, 独立赛道): 强多头事件 ∧ 高价值VSA确认
+STRATEGY_EVENT_VSA = "screener_event_vsa"
+
+# 事件+VSA 策略: 高价值 VSA 标签集 (强势需求/性质变化/二次测试等吸筹期确认,
+# 源自 wyckoff_backtrader_strategy.py 策略2 口径, 收敛为代码库 VSA 合法标签)
+EVENT_VSA_HIGH_LABELS = frozenset({"CHOC", "DEM", "SUP", "TEST", "SPR", "SC"})
+# VSA 放量门: 高价值标签须 vr ≥ 该值才构成确认 (音量不济的标签语义打折扣)
+EVENT_VSA_MIN_VR = 1.5
+# 事件 conf 下限 (双因确认比 discipline 的 conf≥90 略松, 由 VSA 确认补强)
+EVENT_VSA_MIN_CONF = 85
+# VSA 信号与强事件的共时窗口 (根): 超出该窗口属先后不同行情, 不作共振确认
+EVENT_VSA_CO_WINDOW = 4
 
 # 价值吸筹/候选池低质股票过滤 (北交所/ST·退市/低价 -> 排除)
 VA_EXCLUDE_BJ = True

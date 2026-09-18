@@ -4,8 +4,9 @@
   - 手动执行周期 (run_cycle) 与 定时自动执行周期 (30/15 分钟), 后台线程避免卡 UI。
   - 右侧策略概览按当前启用的策略 (默认 Spring-only) 并行统计。
   - 数据页签: 持仓 / 已平仓 / 候选 / 订单, 顶部账户概览 + 收益统计。
-  策略启停由设置键控制: paper_enable_long_left / paper_enable_va (默认均关,
-  即仅纪律)。通过设置键重新启用后, 扫描模式与概览会自动跟随。
+  策略启停由设置键控制: paper_enable_long_left / paper_enable_event_vsa /
+  paper_enable_va (默认均关, 即仅纪律)。通过设置键重新启用后, 扫描模式与
+  概览会自动跟随。
 """
 
 from PyQt6.QtCore import Qt, QThread, QTime, QTimer, pyqtSignal
@@ -183,10 +184,12 @@ def _strat_cn(s):
 
 # ── 扫描/策略 (活跃策略 + 动态扫描模式) ────────────────────
 # 活跃策略 = 策略管理器注册顺序 且经过设置键启停过滤
-#   paper_enable_long_left / paper_enable_va 默认 False → 现网仅 Spring-only
+#   paper_enable_long_left / paper_enable_event_vsa / paper_enable_va 默认 False
+#   → 现网仅 Spring-only
 def _active_order():
     from wyckoff.paper import _CUR as _PC
     gates = {"long_buy_left": "enable_long_left",
+             "screener_event_vsa": "enable_event_vsa",
              "screener_value_accumulation": "enable_va"}
     out = []
     for key in _STRAT_ORDER:
@@ -486,7 +489,7 @@ class PaperWindow(QDialog):
             self.cb_scan_mode.addItem(label)
         self.cb_scan_mode.setToolTip(
             "扫描策略随当前启用的策略自动生成\n"
-            "默认 (paper_enable_long_left/paper_enable_va=关): 仅纪律扫描\n"
+            "默认 (paper_enable_long_left/event_vsa/va=关): 仅纪律扫描\n"
             "重新启用作废策略后会自动出现对应选项")
         hb_scan.addWidget(self.cb_scan_mode)
 

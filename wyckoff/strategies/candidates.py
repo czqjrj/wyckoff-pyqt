@@ -10,9 +10,14 @@ scan_individual 仅按 market_ok 预判做拦截, 与并行的 paper 口径一�
 
 from wyckoff.strategies.constants import (
     DISCIPLINE_EVENT_WINDOW,
+    EVENT_VSA_CO_WINDOW,
+    EVENT_VSA_HIGH_LABELS,
+    EVENT_VSA_MIN_CONF,
+    EVENT_VSA_MIN_VR,
     LONG_EVENT_TYPES,
     LONG_MIN_CONF,
     STRATEGY_DISCIPLINE,
+    STRATEGY_EVENT_VSA,
     STRATEGY_LONG_LEFT,
     STRATEGY_VALUE_ACC,
     VA_EXCLUDE_BJ,
@@ -23,20 +28,22 @@ from wyckoff.strategies.constants import (
 from wyckoff.strategies.evaluators import evaluate_strategy_value_accumulation
 
 # ── 模拟盘策略注册信息 (选股策略的单一来源) ──────────────────────
-# 优先序: 纪律 > 价值吸筹 > 左侧买点 (回测期望 4.87% / 3.21% / 2.52%,
-# 命中20 81% / 75% / 67%; 左侧不受门禁, 弱市仍可兜底入场)
-STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT)
+# 优先序: 纪律 > 左侧买点 > 事件+VSA双因 (回测期望依次由高到低; 双因共振口径
+# 最严, 仅在高优先级策略未命中时兜底加候选, 不顶替 Spring-only)。
+STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT, STRATEGY_EVENT_VSA)
 STRATEGY_CN = {
     STRATEGY_DISCIPLINE: "Spring-only",
     STRATEGY_VALUE_ACC: "价值吸筹",
     STRATEGY_LONG_LEFT: "威科夫左侧买点",
+    STRATEGY_EVENT_VSA: "威科夫事件+VSA",
 }
 
-# 各策略是否受大盘门禁管束 (左侧买点属独立赛道, 诞生于大盘弱市, 不受门禁)
+# 各策略是否受大盘门禁管束 (左侧买点/事件+VSA 属独立赛道, 不受门禁)
 CANDIDATE_GATED = {
     STRATEGY_DISCIPLINE: True,
     STRATEGY_VALUE_ACC: True,
     STRATEGY_LONG_LEFT: False,
+    STRATEGY_EVENT_VSA: False,
 }
 
 
@@ -100,6 +107,64 @@ def value_accum_candidate(code, df, evs, piv, name=""):
             "conf": int(ev.get("conf", 0) or 0)}
 
 
+def event_vsa_candidate(code, df, evs, piv, name="", vsa_labels=None):
+    """威科夫事件 + 高价值VSA 双因共振候选 (独立赛道, 不受大盘门禁)。
+
+    口径 (源自 wyckoff_backtrader_strategy.py 策略2, 收敛为代码库 VSA 合法标签):
+      - 强多头事件 LONG_EVENT_TYPES, conf≥EVENT_VSA_MIN_CONF, 事件在近端可买窗口;
+      - 高价值 VSA 标签 (EVENT_VSA_HIGH_LABELS) 且量比 vr≥EVENT_VSA_MIN_VR,
+        与事件 bar 共时 (相距≤EVENT_VSA_CO_WINDOW 根, 先后太远不属同一行情)。
+      VSA 作为硬确认门 (无 conf 字段, 以其标签语义+量能补强), 候选 conf=事件 conf。
+
+    vsa_labels: 可选的预计算 VSA 分类结果 (历史回放逐 bar 复用, 避免 O(n²) 重算);
+                为 None 时就地调用 vsa_classify(df) (生产扫描路径)。
+    """
+    labels = vsa_labels
+    if labels is None:
+        try:
+            from wyckoff.vsa import vsa_classify
+            labels = vsa_classify(df)
+        except Exception:
+            return None
+    if not labels:
+        return None
+    hi = [s for s in labels
+          if s.get("label") in EVENT_VSA_HIGH_LABELS
+          and (s.get("features") or {}).get("vr", 0) >= EVENT_VSA_MIN_VR]
+    if not hi:
+        return None
+    n = int(len(df))
+    cand_events = []
+    for e in evs or []:
+        if e.get("type") not in LONG_EVENT_TYPES:
+            continue
+        e_idx = int(e.get("idx") or 0)
+        if e_idx < n - DISCIPLINE_EVENT_WINDOW:
+            continue
+        if int(e.get("conf", 0) or 0) < EVENT_VSA_MIN_CONF:
+            continue
+        cand_events.append(e)
+    # 事件越新越可买, 近端优先
+    for e in sorted(cand_events, key=lambda x: -int(x.get("idx") or 0)):
+        e_idx = int(e.get("idx") or 0)
+        co = [s for s in hi
+              if abs(int(s.get("idx") or 0) - e_idx) <= EVENT_VSA_CO_WINDOW]
+        if not co:
+            continue
+        if is_low_quality(code, name=name):
+            return None
+        vsa_best = max(co, key=lambda s: int(s.get("idx") or 0))
+        return {
+            "strategy": STRATEGY_EVENT_VSA,
+            "type": e["type"],
+            "vsa": vsa_best["label"],
+            "vsa_idx": int(vsa_best.get("idx") or 0),
+            "idx": e_idx,
+            "conf": int(e.get("conf", 0) or 0),
+        }
+    return None
+
+
 def left_buy_candidate(code, df, evs, piv, name=""):
     """威科夫完整做多买点·左侧起仓 (独立赛道, 自带入场/止损/目标/盈亏比)。
 
@@ -161,17 +226,23 @@ def _produce_value_acc(ctx):
                                  name=ctx["name"])
 
 
+def _produce_event_vsa(ctx):
+    return event_vsa_candidate(ctx["symbol"], ctx["df"], ctx["evs"], ctx["piv"],
+                               name=ctx["name"])
+
+
 CANDIDATE_PRODUCERS = {
     STRATEGY_DISCIPLINE: _produce_discipline,
     STRATEGY_LONG_LEFT: _produce_left_buy,
     STRATEGY_VALUE_ACC: _produce_value_acc,
+    STRATEGY_EVENT_VSA: _produce_event_vsa,
 }
 
 
 def scan_individual(code, df=None, min_conf=90, gates_ok=None,
                     name="", event_types=None, strategies=None,
                     st_confirm=False, events_out=None):
-    """对单只股票按优先序产出模拟盘候选 (纪律→价值吸筹→左侧买点)。
+    """对单只股票按优先序产出模拟盘候选 (纪律→左侧买点→事件+VSA)。
 
     这是模拟盘选股在管理器中的唯一实现; paper.py 不再内置任何选股逻辑。
     策略优先序由 STRATEGY_ORDER 驱动 (回测期望由高到低), 是否受大盘门禁

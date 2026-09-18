@@ -22,6 +22,7 @@ _SCAN_EVENTS_LOCK = threading.Lock()
 from ..events import sort_candidates
 from ..strategies.constants import (
     STRATEGY_DISCIPLINE,
+    STRATEGY_EVENT_VSA,
     STRATEGY_LONG_LEFT,
     STRATEGY_VALUE_ACC,
 )
@@ -239,6 +240,7 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
     选股统一由策略管理器 (WyckoffStrategyManager.scan_individual) 产出,
     本函数只负责编排: 拉K线 → 管理器选股 → 门禁 → 低质过滤 → 排序。
     单只股票优先级: 纪律 (受门禁) → 威科夫左侧买点 (独立赛道, 不受门禁)
+                    → 事件+VSA (独立赛道, 不受门禁)
                     → 价值吸筹 (受门禁, 纪律兜底)。
 
     strategies: 可选策略 key 子集 (如仅左侧买点); None/空=三策略并线。
@@ -264,10 +266,13 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
         _disabled.append(STRATEGY_VALUE_ACC)
     if not paper._CUR.get("enable_long_left", True):
         _disabled.append(STRATEGY_LONG_LEFT)
+    if not paper._CUR.get("enable_event_vsa", True):
+        _disabled.append(STRATEGY_EVENT_VSA)
     if _disabled:
         if strategies is None:
             strategies = tuple(
-                s for s in (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT, STRATEGY_VALUE_ACC)
+                s for s in (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT,
+                            STRATEGY_VALUE_ACC, STRATEGY_EVENT_VSA)
                 if s not in _disabled)
         else:
             strategies = tuple(s for s in strategies if s not in _disabled)
@@ -356,13 +361,16 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
                         cand["chain_adj"] = adj
                 except Exception:
                     pass
-                # 自动买入条件单: 触发价=现价+0.2% 上破 (above)。
-                cand["auto_cond_price"] = round(float(cand["last"]) * 1.002, 3)
-                cand["trigger"] = "above"
             else:
-                # 独立赛道左侧买点: 直接挂买点入场价, 回踩触发 (below)。
+                flow = None
+            # 买入条件单触发方式按策略判: 左侧买点挂入场价等回踩 (below),
+            # 其余 (纪律/价值吸筹/事件+VSA) 挂现价+0.2% 上破 (above)。
+            if cand.get("strategy") == STRATEGY_LONG_LEFT:
                 cand["auto_cond_price"] = round(float(cand["entry_price"]), 3)
                 cand["trigger"] = "below"
+            else:
+                cand["auto_cond_price"] = round(float(cand["last"]) * 1.002, 3)
+                cand["trigger"] = "above"
             # 价值吸筹已停用: 候选层面兜底剔除 (管理器可能绕过 strategies 过滤,
             # 兜底保证 任何路径都不产出 VA 候选/条件单)。
             if not paper._CUR.get("enable_va", True) \
@@ -371,6 +379,10 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             # 左侧买点已停用: 候选层面兜底剔除。
             if not paper._CUR.get("enable_long_left", True) \
                     and cand.get("strategy") == STRATEGY_LONG_LEFT:
+                return code, None, None
+            # 事件+VSA 已停用: 候选层面兜底剔除。
+            if not paper._CUR.get("enable_event_vsa", True) \
+                    and cand.get("strategy") == STRATEGY_EVENT_VSA:
                 return code, None, None
             return code, cand, flow
         except Exception:

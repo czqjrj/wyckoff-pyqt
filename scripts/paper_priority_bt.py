@@ -41,8 +41,10 @@ STRAT_KEY = {
     candidates.STRATEGY_DISCIPLINE: "discipline",
     candidates.STRATEGY_VALUE_ACC: "value",
     candidates.STRATEGY_LONG_LEFT: "left",
+    candidates.STRATEGY_EVENT_VSA: "evsa",
 }
-CN = {"discipline": "纪律", "value": "价值吸筹", "left": "威科夫左侧"}
+CN = {"discipline": "纪律", "value": "价值吸筹", "left": "威科夫左侧",
+      "evsa": "事件+VSA"}
 
 BEAR_TYPES = {"UTAD", "LPSY"}
 
@@ -96,11 +98,40 @@ def left_pct(b, open_px):
     }
 
 
-def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last):
+def precompute_evsa_labels(rec):
+    """预计算该股全量 VSA 分类 (一次), 缓存到 rec["evsa_labels"] 供逐 bar 复用。"""
+    if rec.get("evsa_labels") is not None:
+        return
+    try:
+        from wyckoff.vsa import vsa_classify
+        rec["evsa_labels"] = vsa_classify(rec["df"])
+    except Exception:
+        rec["evsa_labels"] = []
+
+
+def evsa_candidate(rec, j, params):
+    """事件+VSA 双因候选 (因果): 复用生产 event_vsa_candidate 单一口径。
+
+    只把 bar j 之前的已完成数据喂入 (df 截断到 j+1, 事件/VSA 截断 idx≤j), 避免
+    前视; VSA 标签预计算后按 idx 过滤, 避免逐 bar 重算。返回生产候选 dict 或 None。
+    """
+    labels = [s for s in (rec.get("evsa_labels") or [])
+              if int(s.get("idx") or 0) <= j]
+    if not labels:
+        return None
+    evs = [e for e in rec["all_evs"] if int(e.get("idx") or 0) <= j]
+    dfw = rec["df"].iloc[:j + 1]
+    return candidates.event_vsa_candidate(
+        rec["code"], dfw, evs, rec["pivots"],
+        name=rec.get("name", ""), vsa_labels=labels)
+
+
+def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last,
+                      evsa_on=False):
     """依优先级返回该股当日唯一候选 (与 scan_individual 同口径)。
 
     返回 {conf,type,open,strategy,flow,stop_pct,take_pct,kind,src} 或 None。
-    mkt_ok: 当日大盘状态 (仅纪律/价值受用; 左侧免门禁)。
+    mkt_ok: 当日大盘状态 (仅纪律/价值受用; 左侧/事件+VSA 免门禁)。
     """
     # 纪律
     ev = pbt.newest_buyable(rec, j, window=params["window"])
@@ -154,30 +185,43 @@ def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last):
             "take_pct": params.get("va_take") or None,
         }
     # 左侧买点 (独立赛道, 不受大盘门禁)
-    if not left_on:
-        return None
-    b = left_candidate(rec, j, last_bar=left_last)
-    if b is None:
-        return None
-    pp = left_pct(b, float(rec["open"][j]))
-    if pp is None:
-        return None
-    return {
-        "conf": int(b.get("conf") or 50),
-        "type": b.get("type_label")
-        if isinstance(b.get("type_label"), str)
-        else b.get("label", b["kind"]),
-        "open": float(rec["open"][j]),
-        "strategy": STRAT_KEY[candidates.STRATEGY_LONG_LEFT],
-        "flow": pbt._flow_score(rec, j),
-        "kind": b["kind"],
-        "src": {"idx": int(b.get("bar_idx") or 0)},
-        "stop_pct": pp["stop_pct"],
-        "take_pct": pp["take_pct"],
-    }
+    if left_on:
+        b = left_candidate(rec, j, last_bar=left_last)
+        if b is not None:
+            pp = left_pct(b, float(rec["open"][j]))
+            if pp is not None:
+                return {
+                    "conf": int(b.get("conf") or 50),
+                    "type": b.get("type_label")
+                    if isinstance(b.get("type_label"), str)
+                    else b.get("label", b["kind"]),
+                    "open": float(rec["open"][j]),
+                    "strategy": STRAT_KEY[candidates.STRATEGY_LONG_LEFT],
+                    "flow": pbt._flow_score(rec, j),
+                    "kind": b["kind"],
+                    "src": {"idx": int(b.get("bar_idx") or 0)},
+                    "stop_pct": pp["stop_pct"],
+                    "take_pct": pp["take_pct"],
+                }
+    # 事件+VSA 双因 (最低优先兜底, 独立赛道, 不受大盘门禁)
+    if evsa_on:
+        ec = evsa_candidate(rec, j, params)
+        if ec is not None:
+            return {
+                "conf": int(ec.get("conf") or 0),
+                "type": ec.get("type", "Spring"),
+                "open": float(rec["open"][j]),
+                "strategy": STRAT_KEY[candidates.STRATEGY_EVENT_VSA],
+                "flow": pbt._flow_score(rec, j),
+                "kind": "",
+                "src": ec,
+                "vsa": ec.get("vsa", ""),
+            }
+    return None
 
 
-def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code_to_idx, all_days):
+def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j,
+                code_to_idx, all_days, evsa_on=False):
     """一趟完整回放, 返回 st 状态。参数 left_on=是否启用左侧; left_first=旧序。"""
     from wyckoff.settings_keys import S
 
@@ -197,7 +241,7 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
     st = paper._new_state()
     left_last = {}
     va_last = {}
-    # 优先级排序: 新序 纪律>价值>左侧; 旧序 纪律>左侧>价值
+    # 优先级排序: 新序 纪律>价值>左侧; 旧序 纪律>左侧>价值; 事件+VSA 恒最低
     order = ["discipline"]
     if left_on:
         if left_first:
@@ -206,6 +250,8 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
             order += ["value", "left"]
     else:
         order += ["value"]
+    if evsa_on:
+        order += ["evsa"]
     prio = {k: i for i, k in enumerate(order)}
 
     _real_save = paper.save_state
@@ -265,7 +311,8 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j, code
                 if j is None:
                     continue
                 last_left = left_last.get(rec["code"], -1)
-                cand = per_day_candidate(rec, j, params, last_left, mkt_ok, left_on, va_last)
+                cand = per_day_candidate(rec, j, params, last_left, mkt_ok,
+                                         left_on, va_last, evsa_on)
                 if cand is None:
                     continue
                 cand["code"] = rec["code"]
@@ -381,6 +428,8 @@ def main():
     ap.add_argument("--no-bear-exit", action="store_false", dest="bear_exit")
     ap.add_argument("--left-first", action="store_true", help="加跑旧序对照 (纪律>左侧>价值)")
     ap.add_argument("--no-base", action="store_true", help="不跑双策略基线 (无左侧)")
+    ap.add_argument("--event-vsa", action="store_true",
+                    help="启用事件+VSA 双因兜底赛道 (默认关; 加跑含该策略的配置)")
     ap.add_argument("--va-confirm", action="store_true", help="价值: 事件后首根收盘站上MA10才建仓")
     ap.add_argument("--va-min-conf", type=int, default=0, help="价值: 事件 conf 门槛 (0=不限)")
     ap.add_argument(
@@ -504,6 +553,9 @@ def main():
             with open(args.stocks_cache, "wb") as f:
                 pickle.dump(stocks, f, protocol=4)
             print(f"已写股票缓存: {len(stocks)} 只 → {args.stocks_cache}")
+    if args.event_vsa:
+        for rec in stocks:
+            precompute_evsa_labels(rec)
     print(f"\n有效股票 {len(stocks)} 只, 开始回放 ...")
 
     params["va_m"] = paper._strategy_manager()
@@ -520,19 +572,23 @@ def main():
 
     configs = []
     if not args.no_base:
-        configs.append(("base_双策略", False, False))
-    configs.append(("new_纪律>价值>左侧", True, False))
+        configs.append(("base_双策略", False, False, False))
+    configs.append(("new_纪律>价值>左侧", True, False, False))
     if args.left_first:
-        configs.append(("old_纪律>左侧>价值", True, True))
+        configs.append(("old_纪律>左侧>价值", True, True, False))
+    if args.event_vsa:
+        configs.append(("evsa_含事件VSA", True, False, True))
 
     results = []
-    for name, left_on, left_first in configs:
+    for name, left_on, left_first, evsa_on in configs:
         print(
             f"\n===== 配置: {name} ({'含左侧' if left_on else '无左侧'}) "
-            f"优先级={'旧' if left_first else '新'} ====="
+            f"优先级={'旧' if left_first else '新'} "
+            f"{'含事件VSA' if evsa_on else ''} ====="
         )
         st = replay_once(
-            stocks, params, market_gate, left_on, left_first, day_to_j, code_to_idx, all_days
+            stocks, params, market_gate, left_on, left_first, day_to_j, code_to_idx, all_days,
+            evsa_on=evsa_on,
         )
         r = summarize(st)
         results.append((name, r))
@@ -541,7 +597,7 @@ def main():
             f"胜率 {r['win_rate'] * 100 if r['win_rate'] is not None else 0:.1f}% | "
             f"最大回撤 {r['max_drawdown'] * 100 if r['max_drawdown'] is not None else 0:.2f}%"
         )
-        for s_key in ("discipline", "value", "left"):
+        for s_key in ("discipline", "value", "left", "evsa"):
             rs = r["by_strat"].get(s_key)
             if rs:
                 print(
@@ -564,7 +620,7 @@ def main():
     ]
     for name, r in results:
         parts = []
-        for s_key in ("discipline", "value", "left"):
+        for s_key in ("discipline", "value", "left", "evsa"):
             rs = r["by_strat"].get(s_key)
             if rs:
                 parts.append(f"{CN[s_key]}{rs['n']}笔/{rs['wr']}%/{rs['avg']:+.1f}%")

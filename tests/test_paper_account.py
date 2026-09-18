@@ -50,6 +50,16 @@ class VaMgr:
                 "gated": True}
 
 
+class VsaMgr:
+    """只产事件+VSA候选 (gated=False, 独立赛道) 的假管理器。"""
+
+    def scan_individual(self, code, df=None, min_conf=90, gates_ok=None,
+                        name="", event_types=None, strategies=None, **kw):
+        return {"strategy": "screener_event_vsa", "type": "Spring",
+                "idx": 388, "conf": 88, "vsa": "SPR", "vsa_idx": 389,
+                "gated": False}
+
+
 def _apply(monkeypatch, mgr, market_ok=(True, "")):
     monkeypatch.setattr(paper, "_strategy_manager", lambda: mgr)
     monkeypatch.setattr("wyckoff.datasource.fetch_kline",
@@ -170,6 +180,31 @@ def test_pick_candidates_enable_va_on_keeps_va(monkeypatch):
                         lambda c: 1_000_000.0 if c == "sh600001" else None)
     out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
     assert [e["strategy"] for e in out] == ["screener_value_accumulation"]
+
+
+def test_pick_candidates_enable_event_vsa_off_default(monkeypatch):
+    """事件+VSA 停用 (默认): 候选层面兜底剔除。"""
+    _apply(monkeypatch, VsaMgr())
+    old = paper._CUR.get("enable_event_vsa", True)
+    paper._CUR["enable_event_vsa"] = False
+    try:
+        out = paper.pick_candidates(universe=["sh600001"], max_codes=5)
+    finally:
+        paper._CUR["enable_event_vsa"] = old
+    assert [e["strategy"] for e in out] == []
+
+
+def test_pick_candidates_enable_event_vsa_on(monkeypatch):
+    """显式开启后, 事件+VSA候选正常产出 (独立赛道, 不受三重门禁)。"""
+    _apply(monkeypatch, VsaMgr())
+    old = paper._CUR.get("enable_event_vsa", False)
+    paper._CUR["enable_event_vsa"] = True
+    try:
+        out = paper.pick_candidates(universe=["sh600001"], max_codes=5,
+                                    skip_gates=True)
+    finally:
+        paper._CUR["enable_event_vsa"] = old
+    assert [e["strategy"] for e in out] == ["screener_event_vsa"]
 
 
 # ── 交易时段撮合门禁 ──────────────────────────────────────

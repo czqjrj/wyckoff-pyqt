@@ -147,6 +147,8 @@ class Paper(_Base):
     ENABLE_VA = "paper_enable_va"
     # 威科夫左侧买点策略总开关: False = 模拟盘完全停用 (不再扫描/生成入场条件单)
     ENABLE_LONG_LEFT = "paper_enable_long_left"
+    # 事件+高价值VSA双因策略总开关: False = 模拟盘完全停用 (不再扫描/生成入场条件单)
+    ENABLE_EVENT_VSA = "paper_enable_event_vsa"
     # ST 事件确认门槛: True = 仅已 confirmed 且确认后首根已到的 ST 事件可入候选
     # (Spring/其他强多头事件仍事件即买; 回测验证 +212%→+307% 全组合收益)
     ST_CONFIRM = "paper_st_confirm"
@@ -306,6 +308,8 @@ DEFAULTS = {
     Paper.ENABLE_VA: False,
     # 威科夫左侧买点默认关闭 (命中率与右侧纪律叠加度低): 需显式 paper_enable_long_left=true
     Paper.ENABLE_LONG_LEFT: False,
+    # 事件+高价值VSA双因默认关闭 (独立兜底赛道): 需显式 paper_enable_event_vsa=true
+    Paper.ENABLE_EVENT_VSA: False,
     AI.FALSIFY_ENABLED: False,
     AI.INTERPRET_ENABLED: False,
     AI.API_KEY: "",
@@ -385,6 +389,7 @@ def _engine_paper_defaults():
         Paper.LIMIT_FILL: _p.LIMIT_FILL,
         Paper.ENABLE_VA: _p.ENABLE_VA,
         Paper.ENABLE_LONG_LEFT: _p.ENABLE_LONG_LEFT,
+        Paper.ENABLE_EVENT_VSA: _p.ENABLE_EVENT_VSA,
         Paper.WEAK_FILTER: _p.WEAK_FILTER,
         Paper.WEAK_MAX_POS: _p.WEAK_MAX_POS,
         Paper.WEAK_INDEX_CODE: _p.WEAK_INDEX_CODE,

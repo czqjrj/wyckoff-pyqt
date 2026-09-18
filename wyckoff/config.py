@@ -455,6 +455,7 @@ DEFAULT_SETTINGS = {
     "paper_va_weight": 0.6,
     "paper_enable_va": False,
     "paper_enable_long_left": False,
+    "paper_enable_event_vsa": False,
     "paper_rebalance": True,
     "paper_push_enabled": False,
     "paper_push_method": "server_chan",

@@ -65,6 +65,8 @@ VA_WEIGHT = 0.6
 ENABLE_VA = False
 # 威科夫左侧买点策略总开关 (独立赛道, 但与纪律叠加度低, 默认停用仅保留纪律)
 ENABLE_LONG_LEFT = False
+# 事件+高价值VSA双因策略总开关 (独立赛道, 兜底; 默认停用需显式开启)
+ENABLE_EVENT_VSA = False
 # 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到 总权益/max_pos,
 # 消除"先买的大、后买的小"的顺序衰减与资金闲置 (利用率仅 ~66% 的根因)。
 REBALANCE = True
@@ -263,7 +265,7 @@ __all__ = [
     "STOP_LOSS", "TRAILING_STOP", "TRAIL_ATR_MULT", "TRAIL_BACK_PCT",
     "TRAIL_ACTIVATE_PCT", "QLIB_VETO_ENABLED", "QLIB_VETO_HI",
     "WEAK_FILTER", "WEAK_MAX_POS", "WEAK_INDEX_CODE",
-    "VA_WEIGHT", "ENABLE_VA", "ENABLE_LONG_LEFT", "REBALANCE",
+    "VA_WEIGHT", "ENABLE_VA", "ENABLE_LONG_LEFT", "ENABLE_EVENT_VSA", "REBALANCE",
     "PUSH_ENABLED", "PUSH_METHOD", "PUSH_SERVER_CHAN_KEY",
     "PUSH_WECHAT_CORP_ID", "PUSH_WECHAT_CORP_SECRET", "PUSH_WECHAT_AGENT_ID",
     "PUSH_WECHAT_TO_USER", "PUSH_WXPUSHER_APP_TOKEN", "PUSH_WXPUSHER_TOPIC_IDS",

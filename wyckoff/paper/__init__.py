@@ -50,6 +50,7 @@ from ..paths import PAPER_FILE
 from ..settings_keys import S
 from ..strategies.constants import (
     STRATEGY_DISCIPLINE,
+    STRATEGY_EVENT_VSA,
     STRATEGY_LONG_LEFT,
     STRATEGY_VALUE_ACC,
 )
@@ -68,6 +69,7 @@ from ._params import (
     COMMISSION_RATE,
     CORRELATION_THRESHOLD,
     COST,
+    ENABLE_EVENT_VSA,
     ENABLE_LONG_LEFT,
     ENABLE_VA,
     HOLD_BARS,
@@ -254,6 +256,8 @@ def apply_paper_params(settings=None):
         "enable_va": bool(_get(S.Paper.ENABLE_VA, ENABLE_VA)),
         # 威科夫左侧买点总开关 (False=彻底停用)
         "enable_long_left": bool(_get(S.Paper.ENABLE_LONG_LEFT, ENABLE_LONG_LEFT)),
+        # 事件+VSA 双因策略总开关 (False=彻底停用)
+        "enable_event_vsa": bool(_get(S.Paper.ENABLE_EVENT_VSA, ENABLE_EVENT_VSA)),
         # 周期级等权再平衡
         "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
         # 微信推送配置
@@ -326,6 +330,7 @@ _CUR = {
     "va_weight": VA_WEIGHT,
     "enable_va": ENABLE_VA,
     "enable_long_left": ENABLE_LONG_LEFT,
+    "enable_event_vsa": ENABLE_EVENT_VSA,
     "rebalance": REBALANCE,
     "push_enabled": PUSH_ENABLED,
     "push_method": PUSH_METHOD,
@@ -619,6 +624,10 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
             if not _CUR.get("enable_long_left", True) \
                     and e.get("strategy") == STRATEGY_LONG_LEFT:
                 continue
+            # 开关停用事件+VSA: 存量候选兜底拦截 (防止历史候选重放入场)
+            if not _CUR.get("enable_event_vsa", True) \
+                    and e.get("strategy") == STRATEGY_EVENT_VSA:
+                continue
             px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
             last = float(e.get("last", 0) or 0)
             if e.get("trigger") == "below":
@@ -797,7 +806,8 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
     except Exception:
         pass
 
-    if scan_type in (STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT):
+    if scan_type in (STRATEGY_DISCIPLINE, STRATEGY_VALUE_ACC, STRATEGY_LONG_LEFT,
+                     STRATEGY_EVENT_VSA):
         label = f"策略管理器扫描({paper_strategy_accuracy.STRATEGY_CN.get(scan_type, scan_type)})"
         empty_note = (f"{label}: 无满足条件的候选 (该策略的门禁/conf/事件未满足)")
     else:
@@ -805,6 +815,8 @@ def run_scan(st, scan_type='', n_codes=6000, progress=None, anytime=False):
         active_labels = []
         if _CUR.get("enable_long_left", True):
             active_labels.append(_SCN.get(STRATEGY_LONG_LEFT, "左侧买点"))
+        if _CUR.get("enable_event_vsa", True):
+            active_labels.append(_SCN.get(STRATEGY_EVENT_VSA, "事件+VSA"))
         if _CUR.get("enable_va", True):
             active_labels.append(_SCN.get(STRATEGY_VALUE_ACC, "价值吸筹"))
         label = (f"纪律+{'/'.join(active_labels)}" if active_labels

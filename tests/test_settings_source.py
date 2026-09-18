@@ -48,6 +48,7 @@ AAA = {
     "paper_va_weight": P.VA_WEIGHT,
     "paper_enable_va": P.ENABLE_VA,
     "paper_enable_long_left": P.ENABLE_LONG_LEFT,
+    "paper_enable_event_vsa": P.ENABLE_EVENT_VSA,
     "paper_rebalance": P.REBALANCE,
     "paper_push_enabled": P.PUSH_ENABLED,
     "paper_push_method": P.PUSH_METHOD,
