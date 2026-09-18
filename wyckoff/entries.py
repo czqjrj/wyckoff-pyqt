@@ -56,6 +56,17 @@ ENTRY_VETO_LOW_REL = True
 # 事后按入场价/止损逐笔结算胜负 (见 entry_journal.journal_stats)。
 AUTO_RECORD_ENTRIES = True
 
+# ── 多周期共振门 (2026-09-18): 日线多头入场要求周/月线不反向 ──
+# htf ∈ {-1,0,+1} 来自 multitime.htf_direction(mf); -1=周/月线偏空 (反向
+# 过滤日线假信号), 0=中性/方向不可判, +1=周/月线偏多 (顺向放行)。
+# 历史实证 (scripts/htf_gate_survey.py, n=2419): 周/月线偏空组的强多头事件
+# 命中率 69.0% 不低于非偏空组 (68.6%), 且打开门禁会拦下 ~50% 样本 (远超
+# 30% 验收线) —— 弹簧/震仓本就诞生于短期超跌环境, 高周期"偏空"不构成反向。
+# 结论: 该门默认关闭 (IDLE), 保留实现与开关供未来口径重测; 需启用时置 True。
+ENTRY_HTF_GATE = False
+# htf=0 (中性/不可判) 时是否放行: True=fail-open 不拦, False=fail-close 拦截。
+ENTRY_HTF_FAIL_OPEN = True
+
 
 def measured_win_rates(scale=240):
     """取入场类型的实测可交易胜率 (贝叶斯收缩值)。{type: {"win","n"}}"""
@@ -72,12 +83,13 @@ def measured_win_rates(scale=240):
     return out
 
 
-def find_entry_signals(df, events=None, mkt_trend_20=None, sector_strength_pct_val=None, fund_net_pct_val=None) -> list:
+def find_entry_signals(df, events=None, mkt_trend_20=None, sector_strength_pct_val=None, fund_net_pct_val=None, htf=None) -> list:
     """检测 df 中当前仍有效的确认制多头入场点。
 
     入场依据: 只做强梯队 (Spring/Shakeout/ST/LPS) + 已确认 (avail_idx) +
     高置信 (conf≥MIN_ENTRY_CONF, 模型就绪时低可靠档剔除) +
-    三重共振 (大盘↑+板块>60%+资金>50%) —— 仅当三参数均显式提供时生效。
+    三重共振 (大盘↑+板块>60%+资金>50%) —— 仅当三参数均显式提供时生效 +
+    多周期共振 (可选): htf<0 时周/月线偏空 → 反向过滤日线入场。
 
     返回 list[dict]: {type, confirm_idx, fresh_bars, entry_date, entry_price,
     last, stop, risk_pct, conf, model_rel, rel_tier} — 按 fresh_bars 升序
@@ -90,6 +102,14 @@ def find_entry_signals(df, events=None, mkt_trend_20=None, sector_strength_pct_v
         from .events import detect_all
         from .indicators import find_pivots
         events = detect_all(df, find_pivots(df, order=6))
+
+    # ── 多周期共振门 (2026-09-18): 高周期不反向才放行日线多头入场 (可选) ──
+    # htf 由调用方经 multitime.htf_direction(mf) 提供; None=未启用本门。
+    if ENTRY_HTF_GATE and htf is not None:
+        if htf < 0:
+            return []
+        if htf == 0 and not ENTRY_HTF_FAIL_OPEN:
+            return []
 
     # ── 三重共振入口硬规则 (2026-08-28): 仅当三参数均显式提供且通过时才放行 ──
     if (mkt_trend_20 is not None and sector_strength_pct_val is not None and fund_net_pct_val is not None):
@@ -157,6 +177,7 @@ def find_entry_signals(df, events=None, mkt_trend_20=None, sector_strength_pct_v
             "conf": int(e.get("conf", 50)),
             "model_rel": round(float(rel), 3) if rel is not None else None,
             "rel_tier": tier,
+            "htf": int(htf) if htf is not None else None,
         })
     out.sort(key=lambda r: r["fresh_bars"])
     return out
@@ -182,14 +203,12 @@ def _scan_one(codes_str, datalen=500, scale=240, stats=None, macro_ctx=None, **k
                       judge_phase=judge_phase)
     df, phase = r["df"], r["phase"]
 
-    # 宏观因子: 复用传入的 ctx，或就地计算 (缓存到 macro_ctx 供下一只复用)
+    # 大盘趋势 (MA20 斜率): 市场级因子, 可跨股票复用 (macro_ctx 缓存);
+    # 板块强度/资金流是标的级因子, 一律按本股 r["sector"]/r["flow"] 就地计算,
+    # 不得写入共享 macro_ctx (历史实现曾把首只股票的值污染给整批扫描)。
     if macro_ctx is None:
         macro_ctx = {}
     mkt_trend_20 = macro_ctx.get("mkt_trend_20")
-    sector_strength_pct_val = macro_ctx.get("sector_strength_pct_val")
-    fund_net_pct_val = macro_ctx.get("fund_net_pct_val")
-
-    # 大盘趋势 (MA20 斜率)
     if mkt_trend_20 is None:
         try:
             market_series = r.get("market_series")
@@ -201,34 +220,45 @@ def _scan_one(codes_str, datalen=500, scale=240, stats=None, macro_ctx=None, **k
         except Exception:
             mkt_trend_20 = 0.0
 
-    # 板块强度
-    if sector_strength_pct_val is None:
-        try:
-            sector = r.get("sector")
-            if sector and sector.get("name"):
-                sp = sector_strength_pct(sector["name"])
-                if sp is not None:
-                    sector_strength_pct_val = sp
-                    macro_ctx["sector_strength_pct_val"] = sector_strength_pct_val
-        except Exception:
-            sector_strength_pct_val = 0.5
+    # 板块强度 (标的级: 复用 analyze_light 已抓的 sector, 就地计算)
+    sector_strength_pct_val = 0.5
+    try:
+        sector = r.get("sector")
+        if sector and sector.get("name"):
+            sp = sector_strength_pct(sector["name"])
+            if sp is not None:
+                sector_strength_pct_val = sp
+    except Exception:
+        sector_strength_pct_val = 0.5
 
-    # 资金流净额分位
-    if fund_net_pct_val is None:
-        try:
-            from .discipline import fund_net_pct
-            flow = r.get("flow")
-            fund_net_pct_val = fund_net_pct(flow)
-            if fund_net_pct_val is not None:
-                macro_ctx["fund_net_pct_val"] = fund_net_pct_val
-        except Exception:
-            fund_net_pct_val = 0.5
+    # 资金流净额分位 (标的级: 复用 analyze_light 已抓的 flow, 就地计算)
+    fund_net_pct_val = 0.5
+    try:
+        from .discipline import fund_net_pct
+        flow = r.get("flow")
+        f = fund_net_pct(flow)
+        if f is not None:
+            fund_net_pct_val = f
+    except Exception:
+        fund_net_pct_val = 0.5
+
+    # 多周期共振 (标的级): 周/月线方向反向时过滤日线入场点。
+    # 纯技术指标计算 (无网络), 失败才取 None (fail-open, 不拦)。
+    # 门默认关闭 (见 ENTRY_HTF_GATE 说明), 关闭时不为每只股票重复计算省开销。
+    htf = None
+    try:
+        if ENTRY_HTF_GATE:
+            from .multitime import htf_direction, multi_tf_analysis
+            htf = htf_direction(multi_tf_analysis(df))
+    except Exception:
+        htf = None
 
     rows = []
     for s in find_entry_signals(df, events=r["events"],
                                 mkt_trend_20=mkt_trend_20,
                                 sector_strength_pct_val=sector_strength_pct_val,
-                                fund_net_pct_val=fund_net_pct_val):
+                                fund_net_pct_val=fund_net_pct_val,
+                                htf=htf):
         m = stats.get(s["type"], {})
         d = event_dir(s["type"])
         rows.append({

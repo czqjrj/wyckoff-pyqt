@@ -12,6 +12,28 @@ _PHASE_CN = {
     "distribution": "顶部构筑 (Distribution)",
 }
 
+# 阶段方向判定 (与 fusion._htf_direction 同源收敛): 偏多/偏空阶段集合
+BULL_PHASES = ("底部整固", "上升趋势")
+BEAR_PHASES = ("顶部构筑", "下跌趋势")
+
+
+def htf_direction(mf):
+    """从多周期结果提取高周期方向: +1 周/月线偏多, -1 偏空, 0 无/中性。
+
+    单一实现 (供 entries 多周期入场门 / fusion 融合对齐共用), 防止两处漂移:
+    周/月线任一偏多 +1、任一偏空 -1, 符号相抵为 0。
+    """
+    if not mf:
+        return 0
+    sig = 0
+    for key in ("weekly_phase", "monthly_phase"):
+        ph = (mf.get(key) or "").split(" ")[0]
+        if ph in BULL_PHASES:
+            sig += 1
+        elif ph in BEAR_PHASES:
+            sig -= 1
+    return 1 if sig > 0 else -1 if sig < 0 else 0
+
 
 def weekly_resample(df):
     """日线 → 周线 (周五收盘聚合)。"""

@@ -298,17 +298,12 @@ def _kline_score(phase, df, events):
 
 
 def _htf_direction(mf):
-    """从多周期结果提取高周期方向: +1 周/月线偏多, -1 偏空, 0 无/中性。"""
-    if not mf:
-        return 0
-    sig = 0
-    for key in ("weekly_phase", "monthly_phase"):
-        ph = (mf.get(key) or "").split(" ")[0]
-        if ph in BULL_PHASES:
-            sig += 1
-        elif ph in BEAR_PHASES:
-            sig -= 1
-    return 1 if sig > 0 else -1 if sig < 0 else 0
+    """从多周期结果提取高周期方向: +1 周/月线偏多, -1 偏空, 0 无/中性。
+
+    单一实现收敛于 multitime.htf_direction (entries 多周期入场门共用)。
+    """
+    from .multitime import htf_direction
+    return htf_direction(mf)
 
 
 def _align(score, htf):
