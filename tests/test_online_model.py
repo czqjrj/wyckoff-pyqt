@@ -157,3 +157,104 @@ def test_stale_feat_version_blocks_takeover(tmp_path, monkeypatch):
     assert om.model_status()["ready"] is False
     assert om.apply_model_conf([ev]) == 0
     assert ev["conf"] == 80
+
+
+# ── 5.7 模型质量标尺 / 历史轨迹 / 连续劣化 ──
+
+def test_auc_scale_ramp():
+    """AUC 质量标尺: 0.50→0, 0.65→1, 线性单调。"""
+    assert om._auc_scale(None) == 0.0
+    assert om._auc_scale(0.50) == 0.0
+    assert om._auc_scale(0.65) == 1.0
+    assert om._auc_scale(0.80) == 1.0
+    assert om._auc_scale(0.575) == pytest.approx(0.5, abs=1e-9)
+    assert om._auc_scale(0.60) > om._auc_scale(0.55)
+
+
+def test_blend_weight_quality_scaled():
+    """接管权重同时受样本量与区分度约束, 不再只随样本数爬坡。"""
+    assert om._blend_weight(50, 0.70) == 0.0          # 样本不足
+    assert om._blend_weight(2000, None) == 0.0        # 无 AUC → 不取信
+    assert om._blend_weight(2000, 0.50) == 0.0        # 随机 → 不取信
+    # 0.575 → 标尺 0.5, 规模 0.70 → 0.35
+    assert om._blend_weight(2000, 0.575) == 0.35
+    # 满分 → 饱和到 MODEL_MAX_BLEND
+    assert om._blend_weight(2000, 0.65) == om.MODEL_MAX_BLEND
+    # 踩线 0.60 → 权重约 0.47 (而非满权重)
+    w_at_floor = om._blend_weight(2000, om.MODEL_MIN_AUC)
+    assert om.MODEL_MAX_BLEND * 0.4 < w_at_floor < om.MODEL_MAX_BLEND
+
+
+def _mk_state(path, hist_aucs, auc, n_train=2000, n_oos=300):
+    st = {"version": 3, "feat_version": 3, "features": list(om.FEATURES),
+          "n_train": n_train, "n_oos": n_oos, "auc_oos": auc,
+          "ic_oos": 0.2, "acc_oos": 0.65, "intercept": 5.0,
+          "coef": [0.0] * len(om.FEATURES), "trained_at": 0.0,
+          "n_labels": n_train + n_oos,
+          "history": [{"auc_oos": a, "n_train": n_train, "ic_oos": 0.2}
+                      for a in hist_aucs]}
+    om._save_state(st)
+
+
+def test_degrade_on_consecutive_drop(tmp_path, monkeypatch):
+    """AUC 连续劣化 → 折减 0.5 + 告警, 接管幅度显著变小。"""
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m4.json"))
+    _mk_state(tmp_path, [0.66, 0.65, 0.64, 0.63, 0.62, 0.60], auc=0.60)
+    st = om.model_status()
+    assert st["degraded"] is True
+    assert any("劣化" in w for w in st["warnings"])
+    assert st["blend_eff"] == pytest.approx(st["blend"] * 0.5, abs=1e-4)
+
+    # 全多头高 P(up): 折减后 conf 抬升幅度应明显小于不劣化场景
+    ev = {"type": "Spring", "conf": 50, "feat": {"vr": 2.0, "dir": 1}}
+    assert om.apply_model_conf([ev]) == 1
+    degraded_conf = ev["conf"]
+
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m5.json"))
+    _mk_state(tmp_path, [0.66] * 6, auc=0.68)  # 高且平稳 → 不劣化
+    ev2 = {"type": "Spring", "conf": 50, "feat": {"vr": 2.0, "dir": 1}}
+    assert om.apply_model_conf([ev2]) == 1
+    assert degraded_conf < ev2["conf"]          # 劣化导致接管幅度减半
+
+    st2 = om.model_status()
+    assert st2["degraded"] is False
+    assert st2["warnings"] == []
+
+
+def test_degrade_insensitive_to_few_trainings():
+    """历史不足 DEGRADE_LOOKBACK 次时不做劣化判定。"""
+    st = {"history": [{"auc_oos": 0.50 + i * 0.01} for i in range(4)]}
+    assert om._degrade_factor(st) == 1.0
+    assert om._quality_overlay(st)["degraded"] is False
+
+
+def test_overlay_low_auc_warning():
+    """AUC 低于接管下限 → warning, 但不因劣化折减 (未起步接管)。"""
+    st = {"auc_oos": 0.52, "history": [{"auc_oos": 0.52}]}
+    ov = om._quality_overlay(st)
+    assert any("低于接管下限" in w for w in ov["warnings"])
+    assert ov["degraded"] is False
+
+
+def test_history_bounded_and_appended(tmp_path, monkeypatch):
+    """每次重训追加历史条目, 截断到 MODEL_HISTORY_MAX。"""
+    pytest.importorskip("sklearn")
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m6.json"))
+    monkeypatch.setattr(om, "MODEL_MIN_TRAIN", 40)
+    monkeypatch.setattr(om, "MODEL_MIN_OOS", 8)
+    monkeypatch.setattr(om, "MODEL_MIN_AUC", 0.55)
+    recs = []
+    for k in range(150):
+        high = k % 2 == 0
+        recs.append(_rec(0.15 if high else -0.15,
+                         date=f"2024-{(k // 30) + 1:02d}-{(k % 28) + 1:02d}",
+                         extra={"vr": 2.5 if high else 0.5}))
+    st = om.train_model(recs)
+    hist = st.get("history") or []
+    assert len(hist) == 1
+    assert hist[0]["auc_oos"] is not None
+    st2 = om.train_model(recs)
+    assert len(st2["history"]) == 2
+    st3 = om.train_model(recs[:4])  # 少样本分支 (rows<5) 不追加历史
+    assert len(st3["history"]) == 2
+    assert st3["n_labels"] == 4

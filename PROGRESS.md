@@ -162,3 +162,40 @@
 - paper 实盘/回测口径 (accuracy_improvements_todo 5.8): 生产默认已对齐
   (stop=4%/TP=30%/trail=6%/maxpos=5/conf=100), 无需再改。
 - 全量回归: 720 passed; ruff 干净。
+
+---
+
+# 进度记录：5.5 在线校准模型质量监管 (2026-09-19)
+
+> 对应 `accuracy_improvements_todo.md` 5.7 (模型退化). 用数据回答"模型该不该信",
+> 并把"信多少"从拍脑袋的 0.55 硬开关改成 连续质量权重 + 轨迹趋势监控。
+
+## 归因: AUC 0.56→0.68 回升的主因是标签集翻倍 + 指标自身极不稳定
+- 09-15 文档快照 `n_train=6524, auc_oos=0.5614`; 现重训 (临时路径, 不碰生产) 得
+  `n_labels=12338 / n_train=8636 / n_oos=3702`, 日期跨度 2004-09→2026-08。
+- **标签翻倍原因**: 信号基座 99→173 标的扩容 + `record_events_batch` 全事件无偏入库
+  (commits 6d90a4e), 让带特征+已评估标签的行从 ~6.5k → ~12.3k。
+- **指标对 seed 极不稳定 (关键发现)**: 同数据集 seed=0/7/123 → AUC 0.70~0.71,
+  seed=2024 → 0.62 (±0.09); oos_frac=0.2/0.3/0.4 → 0.72/0.62/0.67。生产 0.679 只是
+  seed=42 的单点样本 → **单次重训的 AUC 不能作为接管/放弃的判据**, 必须看轨迹与区间。
+
+## 落地 (wyckoff/online_model.py)
+1. **门槛实证上调**: `MODEL_MIN_AUC` 0.55 → 0.60 (接线仍卡) — `_ready`/校准中心联动。
+2. **连续质量权重**: 新增 `_auc_scale` (0.50→0, 0.65→1 线性), `_blend_weight` 改为
+   `样本爬坡 × AUC 质量标尺`: 踩线 0.60 时权重 ~0.47 (原满 0.70) — 区分度而非只有样本量决定权重。
+3. **连续劣化折减 + 告警**: 每次重训追加 `history[]` (截断 MODEL_HISTORY_MAX=20);
+   `_degrade_factor` 当近 2 次 AUC 均值 ≤ 既往 4 次均值 -0.03 → 接管权重 ×50%;
+   `_quality_overlay` 产出 `degraded` + `warnings` (低于下限/缺样本/连续劣化三种)。
+4. **展示/排查**: `model_status` 增 `blend_eff` (生效权重) 与 `warnings`; 校准中心
+   模型 tab 增红色告警横幅 + 门槛文案动态化; CLI 增 `python -m wyckoff.online_model --history` 打印轨迹。
+5. 测试: `tests/test_online_model.py` +7 (标尺单调/权重质量化/劣化折减/告警/历史截断/接管幅度减半)。
+   全量回归 726 passed; ruff 干净。
+
+## 生产行为影响 (重要)
+- 当前生产模型 (09-17, auc=0.679) 无历史 → 折减系数 1.0, 权重仍 0.70, **行为不变**;
+  等 cron 每日重训开始自然积累 history 后轨迹监控才生效。特征集/样本不变时, 0.679≥0.60 仍达标。
+
+## 续跑入口
+- 轨迹: `python -m wyckoff.online_model --history`
+- 状态: `python -m wyckoff.online_model --status`
+- 归因复跑: `/tmp/opencode/om_probe.py` (临时路径探针, 不碰生产文件)

@@ -66,9 +66,19 @@ except Exception:  # pragma: no cover - context 不可用时退回 v1 行为
 USE_MODEL_CONF = True
 MODEL_MIN_TRAIN = 60      # 训练标签数下限
 MODEL_MIN_OOS = 15        # 样本外标签数下限
-MODEL_MIN_AUC = 0.55      # 样本外 AUC 下限 (随机=0.5, 无区分度不接管)
+MODEL_MIN_AUC = 0.60      # 样本外 AUC 下限 (随机=0.5, 无区分度不接管; 实证上调 0.55→0.60)
 MODEL_MAX_BLEND = 0.70    # 模型可靠性最多占 conf 的比例
 MODEL_HORIZON = 20        # 标签周期 (与 win_rate_of 校准口径一致)
+
+# AUC 质量标尺: 接管权重随区分度连续爬升, 而不是 0.60 一档硬切 (5.7 第四条)
+MODEL_AUC_LO = 0.50       # 随机水平 → 权重 0
+MODEL_AUC_HI = 0.65       # 合格水平 → 权重饱和 (MODEL_MAX_BLEND)
+
+# 连续劣化监控 (5.7 第二、三条): 近 2 次重训均值 ≤ 既往 DEGRADE_LOOKBACK-2 次均值
+# DEGRADE_DROP 时触发 50% 权重折减 + 告警, 避免 AUC 恰好踩线还按满权重接管。
+MODEL_HISTORY_MAX = 20    # 状态文件保留的模型轨迹条数
+DEGRADE_LOOKBACK = 6      # 参与劣化判定的历史重训次数
+DEGRADE_DROP = 0.03       # 近期均值相对既往均值下降多少算劣化 (0.03 AUC 即有实质退化)
 
 # 在线学习 (SGDClassifier) 超参: 强 L2 正则 + 最优学习率
 _L2_ALPHA = 1e-3
@@ -120,6 +130,25 @@ def _save_state(state):
     from ._shared import atomic_write_json
     os.makedirs(os.path.dirname(ONLINE_MODEL_FILE), exist_ok=True)
     atomic_write_json(ONLINE_MODEL_FILE, state)
+
+
+def _append_history(prev_state, new_state):
+    """把本次重训的表现追加进历史轨迹 (供趋势劣化监控)。
+
+    只记录真正完成全量训练的条目 (AUC 字段可 None 但必有 n_train); 截断到
+    MODEL_HISTORY_MAX 条。次数不足时也照存, 供轨迹早段观察。
+    """
+    hist = [dict(h) for h in (prev_state.get("history") or [])]
+    hist.append({
+        "trained_at": new_state.get("trained_at", time.time()),
+        "n_train": new_state.get("n_train"),
+        "n_oos": new_state.get("n_oos"),
+        "auc_oos": new_state.get("auc_oos"),
+        "ic_oos": new_state.get("ic_oos"),
+        "acc_oos": new_state.get("acc_oos"),
+        "ready": new_state.get("ready"),
+    })
+    return hist[-MODEL_HISTORY_MAX:]
 
 
 # ── 训练 ──
@@ -256,6 +285,8 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
             "feat_version": FEATURE_VERSION,
             "n_train": len(train), "n_oos": len(oos), "auc_oos": auc_oos}),
     }
+    state["history"] = _append_history(_load_state(), state)
+    state.update(_quality_overlay(state))
     _save_state(state)
     return state
 
@@ -264,7 +295,8 @@ def _ready(state_ready_check):
     """接管门槛判定 (与 apply_model_conf 一致)。
 
     额外要求状态文件的 feat_version 与当前代码一致: 特征集升级后旧模型
-    系数维度失配, 必须静默失效等待重训, 绝不能用旧系数配新特征向量。"""
+    系数维度失配, 必须静默失效等待重训, 绝不能用旧系数配新特征向量。
+    达标但 AUC 持续劣化时不撤接管, 而是由 _degrade_factor 折减权重 (5.7)。"""
     if int(state_ready_check.get("feat_version", 0) or 0) != FEATURE_VERSION:
         return False
     n_train = int(state_ready_check.get("n_train", 0))
@@ -280,23 +312,92 @@ def model_status():
     if not st:
         return st
     st["ready"] = _ready(st)
-    st["blend"] = round(_blend_weight(st.get("n_train", 0)), 3)
+    auc = st.get("auc_oos")
+    st["blend"] = round(_blend_weight(st.get("n_train", 0), auc), 4)
+    st.update(_quality_overlay(st))
+    st["blend_eff"] = round(st["blend"] * (0.5 if st["degraded"] else 1.0), 4)
     return st
 
 
 # ── 运行期推理 (conf 接管) ──
 
-def _blend_weight(n_train):
-    """模型权重随标签数爬坡: 0.3 → MODEL_MAX_BLEND。"""
+def _auc_scale(auc):
+    """AUC 质量标尺: MODEL_AUC_LO(0.50)→0.0, MODEL_AUC_HI(0.65)→1.0 线性。
+
+    None / 非有限值 → 0.0 (样本不足或退化时不按模型权重取信)。
+    """
+    if auc is None:
+        return 0.0
+    try:
+        auc = float(auc)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(auc):
+        return 0.0
+    return max(0.0, min(1.0, (auc - MODEL_AUC_LO) / (MODEL_AUC_HI - MODEL_AUC_LO)))
+
+
+def _blend_weight(n_train, auc=None):
+    """模型权重 = 样本数量爬坡 × AUC 质量标尺 (低区分度自动降权)。
+
+    生产场景 AUC≈0.65+ → 权重饱和到 MODEL_MAX_BLEND; AUC=0.60 踩线时权重约
+    0.70×0.67≈0.47, 而非满权重接管 —— 把"区分度"而非只把"样本量"纳入报偿。
+    """
     if n_train < MODEL_MIN_TRAIN:
         return 0.0
-    return min(MODEL_MAX_BLEND, 0.3 + n_train / 2000.0)
+    size_scale = min(MODEL_MAX_BLEND, 0.3 + n_train / 2000.0)
+    return round(size_scale * _auc_scale(auc), 4)
+
+
+def _degrade_factor(state):
+    """连续劣化判定: 近 2 次重训 AUC 均值较既往窗口均值 ≤ -DEGRADE_DROP → 0.5。
+
+    返回 0.5 (折减接管权重) 或 1.0。判定完全基于状态文件里的历史轨迹,
+    与模型是否达标无关 (达标但仍持续劣化也要降权)。
+    """
+    hist = [h for h in (state.get("history") or [])
+            if isinstance(h.get("auc_oos"), (int, float))]
+    if len(hist) < DEGRADE_LOOKBACK:
+        return 1.0
+    recent = [float(h["auc_oos"]) for h in hist[-2:]]
+    prior = [float(h["auc_oos"]) for h in hist[-DEGRADE_LOOKBACK:-2]]
+    if not prior:
+        return 1.0
+    drop = float(np.mean(recent)) - float(np.mean(prior))
+    return 0.5 if drop <= -DEGRADE_DROP else 1.0
+
+
+def _quality_overlay(state):
+    """从历史轨迹重算质量告警 (模型状态/校准中心展示用)。
+
+    返回 {"degraded": bool, "warnings": [str]}; 与差分状态文件里的字段对账。
+    """
+    degraded = _degrade_factor(state) < 1.0
+    warnings = []
+    auc = state.get("auc_oos")
+    if "auc_oos" in state and auc is not None and float(auc) < MODEL_MIN_AUC:
+        warnings.append(f"OOS AUC {float(auc):.3f} 低于接管下限 {MODEL_MIN_AUC:.2f}, "
+                        "模型已停止接管 conf (请排查特征/标签口径或重训)")
+    elif auc is None and "auc_oos" in state:
+        warnings.append("缺少 OOS AUC 样本, 模型当前不接管 conf")
+    hist = [h for h in (state.get("history") or [])
+            if isinstance(h.get("auc_oos"), (int, float))]
+    if len(hist) >= DEGRADE_LOOKBACK:
+        recent = [float(h["auc_oos"]) for h in hist[-2:]]
+        prior = [float(h["auc_oos"]) for h in hist[-DEGRADE_LOOKBACK:-2]]
+        if prior and float(np.mean(recent)) - float(np.mean(prior)) <= -DEGRADE_DROP:
+            warnings.append(
+                f"AUC 连续劣化 {float(np.mean(prior)):.3f} → {float(np.mean(recent)):.3f} "
+                f"(Δ{float(np.mean(recent)) - float(np.mean(prior)):+.3f}), "
+                "接管权重已按 50% 折减")
+    return {"degraded": degraded, "warnings": warnings}
 
 
 def apply_model_conf(events):
     """把事件 conf 与模型 P(up|X) 混合 (方向相关的可靠性)。
 
     仅在模型达到接管门槛时生效; 涨跌停等硬性低置信档 (conf<=5) 不动。
+    权重 = AUC 质量标尺 × 样本爬坡 × 连续劣化折减 (5.7)。
     返回被改写的事件数。
     """
     if not USE_MODEL_CONF:
@@ -306,7 +407,7 @@ def apply_model_conf(events):
         return 0
     coef = np.array(st["coef"], dtype=float)
     intercept = float(st["intercept"])
-    w = _blend_weight(int(st.get("n_train", 0)))
+    w = _blend_weight(int(st.get("n_train", 0)), st.get("auc_oos")) * _degrade_factor(st)
     n_apply = 0
     for e in events or []:
         conf = e.get("conf")
@@ -433,6 +534,21 @@ if __name__ == "__main__":
                   f"AUC={st.get('auc_oos')}, 接管conf={'是' if st.get('ready') else '否'}")
     elif "--status" in _sys.argv:
         print(json.dumps(model_status(), ensure_ascii=False, indent=2))
+    elif "--history" in _sys.argv:
+        st = _load_state()
+        hist = st.get("history") or []
+        if not hist:
+            print("暂无模型历史轨迹 (尚未完成全量训练)")
+            _sys.exit(0)
+        print("#  次数   训练/oos      AUC     IC   acc  ready")
+        for i, h in enumerate(hist, 1):
+            auc = h.get("auc_oos")
+            ic = h.get("ic_oos")
+            auc_s = "-" if auc is None else f"{float(auc):.3f}"
+            ic_s = "-" if ic is None else f"{float(ic):+.3f}"
+            print(f"{i:>2}  {h.get('n_train', '?') or '?'}/{h.get('n_oos', '?') or '?':<5} "
+                  f"{auc_s:<7} {ic_s:<7} {float(h.get('acc_oos', 0) or 0):.2f}  "
+                  f"{'✓' if h.get('ready') else '—'}")
     elif "--install-cron" in _sys.argv:
         i = _sys.argv.index("--install-cron")
         arg = _sys.argv[i + 1] if len(_sys.argv) > i + 1 and ":" in _sys.argv[i + 1] \
@@ -453,5 +569,5 @@ if __name__ == "__main__":
         print("已移除模型重训计划任务")
     else:
         print("用法: python -m wyckoff.online_model --train [--quiet] / "
-              "--status / --install-cron [HH:MM] / --uninstall-cron / "
+              "--status / --history / --install-cron [HH:MM] / --uninstall-cron / "
               "--install-task [HH:MM] / --uninstall-task")

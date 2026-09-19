@@ -535,6 +535,11 @@ class CalibrationCenter(QWidget):
 
         # 状态卡片区 (数据积累 / 样本外表现 / 接管状态)
         self._model_cards = {}
+        self._model_warn = QLabel("")
+        self._model_warn.setWordWrap(True)
+        self._model_warn.setStyleSheet(
+            f"color:{theme.C_DOWN};font-weight:bold;font-size:{theme.font_pt('mini')};")
+        lay.addWidget(self._model_warn)
         row = QHBoxLayout()
         row.setSpacing(10)
         for key, title in [("labels", "已标注样本"), ("train", "训练样本"),
@@ -555,8 +560,13 @@ class CalibrationCenter(QWidget):
         lay.addLayout(row)
 
         # 特征系数 (按 |coef| 排序) + 说明
-        note = QLabel("特征系数: 正系数推高上涨概率 (P(up)), 负系数压低。"
-                      "接管需要同时满足 n_train≥60 · n_oos≥15 · OOS AUC≥0.55。")
+        from wyckoff.online_model import MODEL_MIN_AUC as _MODEL_MIN_AUC_2
+        from wyckoff.online_model import MODEL_MIN_OOS as _MODEL_MIN_OOS_2
+        from wyckoff.online_model import MODEL_MIN_TRAIN as _MODEL_MIN_TRAIN_2
+        note = QLabel(f"特征系数: 正系数推高上涨概率 (P(up)), 负系数压低。"
+                      f"接管需要同时满足 n_train≥{_MODEL_MIN_TRAIN_2} · "
+                      f"n_oos≥{_MODEL_MIN_OOS_2} · OOS AUC≥{_MODEL_MIN_AUC_2 * 100:.0f}%;"
+                      f" 接管权重随 AUC 质量连续标定, 连续劣化自动折减。")
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{theme.C_MUTED};font-size:{theme.font_pt('mini')};")
         lay.addWidget(note)
@@ -733,8 +743,14 @@ class CalibrationCenter(QWidget):
         if ready:
             import time as _time
             self._model_cards["gate"][1].setText(
-                f"混合权重 {st.get('blend', 0) * 100:.0f}% · "
+                f"生效权重 {st.get('blend_eff', 0) * 100:.0f}% "
+                f"(满 {st.get('blend', 0) * 100:.0f}%) · "
                 f"训练于 {_time.strftime('%Y-%m-%d %H:%M', _time.localtime(st.get('trained_at', 0)))}")
+        warns = st.get("warnings") or []
+        self._model_warn.setText("\n".join(f"⚠ {w}" for w in warns) if warns else "")
+        self._model_warn.setStyleSheet(
+            f"color:{theme.C_DOWN if warns else theme.C_PANEL};font-weight:bold;"
+            f"font-size:{theme.font_pt('mini')};")
         # L5 语境特征覆盖度 + 特征集版本过期提示
         from wyckoff.online_model import FEATURE_VERSION as _CUR_FV
         n_ctx = int(st.get("n_ctx_labels", 0) or 0)
