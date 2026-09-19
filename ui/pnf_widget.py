@@ -668,6 +668,10 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
                 if p is not None and s is not None and t is not None:
                     sign = "+" if s > 0 else ""
                     ps = f"保守目标 {t:.2f}{sign}{s:.1f}% 概率{int(p*100)}%"
+                    if targets.get("上方hit_保守"):
+                        _d = targets.get("上方hit日期_保守")
+                        if _d:
+                            ps += f" ·已到{_d}"
                 else:
                     ps = "目标待确认"
             elif targets.get("direction") == "down":
@@ -677,6 +681,10 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
                 if p is not None and s is not None and t is not None:
                     sign = "+" if s > 0 else ""
                     ps = f"保守目标 {t:.2f}{sign}{s:.1f}% 概率{int(p*100)}%"
+                    if targets.get("下方hit_保守"):
+                        _d = targets.get("下方hit日期_保守")
+                        if _d:
+                            ps += f" ·已到{_d}"
                 else:
                     ps = "目标待确认"
             else:
@@ -693,6 +701,15 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
                 if dn_t is not None and dn_s is not None and dn_p is not None:
                     sign = "+" if dn_s > 0 else ""
                     parts.append(f"下{dn_t:.2f}{sign}{dn_s:.1f}%{int(dn_p*100)}%")
+                if parts:
+                    if targets.get("上方hit_保守"):
+                        _d = targets.get("上方hit日期_保守")
+                        if _d:
+                            parts.append(f"上已到{_d}")
+                    if targets.get("下方hit_保守"):
+                        _d = targets.get("下方hit日期_保守")
+                        if _d:
+                            parts.append(f"下已到{_d}")
                 ps = " / ".join(parts) if parts else "目标待确认"
             poc_s = f" · POC {float(poc):.2f}" if poc else ""
             pos_s = f" · TR位{tr_pos:.0f}%" if tr_pos is not None else ""

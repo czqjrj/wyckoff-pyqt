@@ -118,11 +118,68 @@ def build_pnf(df: pd.DataFrame, box_pct: float = 0.015, reversal: int = 3,
     """
     box = _pnf_box(df, box_pct, box_mode, atr_factor)
     cols, bar_col = _build_pnf(df, box, reversal)
+    # 为每列附加 K 线时间信息 (i0/i1/date0/date1), 供十字光标读数与
+    # 目标"到达日期"标注使用 (见 attach_col_dates)
+    attach_col_dates(df, cols, bar_col)
     # 记录本次构建的列归属, 供 pnf_volume 复用 (同 cols 对象 → 跳过重复构建)
     _LAST_BUILD["cols"] = cols
     _LAST_BUILD["bar_col"] = bar_col
     _LAST_BUILD["reversal"] = reversal
     return cols, box
+
+
+def _fmt_bar_ts(ts) -> str:
+    """格式化单根K线时间戳: 日线 → YYYY-MM-DD, 日内 → YYYY-MM-DD HH:MM。"""
+    if ts is None:
+        return ""
+    try:
+        if ts.hour or ts.minute or ts.second:
+            return ts.strftime("%Y-%m-%d %H:%M")
+        return ts.strftime("%Y-%m-%d")
+    except Exception:
+        return str(ts)
+
+
+def _fmt_hit_label(hit: bool, date) -> str:
+    """matplotlib 命中标注: 已到带日期 → "已到 2024-08-21", 否则 "已到"/"未到"。"""
+    if hit:
+        return f"已到 {date}" if date else "已到"
+    return "未到"
+
+
+def attach_col_dates(df: pd.DataFrame, cols, bar_col: list = None, box: float = None):
+    """为点数图每列就地附加 K 线时间信息:
+
+      - i0/i1:     归属该列的首/末根 K 线下标 (与 bar_col 对应 df 行序)
+      - date0/date1: 首/末根 K 线时间字符串 (日线 YYYY-MM-DD, 日内含 HH:MM)
+
+    供十字光标读数 (_fmt_col_x) 与目标"到达日期"标注使用。bar_col 缺省时
+    按 build_pnf 同口径重算 (需 box; 无则跳过)。df 无 day 列或长度不符时
+    静默跳过, 不影响点数图计算本身。
+    """
+    if not cols or len(df) == 0 or "day" not in df.columns:
+        return cols
+    if bar_col is None:
+        if box is None:
+            return cols
+        _, bar_col = _build_pnf(df, box, 3)
+    if len(bar_col) != len(df):
+        return cols
+    days = df["day"].tolist()
+    first, last = {}, {}
+    for i, j in enumerate(bar_col):
+        if not (0 <= j < len(cols)):
+            continue
+        if j not in first:
+            first[j] = i
+        last[j] = i
+    for j, c in enumerate(cols):
+        if j in first:
+            c["i0"] = first[j]
+            c["i1"] = last[j]
+            c["date0"] = _fmt_bar_ts(days[first[j]])
+            c["date1"] = _fmt_bar_ts(days[last[j]])
+    return cols
 
 
 def _build_pnf(df: pd.DataFrame, box: float, reversal: int = 3):
@@ -263,7 +320,42 @@ def pnf_targets(df: pd.DataFrame, cols, box: float, reversal: int = 3,
         # 当前最后一列只能用位置启发式推断区间 → 同样做概率校准
         _apply_zone_calibration(t, t["zone_heur"])
         t["zone"] = t["zone_heur"]
+    # 当前目标命中核对: 最近一列是否已交易到目标位 (到达日期 = 该列 date0)
+    _annotate_current_reached(t, cols, box)
     return t
+
+
+def _annotate_current_reached(t: dict, cols, box: float) -> None:
+    """当前 TR 目标命中核对 (三档 + 近端)。
+
+    当前 TR 计数的 TR 结束列即最后一列 (投影点 = 现在), 尚无"未来"列群,
+    故只核对最后一列是否已把价格送到目标位 — 即目标线已被现价穿越的
+    "已到"状态。容差与 pnf_history_targets 一致 (目标 ±1格 或 TR 宽 5%)。
+    命中时写入 `上方/下方hit_{档}` 与 `上方/下方hit日期_{档}` (到达日期 =
+    该列起始K线 date0, 精确到列级时间), 供图表在目标线上标注到达时间。
+    近端档用 `_近端` 后缀; 三档用 保守/中/激进。cols 无日期信息时
+    date0 为空串, 只标注已到不标日期。
+    """
+    if not t or not cols:
+        return
+    tol = max(box, t.get("tr_width", 0) * 0.05)
+    c = cols[-1]
+    d0 = str(c.get("date0") or "")
+    pairs = (
+        ("近端", "近端上方目标", "近端下方目标"),
+        ("保守", "横向计数上方目标_保守", "横向计数下方目标_保守"),
+        ("中",   "横向计数上方目标_中",   "横向计数下方目标_中"),
+        ("激进", "横向计数上方目标",      "横向计数下方目标"),
+    )
+    for tier, up_k, dn_k in pairs:
+        up_v = t.get(up_k)
+        dn_v = t.get(dn_k)
+        if isinstance(up_v, (int, float)) and c["hi"] >= up_v - tol:
+            t[f"上方hit_{tier}"] = True
+            t[f"上方hit日期_{tier}"] = d0
+        if isinstance(dn_v, (int, float)) and c["lo"] <= dn_v + tol:
+            t[f"下方hit_{tier}"] = True
+            t[f"下方hit日期_{tier}"] = d0
 
 
 def _pnf_zone_heur(cols, tr_start_col, tr_top, tr_bottom, direction):
@@ -707,18 +799,26 @@ def pnf_history_targets(cols, box: float, reversal: int = 3,
                     t[f"下方空间_{tier}%"] = t.get(f"下方空间_{tier}%")
 
             for c in cols[i + 1:]:
+                d0 = str(c.get("date0") or "")
                 if up is not None and c["hi"] >= up - tol:
-                    t["up_hit"] = True
+                    if not t["up_hit"]:
+                        t["up_hit"] = True
+                        t["up_hit_date"] = d0
                 if dn is not None and c["lo"] <= dn + tol:
-                    t["down_hit"] = True
-                # 三档分别核对
+                    if not t["down_hit"]:
+                        t["down_hit"] = True
+                        t["down_hit_date"] = d0
+                # 三档分别核对 (首次到达列的时间记为到达日期)
                 for tier in tier_map:
                     up_t = t.get(f"上方目标_{tier}")
                     dn_t = t.get(f"下方目标_{tier}")
-                    if isinstance(up_t, (int, float)) and c["hi"] >= up_t - tol:
-                        t[f"上方hit_{tier}"] = True
-                    if isinstance(dn_t, (int, float)) and c["lo"] <= dn_t + tol:
-                        t[f"下方hit_{tier}"] = True
+                    up_hk, dn_hk = f"上方hit_{tier}", f"下方hit_{tier}"
+                    if isinstance(up_t, (int, float)) and c["hi"] >= up_t - tol and not t[up_hk]:
+                        t[up_hk] = True
+                        t[f"上方hit日期_{tier}"] = d0
+                    if isinstance(dn_t, (int, float)) and c["lo"] <= dn_t + tol and not t[dn_hk]:
+                        t[dn_hk] = True
+                        t[f"下方hit日期_{tier}"] = d0
             # 威科夫语义: 按突破后的走势结果划分吸筹/派发区间。
             # 向上突破并延续 → 吸筹; 向下破位并延续 → 派发;
             # 快速反向打回 → 向上失败(UTAD→派发) / 向下失败(Spring→吸筹)。
@@ -969,7 +1069,8 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
                            ls="-" if hit else ":", lw=1.0,
                            alpha=0.95 if hit else 0.7)
                 ax.text(tx, h["up_target"],
-                        f"{'已到' if hit else '未到'} 上涨目标 {h['up_target']:.2f}",
+                        _fmt_hit_label(hit, h.get("up_hit_date"))
+                        + f" 上涨目标 {h['up_target']:.2f}",
                         fontsize=_fs(-1), color=col, va="center",
                         bbox=_txt_bbox,
                         fontweight="bold" if hit else "normal")
@@ -980,7 +1081,8 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
                            ls="-" if hit else ":", lw=1.0,
                            alpha=0.95 if hit else 0.7)
                 ax.text(tx, h["down_target"],
-                        f"{'已到' if hit else '未到'} 下跌目标 {h['down_target']:.2f}",
+                        _fmt_hit_label(hit, h.get("down_hit_date"))
+                        + f" 下跌目标 {h['down_target']:.2f}",
                         fontsize=_fs(-1), color=col, va="center",
                         bbox=_txt_bbox,
                         fontweight="bold" if hit else "normal")
@@ -1058,6 +1160,11 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
             ax.text(cend + 0.15, up, f"▲ 上涨目标位 {up:.2f}", fontsize=_fs(0),
                     fontweight="bold", color="#2f9e44", va="center",
                     bbox=_txt_bbox)
+            if targets.get("上方hit_激进") and targets.get("上方hit日期_激进"):
+                ax.text(cend + 0.15, up - (tr_top - up) * 0.03,
+                        f"已到 {targets['上方hit日期_激进']}",
+                        fontsize=_fs(-2), color="#2f9e44", va="center",
+                        alpha=0.9, bbox=_txt_bbox)
             ax.text(cend + 0.15, (tr_top + up) / 2,
                     f"+因 {targets.get('cause', 0):.2f}"
                     f" ({targets.get('columns', 0)}列×格×反转)",
@@ -1069,7 +1176,12 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
                 if abs(near - up) > box:
                     ax.axhline(near, color="#82c91e", ls=":", lw=1.0,
                                alpha=0.75 if active else 0.35)
-                    ax.text(cend + 0.15, near, f"近端参考 {near:.2f}",
+                    near_s = f"近端参考 {near:.2f}"
+                    if targets.get("上方hit_近端"):
+                        _nd = targets.get("上方hit日期_近端")
+                        if _nd:
+                            near_s += f" ·已到{_nd}"
+                    ax.text(cend + 0.15, near, near_s,
                             fontsize=_fs(0), color="#82c91e", va="center",
                             alpha=0.85 if active else 0.4, bbox=_txt_bbox)
         # 下跌目标 (派发破位后计数): 从 TR 下沿投影
@@ -1084,6 +1196,11 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
             ax.text(cend + 0.15, dn, f"▼ 下跌目标位 {dn:.2f}", fontsize=_fs(0),
                     fontweight="bold", color="#e03131", va="center",
                     bbox=_txt_bbox)
+            if targets.get("下方hit_激进") and targets.get("下方hit日期_激进"):
+                ax.text(cend + 0.15, dn + (dn - tr_bottom) * 0.03,
+                        f"已到 {targets['下方hit日期_激进']}",
+                        fontsize=_fs(-2), color="#e03131", va="center",
+                        alpha=0.9, bbox=_txt_bbox)
             ax.text(cend + 0.15, (tr_bottom + dn) / 2,
                     f"-因 {targets.get('cause', 0):.2f}"
                     f" ({targets.get('columns', 0)}列×格×反转)",
@@ -1095,7 +1212,10 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
                 if abs(near - dn) > box:
                     ax.axhline(near, color="#f08c00", ls=":", lw=1.0,
                                alpha=0.75 if active else 0.35)
-                    ax.text(cend + 0.15, near, f"近端参考 {near:.2f}",
+                    near_s = f"近端参考 {near:.2f}"
+                    if targets.get("下方hit_近端") and targets.get("下方hit日期_近端"):
+                        near_s += f" ·已到{targets['下方hit日期_近端']}"
+                    ax.text(cend + 0.15, near, near_s,
                             fontsize=_fs(0), color="#f08c00", va="center",
                             alpha=0.85 if active else 0.4, bbox=_txt_bbox)
 

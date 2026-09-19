@@ -77,8 +77,10 @@ class PnfHistoryRenderer:
             plot.addItem(pg.InfiniteLine(
                 pos=float(h["up_target"]), angle=0,
                 pen=_pen(col, 1.0, style, 0.95 if hit else 0.7)))
+            hit_s = _hit_suffix(hit, h.get("up_hit_date"))
+            state = "已到" if hit else "未到"
             ti = _DragTextItem(
-                f"{'已到' if hit else '未到'} 上涨目标 {h['up_target']:.2f}", col,
+                f"{state}{hit_s} 上涨目标 {h['up_target']:.2f}", col,
                 anchor=(0, 0.5), fill=_fill, border=_border
             )
             f = QtGui.QFont()
@@ -96,8 +98,10 @@ class PnfHistoryRenderer:
             plot.addItem(pg.InfiniteLine(
                 pos=float(h["down_target"]), angle=0,
                 pen=_pen(col, 1.0, style, 0.95 if hit else 0.7)))
+            hit_s = _hit_suffix(hit, h.get("down_hit_date"))
+            state = "已到" if hit else "未到"
             ti = _DragTextItem(
-                f"{'已到' if hit else '未到'} 下跌目标 {h['down_target']:.2f}", col,
+                f"{state}{hit_s} 下跌目标 {h['down_target']:.2f}", col,
                 anchor=(0, 0.5), fill=_fill, border=_border
             )
             f = QtGui.QFont()
@@ -110,3 +114,10 @@ class PnfHistoryRenderer:
 
     def _chip(self):
         return (pg.mkBrush(theme.C_PANEL), _pen(theme.C_BORDER, 1.0))
+
+
+def _hit_suffix(hit: bool, date) -> str:
+    """命中标注尾缀: 已到 → " 2024-08-21", 未到/无日期 → 空串。"""
+    if hit and date:
+        return f" {date}"
+    return ""

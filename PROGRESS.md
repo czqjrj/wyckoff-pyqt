@@ -243,6 +243,42 @@
 
 ---
 
+# 进度记录：5.8 P&F 目标"到达日期"标注 + 十字光标列日期 (2026-09-19)
+
+> 承接 5.7。把 P&F 目标线的"已到"从纯布尔升级为带**到达日期**的可读标注,
+> 十字光标读数也获得该列 K 线日期区间。纯工程/可读性项, 不改任何测算。
+
+## 数据侧 (`wyckoff/pnf.py`)
+- **`attach_col_dates`**: `build_pnf` 后在每列就地附加 K 线时间
+  (`i0/i1` 首末 K 线下标 + `date0/date1`, 日线 `YYYY-MM-DD` / 日内含 `HH:MM`);
+  静默跳过无 day 列/长度不符, 不影响点数图计算。
+- **`_annotate_current_reached`**: 当前 TR 最后一列是否已穿越目标位
+  (三档 + 近端, 容差同历史口径) → 写 `上方/下方hit_{档}` 与 `hit日期_{档}`
+  (到达日期 = 该列 `date0`, 十字光标可读、图上可标)。
+- **`pnf_history_targets`**: 首次到达的目标线补 `up_hit_date/down_hit_date`
+  与三档 `上方/下方hit日期_{档}`, 精确到**首个满足目标 ±容差 的列**.
+
+## 展示侧
+- pyqtgraph `ui/renderers/pnf_history.py`: 历史目标线 `已到 2024-08-21 上涨目标 X`
+  (未到/无日期不变)。
+- pyqtgraph `ui/renderers/pnf_targets.py`: 当前 TR 三档/近端命中标签追加 `·已到<日期>`。
+- `ui/pnf_widget.py` 顶部信息条: 方向档/range 档命中时带到达日期。
+- matplotlib `plot_pnf`: 历史"已到"带日期; 当前目标位/近端参考命中追加日期。
+- 十字光标读数 (`ui/pnf_widget._fmt_col_x`) 已随 `date0/date1` 展示列日期区间。
+
+## 测试
+- `tests/test_pnf_history_targets.py` +5: 列日期归属核对 (day ↔ i0/i1)、日内时分、
+  历史 hit 日期与首个到达列一致、当前 reached 贯穿目标 / 日期==末列 date0。
+- `tests/test_pnf_ui_arrival.py` (新, offscreen): 历史/当前渲染器标签带日期 +
+  `_hit_date_lbl/_hit_suffix` 纯函数格式。
+- 全量回归 **737 passed** (基线 728 +9); ruff 干净。
+
+## 续跑入口
+- 手工看图: 主窗口 P&F 图十字光标停任意列看日期区间; 目标线 "已到" 后即到达日期。
+- 精度评估不受影响: `python scripts/eval_pnf_tier_accuracy.py --run`
+
+---
+
 # 进度记录：5.7 P&F 三档目标概率·低概率端折扣重标定 (2026-09-19)
 
 > 承接 5.4 (当日早段折扣上线)。当日重跑精度库发现 5.4 折扣把原始 0.60~0.70 概率

@@ -4,6 +4,7 @@
 核对为 到位(up_hit/down_hit) 或 未到。
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -156,3 +157,85 @@ def test_plot_pnf_with_history_renders():
     bottoms = [t.get_text() for t in fig.texts
                if "准确率" in t.get_text() or "到位" in t.get_text()]
     assert bottoms, "图底部应有历史准确率统计"
+
+
+def test_attach_col_dates():
+    """每列应附带 K 线时间信息 (i0/i1/date0/date1), 且与列归属一致。"""
+    df = _df_with_trends()
+    cols, box = build_pnf(df)
+    for c in cols:
+        assert set(["i0", "i1", "date0", "date1"]) <= set(c)
+        assert 0 <= c["i0"] <= c["i1"] < len(df)
+        assert re.match(r"^\d{4}-\d{2}-\d{2}$", c["date0"]), c["date0"]
+        assert c["date1"].startswith(c["date0"][:8]) or c["date1"] >= c["date0"]
+        # 首/末日期必须与对应 K 线的 day 一致
+        assert c["date0"] == str(df["day"].iloc[c["i0"]].date()), c
+        assert c["date1"] == str(df["day"].iloc[c["i1"]].date()), c
+
+
+def test_attach_col_dates_intraday():
+    """日内 K 线 (带时间) 列日期应保留日内时分 (跨零点整点 bar 允许纯日期)。"""
+    df = _df_with_trends()
+    df = df.copy()
+    df["day"] = pd.date_range("2026-01-05 09:30", periods=len(df), freq="30min")
+    cols, box = build_pnf(df)
+    intraday = [c for c in cols if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", c["date0"])]
+    daily = [c for c in cols if re.match(r"^\d{4}-\d{2}-\d{2}$", c["date0"])]
+    assert len(intraday) > len(cols) * 0.7, "大多数列应保留日内时分"
+    assert daily, "整点(00:00) bar 允许回退为纯日期"
+    for c in cols:
+        assert re.match(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$", c["date0"]), c["date0"]
+        assert re.match(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$", c["date1"]), c["date1"]
+
+
+def test_history_hit_dates():
+    """到达日期必须等于突破后首个满足目标 ±容差的列的 date0。"""
+    df = _df_with_trends()
+    cols, box = build_pnf(df)
+    hist = pnf_history_targets(cols, box)
+    for h in hist:
+        tol = max(box, h.get("tr_width", 0) * 0.05)
+        if h["direction"] == "up" and h.get("up_hit"):
+            first = next(
+                (c.get("date0") for c in cols[h["break_col"] + 1:]
+                 if c["hi"] >= h["up_target"] - tol), None)
+            assert h["up_hit_date"] == first, h
+        if h["direction"] == "down" and h.get("down_hit"):
+            first = next(
+                (c.get("date0") for c in cols[h["break_col"] + 1:]
+                 if c["lo"] <= h["down_target"] + tol), None)
+            assert h["down_hit_date"] == first, h
+    # 至少一段带日期命中 (合成行情必须能覆盖到近端目标)
+    assert any(h.get("up_hit_date") or h.get("down_hit_date") for h in hist)
+
+
+def test_current_reached_dates():
+    """当前 TR 命中核对: 命中档日期==最后一列 date0, 且目标已被该列穿越。"""
+    df = _df_with_trends()
+    cols, box = build_pnf(df)
+    t = pnf_targets(df, cols, box)
+    tol = max(box, t.get("tr_width", 0) * 0.05)
+    last = cols[-1]
+    tk = {
+        ("上方", "保守"): "横向计数上方目标_保守",
+        ("上方", "中"): "横向计数上方目标_中",
+        ("上方", "激进"): "横向计数上方目标",
+        ("上方", "近端"): "近端上方目标",
+        ("下方", "保守"): "横向计数下方目标_保守",
+        ("下方", "中"): "横向计数下方目标_中",
+        ("下方", "激进"): "横向计数下方目标",
+        ("下方", "近端"): "近端下方目标",
+    }
+    for k, v in t.items():
+        if k.startswith("上方hit日期_") or k.startswith("下方hit日期_"):
+            assert v == last["date0"], k
+        if k.startswith("上方hit_") or k.startswith("下方hit_"):
+            head, tier = k.split("_", 1)
+            side = "上方" if head == "上方hit" else "下方"
+            target = t.get(tk[(side, tier)])
+            if target is None:
+                continue
+            if side == "上方":
+                assert v == (last["hi"] >= target - tol), k
+            else:
+                assert v == (last["lo"] <= target + tol), k

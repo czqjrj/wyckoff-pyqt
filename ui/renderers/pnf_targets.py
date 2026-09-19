@@ -5,6 +5,26 @@ from pyqtgraph.Qt import QtCore
 from .. import theme
 from .pnf_grid import _brush_alpha, _DragTextItem, _pen
 
+_UP_TIER_BY_KEY = {
+    "横向计数上方目标_保守": "保守",
+    "横向计数上方目标_中": "中",
+    "横向计数上方目标": "激进",
+}
+_DN_TIER_BY_KEY = {
+    "横向计数下方目标_保守": "保守",
+    "横向计数下方目标_中": "中",
+    "横向计数下方目标": "激进",
+}
+
+
+def _hit_date_lbl(targets, side: str, tier: str) -> str:
+    """目标命中尾缀: 命中且带日期 → " ·已到2024-08-21", 否则空串。"""
+    if tier and targets.get(f"{side}hit_{tier}"):
+        d = targets.get(f"{side}hit日期_{tier}")
+        if d:
+            return f" ·已到{d}"
+    return ""
+
 
 class PnfTargetsRenderer:
     """当前 TR 与目标渲染器。
@@ -163,6 +183,7 @@ class PnfTargetsRenderer:
             sign = "+" if (sp or 0) > 0 else ""
             sp_s = f"{sign}{sp:.1f}%" if sp is not None else ""
             lbl = f"{label}{t:.2f}{sp_s}{p_pct}"
+            lbl += _hit_date_lbl(self._targets, "上方", _UP_TIER_BY_KEY.get(tk, ""))
 
             direction = self._targets.get("direction", "range")
             y_off = idx * label_dy if direction == "up" else (idx - 1) * label_dy
@@ -210,6 +231,7 @@ class PnfTargetsRenderer:
             sign = "+" if (sp or 0) > 0 else ""
             sp_s = f"{sign}{sp:.1f}%" if sp is not None else ""
             lbl = f"{label}{t:.2f}{sp_s}{p_pct}"
+            lbl += _hit_date_lbl(self._targets, "下方", _DN_TIER_BY_KEY.get(tk, ""))
 
             direction = self._targets.get("direction", "range")
             y_off = (1 - idx) * label_dy if direction == "down" else (idx - 1) * label_dy
@@ -237,6 +259,7 @@ class PnfTargetsRenderer:
                 sp = self._targets.get("上方空间_近端%")
                 sign = "+" if (sp or 0) > 0 else ""
                 lbl = f"近{float(near):.2f}{sign}{sp:.1f}%" if sp is not None else f"近端{float(near):.2f}"
+                lbl += _hit_date_lbl(self._targets, "上方", "近端")
                 ti = _DragTextItem(
                     lbl, theme.C_DOWN, anchor=(0, 0.5), delta=0, alpha=a,
                     fill=fill, border=border
@@ -256,6 +279,7 @@ class PnfTargetsRenderer:
                 sp = self._targets.get("下方空间_近端%")
                 sign = "+" if (sp or 0) > 0 else ""
                 lbl = f"近{float(near):.2f}{sign}{sp:.1f}%" if sp is not None else f"近端{float(near):.2f}"
+                lbl += _hit_date_lbl(self._targets, "下方", "近端")
                 ti = _DragTextItem(
                     lbl, theme.C_UP, anchor=(0, 0.5), delta=0, alpha=a,
                     fill=fill, border=border
