@@ -84,6 +84,12 @@ DEGRADE_DROP = 0.03       # 近期均值相对既往均值下降多少算劣化 
 _L2_ALPHA = 1e-3
 _MAX_ITER = 2000
 
+# OOS 指标的多 seed 重采样 (5.7 归因结论: 单点 AUC 对训练随机性 ±0.09 不稳)
+# 部署模型固定用 MODEL_SEED(42) 的系数; 质量指标取多 seed 中位数 + CI。
+MODEL_SEED = 42                      # 部署系数的固定随机种子 (行为稳定)
+MODEL_N_SEEDS = 7                    # 重采样 seed 数 (奇数, 取中位数)
+MODEL_SEED_CANDIDATES = (42, 7, 123, 2024, 8, 99, 5)
+
 
 # ── 特征向量 ──
 
@@ -139,11 +145,14 @@ def _append_history(prev_state, new_state):
     MODEL_HISTORY_MAX 条。次数不足时也照存, 供轨迹早段观察。
     """
     hist = [dict(h) for h in (prev_state.get("history") or [])]
+    seeds = new_state.get("auc_seeds") or {}
     hist.append({
         "trained_at": new_state.get("trained_at", time.time()),
         "n_train": new_state.get("n_train"),
         "n_oos": new_state.get("n_oos"),
         "auc_oos": new_state.get("auc_oos"),
+        "auc_lo": seeds.get("lo"),
+        "auc_hi": seeds.get("hi"),
         "ic_oos": new_state.get("ic_oos"),
         "acc_oos": new_state.get("acc_oos"),
         "ready": new_state.get("ready"),
@@ -205,14 +214,18 @@ def _n_ctx_labeled(rows):
         return 0
 
 
-def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
+def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=None):
     """全量重训在线校准模型并保存状态。
 
     按信号日期时序切分: 前 1-oos_frac 训练 / 后 oos_frac 样本外评估。
+    质量指标 (auc/ic/acc) 在多个随机 seed 上重训练取中位数 + 5/95 分位区间,
+    消除单点 AUC 的种子抖动 (实测 ±0.09); 部署系数固定用 MODEL_SEED。
     返回状态 dict (无论是否达到接管门槛都保存, 供校准中心展示积累进度)。
     """
     if SGDClassifier is None:
         return _load_state()
+    if seed is None:
+        seed = MODEL_SEED
     from .signal_accuracy import load_signals
     if records is None:
         records = load_signals()
@@ -251,20 +264,56 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
     except Exception:
         class_weight = None
 
-    clf = SGDClassifier(loss="log_loss", penalty="l2", alpha=_L2_ALPHA,
-                        max_iter=_MAX_ITER, tol=1e-5, random_state=seed,
-                        class_weight=class_weight, learning_rate="optimal")
-    # 全量重训收敛; "在线"语义由"记录不断积累 + 每次重训 + 运行期零延迟推理"承载。
-    clf.fit(Xt, yt)
+    def _fit(a_seed):
+        clf = SGDClassifier(loss="log_loss", penalty="l2", alpha=_L2_ALPHA,
+                            max_iter=_MAX_ITER, tol=1e-5, random_state=a_seed,
+                            class_weight=class_weight, learning_rate="optimal")
+        clf.fit(Xt, yt)
+        return clf
 
     # 样本外评估
     Xo = np.array([feature_vector(r) for r, _, _ in oos])
     yo = np.array([1 if ret > 0 else 0 for _, ret, _ in oos])
-    prob = clf.predict_proba(Xo)[:, 1]
-    auc_oos = _auc(yo, prob) if len(oos) >= 2 and len(np.unique(yo)) >= 2 else None
-    ic_oos = _spearman(prob, np.array([ret for _, ret, _ in oos])) if len(oos) >= 3 else None
-    acc_oos = float(((prob > 0.5).astype(int) == yo).mean())
-    coef = clf.coef_[0]
+    rets_oos = np.array([ret for _, ret, _ in oos])
+
+    deploy = _fit(seed)  # 部署模型 (固定 seed, 行为稳定)
+    prob = deploy.predict_proba(Xo)[:, 1]
+    auc_deploy = _auc(yo, prob) if len(oos) >= 2 and len(np.unique(yo)) >= 2 else None
+    coef = deploy.coef_[0]
+    intercept = float(deploy.intercept_[0])
+
+    # 多 seed 重采样: 同一切分/同一权重, 只变训练随机性 → AUC/IC/ACC 中位数与分位。
+    aucs, ics, accs = [], [], []
+    for a_seed in set(MODEL_SEED_CANDIDATES) - {seed}:
+        c = _fit(a_seed)
+        p = c.predict_proba(Xo)[:, 1]
+        a = _auc(yo, p) if len(oos) >= 2 and len(np.unique(yo)) >= 2 else None
+        aucs.append(a)
+        ics.append(_spearman(p, rets_oos) if len(oos) >= 3 else None)
+        accs.append(float(((p > 0.5).astype(int) == yo).mean()))
+    aucs.append(auc_deploy)
+    ics.append(_spearman(prob, rets_oos) if len(oos) >= 3 else None)
+    accs.append(float(((prob > 0.5).astype(int) == yo).mean()))
+
+    aucs = [a for a in aucs if a is not None]
+    ics = [i for i in ics if i is not None]
+    ic_oos = float(np.median(ics)) if ics else None
+    acc_oos = float(np.median(accs)) if accs else None
+    if aucs:
+        auc_oos = float(np.median(sorted(aucs)))
+        lo, hi = np.percentile(sorted(aucs), [5.0, 95.0])
+        auc_seeds = {
+            "n": len(aucs), "all": [round(a, 4) for a in aucs],
+            "mean": round(float(np.mean(aucs)), 4),
+            "std": round(float(np.std(aucs)), 4),
+            "lo": round(float(lo), 4), "hi": round(float(hi), 4),
+            "seed_deployed": seed, "auc_deployed": round(float(auc_deploy), 4),
+        }
+    else:
+        auc_oos = None
+        auc_seeds = {"n": 0, "all": [], "mean": None, "std": None,
+                     "lo": None, "hi": None,
+                     "seed_deployed": seed, "auc_deployed": None}
 
     state = {
         "version": MODEL_VERSION,
@@ -277,9 +326,10 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=42):
         "n_train": len(train),
         "n_oos": len(oos),
         "auc_oos": round(float(auc_oos), 4) if auc_oos is not None else None,
+        "auc_seeds": auc_seeds,
         "ic_oos": round(float(ic_oos), 4) if ic_oos is not None else None,
         "acc_oos": round(acc_oos, 4),
-        "intercept": float(clf.intercept_[0]),
+        "intercept": intercept,
         "coef": [float(v) for v in coef],
         "ready": _ready(state_ready_check={
             "feat_version": FEATURE_VERSION,
@@ -316,6 +366,9 @@ def model_status():
     st["blend"] = round(_blend_weight(st.get("n_train", 0), auc), 4)
     st.update(_quality_overlay(st))
     st["blend_eff"] = round(st["blend"] * (0.5 if st["degraded"] else 1.0), 4)
+    seeds = st.get("auc_seeds") or {}
+    if seeds.get("lo") is not None:
+        st["auc_range"] = (round(float(seeds["lo"]), 3), round(float(seeds["hi"]), 3))
     return st
 
 
@@ -380,6 +433,15 @@ def _quality_overlay(state):
                         "模型已停止接管 conf (请排查特征/标签口径或重训)")
     elif auc is None and "auc_oos" in state:
         warnings.append("缺少 OOS AUC 样本, 模型当前不接管 conf")
+    # 多 seed 重采样区间: 中位达标但下沿低于门槛 → 单点不稳固, 提示而非关停
+    seeds = state.get("auc_seeds") or {}
+    lo = seeds.get("lo")
+    if isinstance(lo, (int, float)) and auc is not None and float(auc) >= MODEL_MIN_AUC \
+            and float(lo) < MODEL_MIN_AUC:
+        warnings.append(
+            f"OOS AUC 中位 {float(auc):.3f} 达标但在多 seed 重采样下下沿 "
+            f"{float(lo):.3f} 跌破门槛 {MODEL_MIN_AUC:.2f} — 指标单点不稳固, "
+            "建议关注连续几轮重训后再定")
     hist = [h for h in (state.get("history") or [])
             if isinstance(h.get("auc_oos"), (int, float))]
     if len(hist) >= DEGRADE_LOOKBACK:
@@ -540,14 +602,17 @@ if __name__ == "__main__":
         if not hist:
             print("暂无模型历史轨迹 (尚未完成全量训练)")
             _sys.exit(0)
-        print("#  次数   训练/oos      AUC     IC   acc  ready")
+        print("#  次数   训练/oos      AUC       IC   acc  ready")
         for i, h in enumerate(hist, 1):
             auc = h.get("auc_oos")
+            lo, hi = h.get("auc_lo"), h.get("auc_hi")
             ic = h.get("ic_oos")
             auc_s = "-" if auc is None else f"{float(auc):.3f}"
+            if lo is not None and hi is not None:
+                auc_s += f"[{float(lo):.2f}~{float(hi):.2f}]"
             ic_s = "-" if ic is None else f"{float(ic):+.3f}"
             print(f"{i:>2}  {h.get('n_train', '?') or '?'}/{h.get('n_oos', '?') or '?':<5} "
-                  f"{auc_s:<7} {ic_s:<7} {float(h.get('acc_oos', 0) or 0):.2f}  "
+                  f"{auc_s:<22} {ic_s:<7} {float(h.get('acc_oos', 0) or 0):.2f}  "
                   f"{'✓' if h.get('ready') else '—'}")
     elif "--install-cron" in _sys.argv:
         i = _sys.argv.index("--install-cron")

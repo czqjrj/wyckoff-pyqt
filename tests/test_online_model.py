@@ -258,3 +258,43 @@ def test_history_bounded_and_appended(tmp_path, monkeypatch):
     st3 = om.train_model(recs[:4])  # 少样本分支 (rows<5) 不追加历史
     assert len(st3["history"]) == 2
     assert st3["n_labels"] == 4
+
+
+# ── 5.7 多 seed 重采样区间 ──
+
+def test_train_multi_seed_interval(tmp_path, monkeypatch):
+    """重训产出多 seed 重采样的 AUC 中位数 + 5/95 分位区间。"""
+    pytest.importorskip("sklearn")
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m7.json"))
+    monkeypatch.setattr(om, "MODEL_MIN_TRAIN", 40)
+    monkeypatch.setattr(om, "MODEL_MIN_OOS", 8)
+    monkeypatch.setattr(om, "MODEL_MIN_AUC", 0.55)
+    recs = []
+    for k in range(150):
+        high = k % 2 == 0
+        recs.append(_rec(0.15 if high else -0.15,
+                         date=f"2024-{(k // 30) + 1:02d}-{(k % 28) + 1:02d}",
+                         extra={"vr": 2.5 if high else 0.5}))
+    st = om.train_model(recs)
+    seeds = st["auc_seeds"]
+    assert seeds["n"] == om.MODEL_N_SEEDS
+    assert seeds["seed_deployed"] == om.MODEL_SEED
+    # 中位数必须落在区间内, 且 lo ≤ 中位 ≤ hi
+    assert seeds["lo"] is not None and seeds["hi"] is not None
+    assert seeds["lo"] <= st["auc_oos"] <= seeds["hi"]
+    assert seeds["mean"] is not None and seeds["std"] >= 0.0
+    assert seeds["auc_deployed"] is not None
+    # 历史轨迹也带上区间
+    assert st["history"][0]["auc_lo"] == seeds["lo"]
+
+
+def test_overlay_ci_straddles_floor(tmp_path, monkeypatch):
+    """中位达标但下沿跌破门槛 → 提示性告警 (不关停)。"""
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m8.json"))
+    _mk_state(tmp_path, [0.66] * 6, auc=om.MODEL_MIN_AUC + 0.02)
+    st = om._load_state()
+    st["auc_seeds"] = {"lo": om.MODEL_MIN_AUC - 0.05, "hi": om.MODEL_MIN_AUC + 0.08}
+    st["auc_oos"] = om.MODEL_MIN_AUC + 0.02
+    ov = om._quality_overlay(st)
+    assert any("下沿" in w and "不稳固" in w for w in ov["warnings"])
+    assert ov["degraded"] is False

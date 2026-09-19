@@ -729,9 +729,13 @@ class CalibrationCenter(QWidget):
         _card_set("train", n_train, theme.C_TEXT, f"门槛 {MODEL_MIN_TRAIN}")
         _card_set("oos", n_oos, theme.C_TEXT, f"门槛 {MODEL_MIN_OOS}")
         if auc is not None:
+            rng = st.get("auc_range")
+            sub = f"门槛 {MODEL_MIN_AUC * 100:.0f}%"
+            if rng:
+                sub += f" · 多seed区间 {rng[0] * 100:.0f}~{rng[1] * 100:.0f}%"
             _card_set("auc", f"{auc * 100:.1f}%",
                       theme.C_UP if auc >= MODEL_MIN_AUC else theme.C_AMBER,
-                      f"门槛 {MODEL_MIN_AUC * 100:.0f}%")
+                      sub)
         else:
             _card_set("auc", "—", theme.C_MUTED, "样本不足")
         _card_set("ic", f"{ic:+.3f}" if ic is not None else "—",

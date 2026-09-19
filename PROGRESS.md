@@ -199,3 +199,44 @@
 - 轨迹: `python -m wyckoff.online_model --history`
 - 状态: `python -m wyckoff.online_model --status`
 - 归因复跑: `/tmp/opencode/om_probe.py` (临时路径探针, 不碰生产文件)
+
+---
+
+# 进度记录：5.6 模型指标多 seed 区间 + 板块/产业链去重组合回测 (2026-09-19)
+
+## 在线模型: OOS 指标改多 seed 重采样区间 (承接 5.5 归因)
+- 承接点: 5.5 实测单次重训 AUC 对训练随机性 ±0.09 (seed 42→0.70 vs 2024→0.62),
+  "单点 AUC 不能作判据" → 本项把"判据"落地成多 seed 区间。
+- **落地** (`wyckoff/online_model.py`):
+  1. **部署系数固定 `MODEL_SEED=42`** (行为稳定, 系数/拦截与历史状态文件完全一致,
+     不引入前后行为跳变);
+  2. **质量指标 = 7 seed 重采样中位数 + 5/95 分位**: `MODEL_N_SEEDS=7`,
+     `MODEL_SEED_CANDIDATES=(42,7,123,2024,8,99,5)`; 状态新增
+     `auc_seeds{n/all/mean/std/lo/hi/seed_deployed/auc_deployed}`;
+  3. **历史轨迹带区间**: `history[]` 每条约 `auc_lo/auc_hi` (CLI `--history` 打印
+     `0.xxx[0.xx~0.xx]`, 表头对齐);
+  4. **下沿预警**: 中位达标但多 seed 下沿 <0.60 → 提示"单点不稳固"告警, 不关停;
+  5. **UI**: 校准中心 AUC 卡片子文案显示 `多seed区间 xx~xx%`; `model_status` 暴露
+     `auc_range`。
+- 测试: `tests/test_online_model.py` +2 (区间构造 + 中位∈区间 + 下沿预警不关停)。
+  全量回归 **728 passed**; ruff 干净。
+- 生产影响: 当前模型 retrain 走 7 seed, 全量重训耗时 ×7 (每日 cron 可容忍);
+  已上线状态文件无 `auc_seeds` → 兼容 None。
+
+## 板块/产业链去重组合回测 (accuracy_improvements_todo P0·5.3) — 已闭合
+- 脚本: `scripts/build_stock_sector_map.py` → `wyckoff_stock_sector.json`
+  (信号库 172 标的 → 168 已映射东财行业, 4 只按 date 兜底; 已 gitignore)。
+- 对照: `docs/bt_dedup_comparison.md` + `bt_dedup_{none,sector,chain}.{md,csv}`。
+  - 口径: conf≥90 可交易强多头 / 20根方向化净收益 / 往返成本 0.8% / 止损 -5%。
+  - **同日同板块重叠真实存在**: raw 1380 → sector 1092 (−20.9%) / chain 1027 (−25.6%)。
+  - **该口径下对组合收益影响小**: 3 槽静态填充执行笔数 146→145, 胜率 67.6% 与槽位
+    CAGR +9.0~9.2% 几乎不动 — 被剔除的重叠信号本就高度同涨同跌, 单笔期望 ≈+8.6%
+    与盈亏比 (2.34→2.42→2.47) 被保留。
+  - **"相关回撤放大"担忧在本口径不显著**: 最差单笔三档一致 −28.11%。
+  - **结论**: 生产保持不去重; "同日同板块最多 1 槽"列为可配置风控项, 与 paper `_verify`
+    盘面回撤观测联动, 出现同板块集中连亏再启用 sector 去重。
+
+## 续跑入口
+- 模型重训/区间: `python -m wyckoff.online_model --train` / `--status` / `--history`
+- 板块映射重建: `python scripts/build_stock_sector_map.py`
+- 去重对照复跑: `python scripts/conservative_bt.py --conf 90 --dedup {none,sector,chain} --report docs/bt_dedup_<mode>.md`

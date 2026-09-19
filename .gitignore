@@ -80,6 +80,8 @@ debian/
 /strategy2_backtest_data/
 # 板块日线行情缓存 (每日回填更新, 勿入库)
 /wyckoff_board_klines.json
+# 板块去重回测派生映射 (运行时生成, 勿入库)
+/wyckoff_stock_sector.json
 # pytest-cov 报告产物
 /.coverage
 /htmlcov/
