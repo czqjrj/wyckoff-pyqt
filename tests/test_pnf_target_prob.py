@@ -2,7 +2,7 @@
 
 覆盖 _pnf_targets_at 的概率产出契约与 _low_prob_discount 低概率端收缩折扣:
   - 三档概率必须落 [0.15, 0.95] 且保持 保守 ≥ 中 ≥ 激进;
-  - 折扣系数单调连续、档位排序稳定、≥0.70 不收缩、0.60 处取满档。
+  - 折扣系数单调连续、档位排序稳定、≥_DISCOUNT_HI 不收缩、_DISCOUNT_LO 处取满档。
 """
 import os
 import sys
@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 
 from wyckoff.pnf import (
+    _DISCOUNT_HI,
+    _DISCOUNT_LO,
     _LOW_DISCOUNT,
     _enforce_tier_order,
     _low_prob_discount,
@@ -56,23 +58,24 @@ def test_tier_probs_bounded_and_ordered():
 
 
 def test_discount_full_factor_below_threshold():
-    """p<0.60 施加全档折扣; p=0.60 恰取 _LOW_DISCOUNT。"""
+    """p<_DISCOUNT_LO 施加全档折扣; p=_DISCOUNT_LO 恰取 _LOW_DISCOUNT。"""
     for tier in TIERS:
         assert _low_prob_discount(0.30, tier) == _LOW_DISCOUNT[tier]
-        assert _low_prob_discount(0.59, tier) == _LOW_DISCOUNT[tier]
-        assert _low_prob_discount(0.60, tier) == _LOW_DISCOUNT[tier]
+        assert _low_prob_discount(_DISCOUNT_LO - 0.01, tier) == _LOW_DISCOUNT[tier]
+        assert _low_prob_discount(_DISCOUNT_LO, tier) == _LOW_DISCOUNT[tier]
 
 
-def test_discount_ramps_to_one_at_070():
-    """0.60→0.70 线性过渡回 1.0, ≥0.70 不收缩 (连续无台阶)。"""
+def test_discount_ramps_to_one_at_hi():
+    """_DISCOUNT_LO→_DISCOUNT_HI 线性过渡回 1.0, ≥_DISCOUNT_HI 不收缩 (连续无台阶)。"""
     for tier in TIERS:
-        assert _low_prob_discount(0.65, tier) > _LOW_DISCOUNT[tier]
-        assert _low_prob_discount(0.69, tier) < 1.0
-        assert _low_prob_discount(0.70, tier) == 1.0
-        assert _low_prob_discount(0.80, tier) == 1.0
+        assert _low_prob_discount(_DISCOUNT_LO + (_DISCOUNT_HI - _DISCOUNT_LO) / 2,
+                                  tier) > _LOW_DISCOUNT[tier]
+        assert _low_prob_discount(_DISCOUNT_HI - 0.01, tier) < 1.0
+        assert _low_prob_discount(_DISCOUNT_HI, tier) == 1.0
+        assert _low_prob_discount(_DISCOUNT_HI + 0.1, tier) == 1.0
     # 过渡段单调递增
-    lo = _low_prob_discount(0.60, "保守")
-    for p in np.linspace(0.61, 0.69, 9):
+    lo = _low_prob_discount(_DISCOUNT_LO, "保守")
+    for p in np.linspace(_DISCOUNT_LO + 0.01, _DISCOUNT_HI - 0.01, 9):
         assert _low_prob_discount(p, "保守") > lo
 
 
@@ -81,6 +84,20 @@ def test_discount_tier_order_stable():
     for p in (0.10, 0.30, 0.50, 0.55, 0.60, 0.65):
         f = [_low_prob_discount(p, t) for t in TIERS]
         assert f[0] <= f[1] <= f[2], f"(p={p}) 档位折扣排序被破坏: {f}"
+
+
+def test_discount_calibration_snapshot():
+    """校准快照 (2026-09-19 重标定, 608 段): 系数/过渡窗必须与归档一致。
+
+    防回归: 任何调整都需先跑 scripts/eval_pnf_tier_accuracy.py 重新量化。
+    """
+    assert _LOW_DISCOUNT == {"保守": 0.84, "中": 0.94, "激进": 0.96}
+    assert _DISCOUNT_LO == 0.55
+    assert _DISCOUNT_HI == 0.72
+    # 全档折扣关键点抽查 (p=0.50 < LO → 满档; p=0.70 过渡中; p=0.72 → 1.0)
+    for tier in TIERS:
+        assert _low_prob_discount(0.50, tier) == _LOW_DISCOUNT[tier]
+    assert _low_prob_discount(0.72, "保守") == 1.0
 
 
 def test_enforce_tier_order_lowers_only():
