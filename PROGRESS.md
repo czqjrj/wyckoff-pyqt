@@ -132,3 +132,33 @@
 - HTF 门重测: `python scripts/htf_gate_survey.py` (需改 `entries.ENTRY_HTF_GATE=True`)
 - 事件+VSA 回测: `python scripts/paper_priority_bt.py --event-vsa [--pool-size N]`
 - 事件+VSA 口径调优: `wyckoff/strategies/constants.py` EVENT_VSA_MIN_CONF/MIN_VR/CO_WINDOW/HIGH_LABELS
+
+---
+
+# 进度记录：5.4 P&F 概率校准线 + 胜率库性能/断链修复 (2026-09-19)
+
+## P&F 三档目标概率·低概率端收缩 (落地 + 实测)
+- **完成进行中的 `pnf.py` 折扣实现**: `_low_prob_discount` 抽出为模块级函数
+  (p<0.60 全档 ×0.70/0.85/0.94, 0.60→0.70 线性回 1.0, ≥0.70 不动), 6 处调用补 tier_key。
+- **档位顺序守卫 `_enforce_tier_order`**: 折扣 (保守最重) 把接近的三档概率翻转成倒序
+  (实测 791/1216 违规)。守卫只降不升、收敛到最保守档, 修复后 →226 (≈基线取整噪音)。
+  同时在 `_apply_zone_calibration` 末再守一遍 (派发下方 ×1.05/1.08/1.15 升序系数也会翻转)。
+- **实测 (608段=合成530+真实78)**: `<50%` 档校准差从 +6~15pt 收敛到 ±2pt 内;
+  真实股票子集 (n=78) 低概率端两方向均 +24~32pt 高估, 折扣是正确方向且系数与
+  归档实证 (09-10/09-15) 完全对齐。`eval_pnf_tier_accuracy.py` 联动。
+- 测试: `tests/test_pnf_target_prob.py` (折扣单调/档序/过渡；顺序守卫只降不升)。
+
+## 胜率库性能 + 断链修复
+- **5.13 工程债部分落地**: `load_win_rates` cache miss 时一次解析信号库补齐
+  5/10/20/40 全部周期 (原逐周期各 parse 12MB JSON), 冷算 4 周期 ~1s→0.54s, 热取 0。
+- **实测胜率断链修复**: `entries.measured_win_rates` 误把 `scale=` 传给无此参数的
+  `load_win_rates` → 恒抛 TypeError 被吞 → 恒返回 `{}` → 入场扫描 win_rate/win_n
+  恒空。改为 `load_win_rates(20)`, 扫描行现在真实带上收缩胜率与样本数。
+  (回归测试 `test_measured_win_rates_scale_bug`。)
+
+## 其他
+- `wyckoff_cache.db` (118MB, kline_cache 5427 行, WAL) 排查: 正常按 (symbol,scale)
+  的持久 K 线缓存, 无膨胀/陈旧, 不动。
+- paper 实盘/回测口径 (accuracy_improvements_todo 5.8): 生产默认已对齐
+  (stop=4%/TP=30%/trail=6%/maxpos=5/conf=100), 无需再改。
+- 全量回归: 720 passed; ruff 干净。

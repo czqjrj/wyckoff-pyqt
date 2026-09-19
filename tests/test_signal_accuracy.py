@@ -281,3 +281,16 @@ def test_export_review_report(tmp_path, monkeypatch):
     sa.export_review_report(path=str(out2), days=2000, markdown=False)
     html = out2.read_text(encoding="utf-8")
     assert "<html" in html and "威科夫信号复盘周报" in html
+
+
+def test_measured_win_rates_scale_bug(monkeypatch):
+    """回归: entries.measured_win_rates 曾误把 scale 传给无此参数的
+    load_win_rates → 恒抛 TypeError 被吞 → 入场扫描 win_rate/win_n 恒空。"""
+    import wyckoff.entries as e
+
+    fake = {("event", "Spring"): {"n": 41, "shrunk": 0.62}}
+    monkeypatch.setattr("wyckoff.signal_accuracy.load_win_rates",
+                        lambda horizon=20: fake)
+    out = e.measured_win_rates(240)
+    assert out == {"Spring": {"win": 0.62, "n": 41}}
+    assert out, "measured_win_rates 不应返回空"

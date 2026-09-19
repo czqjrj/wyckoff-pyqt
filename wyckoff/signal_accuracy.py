@@ -482,6 +482,65 @@ def _winrate_key(kind, type_):
     return (kind, str(type_))
 
 
+def _build_win_rate_table(out: dict) -> dict:
+    """由 {key: {"n", "rets"}} 分桶计算单周期胜率表 (纯函数)。
+
+    方向化命中: 标称多头/中性信号 → 上涨记命中; 标称空头信号 → 下跌记命中。
+    (空头信号如 UTAD/LPSY/SUP 用"上涨占比"口径会把人家的"对"记成"错"。)
+    """
+    def _hit(kind, type_, v):
+        if kind == "event":
+            d = event_dir(type_)
+        else:
+            d = vsa_dir(type_)
+        return v < 0 if d < 0 else v >= 0
+    # 全池基线 (方向化命中占比), 钳制防极端
+    pool_wins = sum(1 for key in out for v in out[key]["rets"]
+                    if _hit(key[0], key[1], v))
+    pool_n = sum(s["n"] for s in out.values())
+    p0_raw = (pool_wins / pool_n) if pool_n else 0.5
+    # 按 VSA 类型调整基线: 优于随机类型升高, 劣于随机类型降低
+    # 仅对 event kind 的 VSA 类型调整; event 类型保持原 p0
+    p0_adj_map = {}
+    for key in out:
+        kind, type_ = key
+        if kind == "vsa" and type_ in VSA_PRIOR_P0_ADJ:
+            p0_adj_map[key] = VSA_PRIOR_P0_ADJ[type_]
+        else:
+            p0_adj_map[key] = 0.0  # event 类型或未列出 VSA 类型不调整
+    # 计算加权平均 p0: 所有样本的 p0_raw + 各自调整, 但钳制在有效范围
+    p0_sum = 0.0
+    p0_count = 0
+    for key, adj in p0_adj_map.items():
+        # 按样本量加权: n 越大, 调整影响越应反映类型特性
+        s = out[key]
+        p0_sum += (p0_raw + adj) * s["n"]
+        p0_count += s["n"]
+    if p0_count > 0:
+        p0 = p0_sum / p0_count
+    else:
+        p0 = p0_raw
+    p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
+    result = {}
+    for key, s in out.items():
+        if not s["rets"] or s["n"] < MIN_SHRUNK_N:
+            continue
+        wins = sum(1 for v in s["rets"] if _hit(key[0], key[1], v))
+        win = wins / s["n"]
+        ci_lo, ci_hi = _wilson_ci(s["n"], wins)
+        # 方向化均值收益: 标称空头取 -ret (做对=下跌), 其余取原 ret ——
+        # "做对方向的平均幅度", 作为期望维度供候选按 edge 排序融合 (事件 ①)。
+        d = vsa_dir(key[1]) if key[0] == "vsa" else event_dir(key[1])
+        dir_rets = [v if d >= 0 else -v for v in s["rets"]]
+        result[key] = {"n": s["n"], "win": round(win, 4),
+                       "shrunk": round(_bayes_shrink(wins, s["n"], p0), 4),
+                       "ci_lo": round(ci_lo, 4), "ci_hi": round(ci_hi, 4),
+                       "mean": round(statistics.mean(s["rets"]), 6),
+                       "dir_mean": round(statistics.mean(dir_rets), 6),
+                       "p0": round(p0, 4), "alpha0": PRIOR_ALPHA0}
+    return result
+
+
 def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
     """加载历史信号胜率表 (用于 fusion/结论校准)。
 
@@ -490,82 +549,40 @@ def load_win_rates(horizon: int = 20, force: bool = False) -> dict:
     "mean": 均收益, "dir_mean": 方向化均值收益 (做对方向的平均幅度, 期望维度),
     "p0": 全池基线} }。n<MIN_SHRUNK_N 的类型不入表。
     shrunk 是校准用的主力值 (消除小样本噪声); win 保留原始口径供展示。
-    方向化命中: 标称多头/中性 → ret>0 记命中; 标称空头 (event_dir/vsa_dir<0)
-    → ret<0 记命中 (下跌才对)。
+
+    cache miss 时一次解析信号库、把缺失的评估周期全部补齐 —— UI 常同时取
+    5/10/20/40 四个周期, 逐个周期各自 parse 12MB JSON (wx_signal_accuracy.json)
+    会白白多 3 次全量解析。非标准周期 (不在 HORIZONS) 也走同一次 parse。
     """
     global _WINRATE_CACHE
     with _WINRATE_LOCK:
         if not isinstance(_WINRATE_CACHE, dict):
             _WINRATE_CACHE = {}
+        if force:
+            _WINRATE_CACHE = {}
         cached = _WINRATE_CACHE.get(horizon)
-        if cached is not None and not force:
+        if cached is not None:
             return cached
+        missing = [h for h in HORIZONS if h not in _WINRATE_CACHE]
+        if horizon not in missing:
+            missing.append(horizon)
         records = load_signals()
-        out = {}
+        buckets = {h: {} for h in missing}
         for r in records:
             kind = r.get("kind", "event")
             type_ = r.get("type", "?")
-            res = (r.get("results") or {}).get(str(horizon))
-            if not res or res.get("ret") is None:
-                continue
-            key = _winrate_key(kind, type_)
-            s = out.setdefault(key, {"n": 0, "rets": []})
-            s["n"] += 1
-            s["rets"].append(res["ret"])
-        # 方向化命中: 标称多头/中性信号 → 上涨记命中; 标称空头信号 → 下跌记命中。
-        # (空头信号如 UTAD/LPSY/SUP 用"上涨占比"口径会把人家的"对"记成"错"。)
-        def _hit(kind, type_, v):
-            if kind == "event":
-                d = event_dir(type_)
-            else:
-                d = vsa_dir(type_)
-            return v < 0 if d < 0 else v >= 0
-        # 全池基线 (方向化命中占比), 钳制防极端
-        pool_wins = sum(1 for key in out for v in out[key]["rets"]
-                        if _hit(key[0], key[1], v))
-        pool_n = sum(s["n"] for s in out.values())
-        p0_raw = (pool_wins / pool_n) if pool_n else 0.5
-        # 按 VSA 类型调整基线: 优于随机类型升高, 劣于随机类型降低
-        # 仅对 event kind 的 VSA 类型调整; event 类型保持原 p0
-        p0_adj_map = {}
-        for key in out:
-            kind, type_ = key
-            if kind == "vsa" and type_ in VSA_PRIOR_P0_ADJ:
-                p0_adj_map[key] = VSA_PRIOR_P0_ADJ[type_]
-            else:
-                p0_adj_map[key] = 0.0  # event 类型或未列出 VSA 类型不调整
-        # 计算加权平均 p0: 所有样本的 p0_raw + 各自调整, 但钳制在有效范围
-        p0_sum = 0.0
-        p0_count = 0
-        for key, adj in p0_adj_map.items():
-            # 按样本量加权: n 越大, 调整影响越应反映类型特性
-            s = out[key]
-            p0_sum += (p0_raw + adj) * s["n"]
-            p0_count += s["n"]
-        if p0_count > 0:
-            p0 = p0_sum / p0_count
-        else:
-            p0 = p0_raw
-        p0 = min(max(p0, PRIOR_P0_MIN), PRIOR_P0_MAX)
-        result = {}
-        for key, s in out.items():
-            if not s["rets"] or s["n"] < MIN_SHRUNK_N:
-                continue
-            wins = sum(1 for v in s["rets"] if _hit(key[0], key[1], v))
-            win = wins / s["n"]
-            ci_lo, ci_hi = _wilson_ci(s["n"], wins)
-            # 方向化均值收益: 标称空头取 -ret (做对=下跌), 其余取原 ret ——
-            # "做对方向的平均幅度", 作为期望维度供候选按 edge 排序融合 (事件 ①)。
-            d = vsa_dir(key[1]) if key[0] == "vsa" else event_dir(key[1])
-            dir_rets = [v if d >= 0 else -v for v in s["rets"]]
-            result[key] = {"n": s["n"], "win": round(win, 4),
-                           "shrunk": round(_bayes_shrink(wins, s["n"], p0), 4),
-                           "ci_lo": round(ci_lo, 4), "ci_hi": round(ci_hi, 4),
-                           "mean": round(statistics.mean(s["rets"]), 6),
-                           "dir_mean": round(statistics.mean(dir_rets), 6),
-                           "p0": round(p0, 4), "alpha0": PRIOR_ALPHA0}
-        _WINRATE_CACHE[horizon] = result
-        return result
+            res = r.get("results") or {}
+            for h in missing:
+                rr = res.get(str(h))
+                if not rr or rr.get("ret") is None:
+                    continue
+                key = _winrate_key(kind, type_)
+                s = buckets[h].setdefault(key, {"n": 0, "rets": []})
+                s["n"] += 1
+                s["rets"].append(rr["ret"])
+        for h, bucket in buckets.items():
+            _WINRATE_CACHE[h] = _build_win_rate_table(bucket)
+        return _WINRATE_CACHE.get(horizon, {})
 
 
 def win_rate_of(kind: str, type_: str, horizon: int = 20,

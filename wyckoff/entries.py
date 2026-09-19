@@ -69,10 +69,14 @@ ENTRY_HTF_FAIL_OPEN = True
 
 
 def measured_win_rates(scale=240):
-    """取入场类型的实测可交易胜率 (贝叶斯收缩值)。{type: {"win","n"}}"""
+    """取入场类型的实测可交易胜率 (贝叶斯收缩值)。{type: {"win","n"}}
+
+    scale 参数保留兼容: 胜率表 (load_win_rates) 按 kind+type 聚合、
+    不分 scale, 仅透传以保持调用点签名不变。
+    """
     try:
         from .signal_accuracy import load_win_rates
-        rates = load_win_rates(20, scale=scale)
+        rates = load_win_rates(20)
     except Exception:
         return {}
     out = {}
