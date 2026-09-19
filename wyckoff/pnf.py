@@ -35,6 +35,47 @@ from matplotlib.figure import Figure
 
 from .config import _fs
 
+# 低概率端收缩折扣 (按档位): 预测 p<0.70 时对目标到达概率施加收缩,
+# 校正「空间大/因果弱时高估」 (见 _pnf_targets_at._prob 内注释的实证)。
+# 保守档 (最近目标) 惩罚最重, 激进档最轻。
+_LOW_DISCOUNT = {"保守": 0.70, "中": 0.85, "激进": 0.94}
+
+
+def _low_prob_discount(p: float, tier_key: str) -> float:
+    """低概率端收缩系数 (1.0 = 不收缩)。
+
+    实证 (2026-09-10/09-15 归档 + 本段重跑): 预测 p<0.60 时系统性高估,
+       <50% 档实测 保守≈27%/中≈25~30%/激进≈34~37% (模型≈40%);
+       50~60% 档实测 保守≈36~43%/中≈43~51%/激进≈51~54% (模型≈54.5%)。
+    近端(保守)最远空间+弱因果时高估最多 (~+20pt); 高概率端 (≥70%) 标定良好不动。
+    单调连续: p=0 取全档折扣, p=0.70 处系数回到 1.0 (线性过渡, 避免台阶)。
+    """
+    if p < 0.60:
+        return float(_LOW_DISCOUNT[tier_key])
+    if p < 0.70:
+        w = (0.70 - p) / 0.10  # 0.60→1, 0.70→0
+        return 1 - (1 - _LOW_DISCOUNT[tier_key]) * w
+    return 1.0
+
+
+def _enforce_tier_order(targets: dict) -> dict:
+    """档位顺序守卫: 保证每方向 保守 ≥ 中 ≥ 激进 (只降不升)。
+
+    低概率端折扣按档位不同系数 (保守最重), 会把接近的三档概率翻转。
+    语义契约: 最近档 (保守) 到达概率必须不低于更远档。只把越界档降到
+    上一档水平, 不抬升任何值, 未越界行完全不受影响。
+    """
+    for direction in ("上方", "下方"):
+        ps = [targets.get(f"{direction}概率_{t}") for t in ("保守", "中", "激进")]
+        if not all(isinstance(v, (int, float)) for v in ps):
+            continue
+        p_c, p_m, p_a = ps
+        p_m = min(p_m, p_c)
+        p_a = min(p_a, p_m)
+        targets[f"{direction}概率_中"] = round(p_m, 2)
+        targets[f"{direction}概率_激进"] = round(p_a, 2)
+    return targets
+
 
 def _pnf_box(df: pd.DataFrame, box_pct: float = 0.015,
              box_mode: str = "pct", atr_factor: float = 0.5) -> float:
@@ -266,7 +307,8 @@ def _apply_zone_calibration(t: dict, zone: str) -> dict:
             pk = f"下方概率_{tierk}"
             if isinstance(t.get(pk), (int, float)):
                 t[pk] = round(max(0.15, min(0.95, t[pk] * 0.92)), 2)
-    return t
+    # 顺序守卫: 派发下方按档位升序系数 (1.05/1.08/1.15) 可能翻转 保守 ≥ 中 ≥ 激进。
+    return _enforce_tier_order(t)
 
 
 def _pnf_targets_at(cols, box: float, reversal: int = 3,
@@ -472,7 +514,8 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     #   POC同向: 现价在POC上方做多看涨, 下方做空看跌 → 小幅加分
     cause_ratio = cause / tr_width if tr_width > 0 else 0.0
 
-    def _prob(space_pct, direction_flag):
+    # 低概率端高估校准折扣 (按档位): 顶部 _pnf_targets 调用方见 _LOW_DISCOUNT 注释。
+    def _prob(space_pct, direction_flag, tier_key):
         a = abs(float(space_pct))
         # ── 空间衰减 (从评估数据校准): 空间越小到达率越高, 连续单调降 ──
         if a <= 5:
@@ -500,6 +543,8 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
         elif direction_flag == "down" and not poc_above:
             poc_add = 0.04
         p = s_base + cr_add + poc_add
+        # ── 低概率端收缩校准 (档位感知, 系数与参数见 _low_prob_discount) ──
+        p *= _low_prob_discount(p, tier_key)
         return max(0.15, min(0.95, round(p, 2)))
 
     up_t_near = targets.get("近端上方目标", 0)
@@ -518,12 +563,17 @@ def _pnf_targets_at(cols, box: float, reversal: int = 3,
     targets["下方空间_中%"] = _pct(dn_t_mid)
     targets["上方空间_激进%"] = _pct(up_t_agg)
     targets["下方空间_激进%"] = _pct(dn_t_agg)
-    targets["上方概率_保守"] = _prob(targets["上方空间_保守%"], "up")
-    targets["下方概率_保守"] = _prob(targets["下方空间_保守%"], "down")
-    targets["上方概率_中"] = _prob(targets["上方空间_中%"], "up")
-    targets["下方概率_中"] = _prob(targets["下方空间_中%"], "down")
-    targets["上方概率_激进"] = _prob(targets["上方空间_激进%"], "up")
-    targets["下方概率_激进"] = _prob(targets["下方空间_激进%"], "down")
+    targets["上方概率_保守"] = _prob(targets["上方空间_保守%"], "up", "保守")
+    targets["下方概率_保守"] = _prob(targets["下方空间_保守%"], "down", "保守")
+    targets["上方概率_中"] = _prob(targets["上方空间_中%"], "up", "中")
+    targets["下方概率_中"] = _prob(targets["下方空间_中%"], "down", "中")
+    targets["上方概率_激进"] = _prob(targets["上方空间_激进%"], "up", "激进")
+    targets["下方概率_激进"] = _prob(targets["下方空间_激进%"], "down", "激进")
+    # 档位顺序守卫: 低概率端收缩折扣 (保守惩罚最重) 可能把三档概率从
+    # 保守 ≥ 中 ≥ 激进 翻转成倒序 (up: 实测最多 791/1216)。语义契约:
+    # 最近目标 (保守) 到达概率必须不低于更远档。这里只把越界档降到上一档,
+    # 不抬升任何值 (最保守档保真, 唯一例外是最新校准), 未越界行不受影响。
+    _enforce_tier_order(targets)
     # TR 内位置: 现价相对 TR 高低的百分位 (0~100)
     tr_range = tr_top - tr_bottom
     targets["tr_position%"] = round(max(0, min(100,
