@@ -77,3 +77,16 @@ debian/
 # ── 回测/回放运行产物 (缓存/独立状态/行情库, 本地生成勿入库) ──
 /data/
 /buypoint_backtest_data/
+/strategy2_backtest_data/
+# 板块日线行情缓存 (每日回填更新, 勿入库)
+/wyckoff_board_klines.json
+# pytest-cov 报告产物
+/.coverage
+/htmlcov/
+# 早期策略版本的绩效/报告产物 (已被 three_strategy 体系取代)
+/optimized_strategy_data/
+/practical_strategy_data/
+/strategy_data/
+/simulation_results.json
+/strategy_report.json
+/strategy_analysis_report.md

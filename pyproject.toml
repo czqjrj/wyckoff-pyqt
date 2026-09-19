@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "pytest-cov>=4"]
 lint = ["ruff>=0.6"]
 # 可选: 解读语音播报 (TTS). edge-tts=微软在线中文语音(音质最佳, 需网络);
 # pyttsx3=离线跨平台(中文音质一般, 依赖系统语音库 espeak/SAPI/NSSpeech).
@@ -59,3 +59,11 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--cov=wyckoff --cov=ui --cov-report=term-missing:skip-covered"
+
+# 覆盖率阈值: 核心逻辑模块低于此值即告警 (最终 via `-q` 后仍需人工看缺口对应补测)
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
+# fail_under 暂不启用, 等 UI 层补测后再收紧 (见 PROGRESS.md)
+# fail_under = 50

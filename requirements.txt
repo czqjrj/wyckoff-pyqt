@@ -1,18 +1,7 @@
-numpy>=1.26
-pandas>=2.0
-scipy>=1.11
-matplotlib>=3.7
-pyqtgraph>=0.13
-PyQt6>=6.6
-requests>=2.31
-# 行情数据容灾兜底源 (三个 HTTP 源全挂时用 akshare 兜底; 惰性导入, 未装则自动降级)
-akshare>=1.14
-pypinyin>=0.50
-openai>=1.30
-msgpack>=1.0
-# MySQL 云存储后端 (登录 + 私有数据多机同步, SQLPub Serverless MySQL)
-PyMySQL>=1.1
-# 可选: 解读语音播报 (TTS). edge-tts=微软在线中文语音(音质最佳, 需网络);
-# pyttsx3=离线跨平台(中文音质一般, 依赖系统语音库 espeak/SAPI/NSSpeech).
-edge-tts>=6.1; extra == "tts"
-pyttsx3>=2.90; extra == "tts"
+# 依赖以 pyproject.toml 为唯一来源, 本文件仅作可编辑安装入口。
+# 可选组件按需使用 extras:
+#   pip install ".[tts]"    # TTS 语音播报 (微软在线 + 离线)
+#   pip install ".[test]"   # 测试 (pytest + pytest-cov)
+#   pip install ".[lint]"   # 代码检查 (ruff)
+#   pip install ".[qlib]"   # QLib 机器学习模型 (需自行编译环境)
+-e .[tts]
