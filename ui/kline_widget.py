@@ -24,10 +24,10 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui
 from pyqtgraph.Qt.QtCore import Qt
 
-from wyckoff.config import _PHASE_STYLE, EVENT_CN, FONT_CANDIDATES, W_RECENT
+from wyckoff.config import _PHASE_STYLE, EVENT_CN, W_RECENT
 
 from . import theme
-from .base_plot import BasePlotWidget
+from .base_plot import BasePlotWidget, PlotStyleMixin
 from .constants import KLINE_DEFAULT_BARS, KLINE_RIGHT_MARGIN
 from .renderers.pnf_grid import _DragTextItem, _LatestBtnItem
 
@@ -292,7 +292,7 @@ class _KlineViewBox(pg.ViewBox):
         super().mouseDragEvent(ev)
 
 
-class KlineWidget(BasePlotWidget):
+class KlineWidget(PlotStyleMixin, BasePlotWidget):
     """pyqtgraph K线图: 价格 / 成交量 / 波段累计量 三栏, X 轴联动。
 
     继承 BasePlotWidget 获得统一交互 (滚轮/键盘/拖拽边界/双击复位/视图历史)。
@@ -1223,16 +1223,6 @@ class KlineWidget(BasePlotWidget):
                               **{"font-size": f"{self._fs(1)}pt"})
 
     # ── 视图 / 交互 ──
-    def _fs(self, delta=0):
-        return max(6, self._font_size + delta)
-
-    def _font(self, delta=0, bold=False):
-        f = QtGui.QFont()
-        f.setFamily(FONT_CANDIDATES[0])
-        f.setPointSize(self._fs(delta))
-        f.setBold(bold)
-        return f
-
     def _text(self, plot, x, y, text, color, anchor=(0.5, 0.5),
               delta=0, bold=False, fill=None, layer=None):
         kwargs = {}
@@ -1401,10 +1391,6 @@ class KlineWidget(BasePlotWidget):
         y1 = min(self._full_y[1], hi + pad)
         if y1 - y0 > 1e-9:
             vb.setYRange(y0, y1, padding=0)
-
-    def grab_pixmap(self):
-        """整图快照 (供导出 PNG)。"""
-        return self.grab()
 
     def _phase_verdict_stats(self, key, s0, s1, segs):
         """计算阶段段的实测命中率统计。

@@ -16,8 +16,10 @@
 单图场景直接用子类 SimplePlot 替换 pg.PlotWidget。
 """
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore
+from pyqtgraph.Qt import QtCore, QtGui
 from pyqtgraph.Qt.QtCore import Qt
+
+from wyckoff.config import FONT_CANDIDATES
 
 from . import theme
 from .crosshair import Crosshair
@@ -27,6 +29,27 @@ def _event_pos(ev):
     """Qt5/Qt6 兼容: 取事件的视口坐标 QPointF。"""
     p = ev.position() if hasattr(ev, "position") else ev.pos()
     return QtCore.QPointF(p)
+
+
+class PlotStyleMixin:
+    """字号/字体/整图快照 helper — Kline/Ind/Mkt/Pnf 四件套 widget 共用。
+
+    单一定义防字号口径漂移 (子类在 __init__ 里设置 self._font_size)。
+    """
+
+    def _fs(self, delta=0):
+        return max(6, self._font_size + delta)
+
+    def _font(self, delta=0, bold=False):
+        f = QtGui.QFont()
+        f.setFamily(FONT_CANDIDATES[0])
+        f.setPointSize(self._fs(delta))
+        f.setBold(bold)
+        return f
+
+    def grab_pixmap(self):
+        """整图快照 (供导出 PNG)。"""
+        return self.grab()
 
 
 class HoverHighlightMixin:

@@ -23,13 +23,10 @@ import datetime as _dt
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QScrollArea
-from pyqtgraph.Qt import QtGui
 from pyqtgraph.Qt.QtCore import Qt, pyqtSignal
 
-from wyckoff.config import FONT_CANDIDATES
-
 from . import theme
-from .base_plot import BasePlotWidget, HoverHighlightMixin
+from .base_plot import BasePlotWidget, HoverHighlightMixin, PlotStyleMixin
 from .constants import IND_ASPECT, IND_DEFAULT_BARS
 
 # 面板注册表 (声明式, 支持扩展) — 见 ui.ind_panels
@@ -143,7 +140,7 @@ class IndScroll(QScrollArea):
         self.widget().setMinimumWidth(w)
 
 
-class IndWidget(HoverHighlightMixin, BasePlotWidget):
+class IndWidget(HoverHighlightMixin, PlotStyleMixin, BasePlotWidget):
     """pyqtgraph 技术指标: 4×2 网格 (与原版 matplotlib 排版一致), X 联动。
 
     继承 BasePlotWidget 获得统一交互 (滚轮/键盘/拖拽边界/双击复位/视图历史),
@@ -761,16 +758,6 @@ class IndWidget(HoverHighlightMixin, BasePlotWidget):
         self._layer_menu.exec(self.mapToGlobal(pos))
 
     # ── 视图 / 交互 ──
-    def _fs(self, delta=0):
-        return max(6, self._font_size + delta)
-
-    def _font(self, delta=0, bold=False):
-        f = QtGui.QFont()
-        f.setFamily(FONT_CANDIDATES[0])
-        f.setPointSize(self._fs(delta))
-        f.setBold(bold)
-        return f
-
     def _text(self, plot, x, y, text, color, anchor=(0.5, 0.5),
               delta=0, bold=False):
         ti = pg.TextItem(text, color=color, anchor=anchor)
@@ -855,10 +842,6 @@ class IndWidget(HoverHighlightMixin, BasePlotWidget):
             ev.accept()
             return
         super().keyPressEvent(ev)
-
-    def grab_pixmap(self):
-        """整图快照 (供导出 PNG)。"""
-        return self.grab()
 
     def _show_shortcuts_help(self):
         """显示快捷键帮助对话框。"""

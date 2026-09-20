@@ -20,11 +20,10 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 from pyqtgraph.Qt.QtCore import Qt
 
-from wyckoff.config import FONT_CANDIDATES
 from wyckoff.pnf import pnf_box_label, pnf_cap, pnf_hist_title
 
 from . import theme
-from .base_plot import ViewHistoryMixin
+from .base_plot import PlotStyleMixin, ViewHistoryMixin
 from .constants import PNF_DEFAULT_COLS, PNF_PRICE_AXIS_W, PNF_RIGHT_MARGIN
 from .crosshair import Crosshair
 from .renderers import (
@@ -136,7 +135,7 @@ class _VapViewBox(pg.ViewBox):
 
 
 
-class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
+class PnfWidget(ViewHistoryMixin, PlotStyleMixin, pg.GraphicsLayoutWidget):
     """pyqtgraph P&F 点数图: X 列红方块 / O 列绿方块 + TR 区间/目标位标注。
 
     set_data(**pnf_data) 接收 build_pnf_data() 的返回 (可附 code=标的代码,
@@ -1153,16 +1152,6 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
         pad = (ymax - ymin) * 0.10 if ymax > ymin else max(self._box, 1.0)
         return max(self._full_y[0], ymin - pad), min(self._full_y[1], ymax + pad)
 
-    def _fs(self, delta=0):
-        return max(6, self._font_size + delta)
-
-    def _font(self, delta=0, bold=False):
-        f = QtGui.QFont()
-        f.setFamily(FONT_CANDIDATES[0])
-        f.setPointSize(self._fs(delta))
-        f.setBold(bold)
-        return f
-
     def _text(self, plot, x, y, text, color, anchor=(0.5, 0.5),
               delta=0, bold=False, fill=None, border=None, alpha=1.0):
         kwargs = {}
@@ -1592,7 +1581,3 @@ class PnfWidget(ViewHistoryMixin, pg.GraphicsLayoutWidget):
             ev.accept()
             return
         super().mouseReleaseEvent(ev)
-
-    def grab_pixmap(self):
-        """整图快照 (供导出 PNG)。"""
-        return self.grab()

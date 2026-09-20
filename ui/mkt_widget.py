@@ -27,13 +27,10 @@ import datetime as _dt
 
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtGui
 from pyqtgraph.Qt.QtCore import Qt, pyqtSignal
 
-from wyckoff.config import FONT_CANDIDATES
-
 from . import theme
-from .base_plot import BasePlotWidget, HoverHighlightMixin
+from .base_plot import BasePlotWidget, HoverHighlightMixin, PlotStyleMixin
 from .constants import MKT_ASPECT, MKT_DEFAULT_BARS
 
 
@@ -88,7 +85,7 @@ class _DateAxis(pg.AxisItem):
         return out
 
 
-class MktWidget(HoverHighlightMixin, BasePlotWidget):
+class MktWidget(HoverHighlightMixin, PlotStyleMixin, BasePlotWidget):
     """pyqtgraph 资金透视: 标题 + 估值卡 + 主力资金流向全宽 + 4面板 2×2 + 底部总结。
 
     继承 BasePlotWidget 获得统一交互 (滚轮/键盘/拖拽边界/双击复位/视图历史/十字光标),
@@ -822,16 +819,6 @@ class MktWidget(HoverHighlightMixin, BasePlotWidget):
             return 0.0, 1.0
         return -hi * 1.15, hi * 1.15
 
-    def _fs(self, delta=0):
-        return max(6, self._font_size + delta)
-
-    def _font(self, delta=0, bold=False):
-        f = QtGui.QFont()
-        f.setFamily(FONT_CANDIDATES[0])
-        f.setPointSize(self._fs(delta))
-        f.setBold(bold)
-        return f
-
     def _text(self, plot, x, y, text, color, anchor=(0.5, 0.5),
               delta=0, bold=False):
         ti = pg.TextItem(text, color=color, anchor=anchor)
@@ -1023,7 +1010,3 @@ class MktWidget(HoverHighlightMixin, BasePlotWidget):
         lim = self._x_limits.get(plot) if plot is not None else None
         if plot is not None and lim is not None:
             self.apply_view(lim[0], lim[1], plot=plot, push=False)
-
-    def grab_pixmap(self):
-        """整图快照 (供导出 PNG)。"""
-        return self.grab()
