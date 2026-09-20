@@ -418,8 +418,12 @@ def _detect_ranges(df, pivots, band=None, tol=None, min_bars=None, min_touches=N
             if lo_ref is not None and hi_ref is not None and lo_ref > 0 \
                     and hi_ref / lo_ref - 1 > band:
                 broke = True
-            sel = ~np.isin(idxs[start:p["idx"] + 1], list(skipped))
-            sub = idxs[start:p["idx"] + 1][sel]
+            if skipped:
+                sel = ~np.isin(idxs[start:p["idx"] + 1], list(skipped))
+                sub = idxs[start:p["idx"] + 1][sel]
+            else:
+                # skipped 常为空: 直接切片, 省掉 np.isin 全部开销
+                sub = idxs[start:p["idx"] + 1]
             if sub.size:
                 lo_min = float(lo_arr[sub].min())
                 hi_max = float(hi_arr[sub].max())
