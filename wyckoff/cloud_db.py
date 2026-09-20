@@ -20,6 +20,8 @@ import os
 import threading
 import time
 
+from ._shared import no_net as _no_net
+
 try:
     import pymysql
 except Exception:  # pragma: no cover
@@ -32,7 +34,6 @@ DEFAULT_DB = os.environ.get("WYCKOFF_SQL_DB", "wyckoff")
 DEFAULT_USER = os.environ.get("WYCKOFF_SQL_USER", "wyckoff")
 DEFAULT_PASSWORD = os.environ.get("WYCKOFF_SQL_PASSWORD", "98nM5egHVauDIbqm")
 
-NO_NET_ENV = "WYCKOFF_NO_NET"
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 15
 _DATA_TIMEOUT = 120
@@ -106,10 +107,6 @@ CREATE TABLE IF NOT EXISTS calib_bundle (
     PRIMARY KEY (bundle_key)
 ) DEFAULT CHARSET=utf8mb4;
 """
-
-
-def _no_net():
-    return os.environ.get(NO_NET_ENV, "").strip() in ("1", "true", "TRUE")
 
 
 def config():

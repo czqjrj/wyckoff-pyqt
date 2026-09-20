@@ -3,16 +3,56 @@
 集中存放颜色表、事件字典、周期/周期刻度选项、字体候选与默认设置,
 并维护 K 线图表基准字号 (`_CHART_FONT`) 及其访问/修改函数。
 """
-import matplotlib
+import threading
 
-# GUI 后端由入口显式指定 (wxPython 版 wyckoff_desktop.py 设 WxAgg, --test 设 Agg),
-# 此处不强制。
-import matplotlib.dates as mdates  # noqa: F401  (注册日期 locator/formatter)
+# ── matplotlib 惰性初始化 ──
+# `import matplotlib` (+ figure/lines/patches...) 全家约 1s, 且 config 被全项目
+# (含无 GUI 的策略/纸面引擎) 引用, 顶层导入纯属浪费。改由 mpl_members() 按需
+# 首次调用时初始化 (rcParams + 日期 locator + 常用成员), 之后全局生效。
+_MPL_MEMBERS = None
+_MPL_LOCK = threading.Lock()
 
-matplotlib.rcParams["font.sans-serif"] = [
+_MPL_FONT_CANDIDATES = [
     "Noto Sans CJK SC", "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "SimHei",
 ]
-matplotlib.rcParams["axes.unicode_minus"] = False
+
+
+def mpl_members():
+    """惰性初始化 matplotlib 并返回常用成员表 (线程安全, 幂等)。
+
+    返回 dict: {"matplotlib": 模块, "mdates": ..., "Figure": ..., "Rectangle": ...}
+    chart.py / pnf.py 的 matplotlib 绘图路径 (已弃用) 经模块 `__getattr__` 从这里
+    解析首次才真正 import; 不触及 matplotlib 的运行路径零开销。
+    """
+    global _MPL_MEMBERS
+    if _MPL_MEMBERS is not None:
+        return _MPL_MEMBERS
+    with _MPL_LOCK:
+        if _MPL_MEMBERS is None:
+            import matplotlib
+            import matplotlib.dates as mdates  # noqa: F401  (注册日期 locator/formatter)
+
+            matplotlib.rcParams["font.sans-serif"] = list(_MPL_FONT_CANDIDATES)
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            from matplotlib.figure import Figure
+            from matplotlib.lines import Line2D
+            from matplotlib.offsetbox import AnnotationBbox, DrawingArea
+            from matplotlib.patches import Arc, Circle, Rectangle
+            from matplotlib.text import Text
+
+            _MPL_MEMBERS = {
+                "matplotlib": matplotlib,
+                "mdates": mdates,
+                "Figure": Figure,
+                "Line2D": Line2D,
+                "AnnotationBbox": AnnotationBbox,
+                "DrawingArea": DrawingArea,
+                "Arc": Arc,
+                "Circle": Circle,
+                "Rectangle": Rectangle,
+                "Text": Text,
+            }
+    return _MPL_MEMBERS
 
 # ── 界面主题 (浅色细化) ──
 # 统一桌面端/图表的配色入口; 涨/多头用红, 跌/空头用绿 (A股习惯),

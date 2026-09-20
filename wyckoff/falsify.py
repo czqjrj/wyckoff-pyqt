@@ -10,11 +10,7 @@
 import json
 import time
 
-try:
-    from openai import OpenAI
-    _OPENAI_AVAILABLE = True
-except Exception:  # pragma: no cover
-    _OPENAI_AVAILABLE = False
+from ._shared import openai_client_cls
 
 # AI 请求超时 (秒): 端点卡住时在 60s 内失败, 避免后台线程长时间挂死
 _AI_TIMEOUT = 60
@@ -29,16 +25,17 @@ def _get(s, key, default):
 
 def llm_client(settings):
     """构造 OpenAI 兼容客户端; 不可用返回 None。"""
-    if not _OPENAI_AVAILABLE:
+    cls = openai_client_cls()
+    if cls is None:
         return None
     enabled = _get(settings, "ai_falsify_enabled", False)
     key = _get(settings, "ai_api_key", "")
     if not enabled or not key:
         return None
     try:
-        return OpenAI(api_key=key,
-                      base_url=_get(settings, "ai_api_base", "https://api.deepseek.com"),
-                      timeout=_AI_TIMEOUT)
+        return cls(api_key=key,
+                   base_url=_get(settings, "ai_api_base", "https://api.deepseek.com"),
+                   timeout=_AI_TIMEOUT)
     except Exception:
         return None
 

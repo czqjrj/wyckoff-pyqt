@@ -22,19 +22,14 @@ import time
 
 from . import cloud_db
 from ._shared import atomic_write_json
+from ._shared import no_net as _no_net
 from .paths import DATA_DIR
-
-NO_NET_ENV = "WYCKOFF_NO_NET"
 
 ACCOUNT_FILE = os.path.join(DATA_DIR, "account.json")
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,32}$")
 _MIN_PASSWORD = 6
 _PBKDF2_ITER = 120_000
-
-
-def _no_net():
-    return os.environ.get(NO_NET_ENV, "").strip() in ("1", "true", "TRUE")
 
 
 def _cloud_enabled():

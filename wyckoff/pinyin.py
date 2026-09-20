@@ -16,12 +16,27 @@ from .paths import ALL_STOCKS_FILE, STOCK_NAMES_FILE
 from .storage import load_watchlist
 from .utils import normalize_symbol
 
-try:
-    from pypinyin import lazy_pinyin
-    _HAS_PINYIN = True
-except ImportError:
-    _HAS_PINYIN = False
-    lazy_pinyin = None
+# ── 拼音惰性导入 ──
+# `from pypinyin import lazy_pinyin` 连坐拉起 phrases_dict (~0.55s 建索引), 而
+# 拼音搜索仅在键盘精灵输入时使用。改为首次用到才 import, 结果缓存 + 线程安全。
+_pinyin_lock = Lock()
+_pinyin_cache = None  # None=未探测; False=不可用; 否则=lazy_pinyin 函数
+
+
+def _get_lazy_pinyin():
+    """返回 lazy_pinyin 可调用; 不可用返回 None (惰性 import, 线程安全, 结果缓存)。"""
+    global _pinyin_cache
+    if _pinyin_cache is not None:
+        return _pinyin_cache or None
+    with _pinyin_lock:
+        if _pinyin_cache is None:
+            try:
+                from pypinyin import lazy_pinyin
+            except ImportError:
+                _pinyin_cache = False
+            else:
+                _pinyin_cache = lazy_pinyin
+    return _pinyin_cache or None
 
 # 股票搜索缓存
 _STOCK_SEARCH_CACHE = {}
@@ -71,18 +86,20 @@ def _py_convert(text: str) -> str:
     """把中文转拼音小写, 非中文保留原字符, 返回全拼"""
     if not text:
         return ""
-    if not _HAS_PINYIN:
+    fn = _get_lazy_pinyin()
+    if not fn:
         return ""
-    return "".join(lazy_pinyin(text)).lower()
+    return "".join(fn(text)).lower()
 
 
 def _py_initials(text: str) -> str:
     """返回拼音首字母, 如 上港集团 -> sgjt"""
     if not text:
         return ""
-    if not _HAS_PINYIN:
+    fn = _get_lazy_pinyin()
+    if not fn:
         return ""
-    return "".join(p[0] for p in lazy_pinyin(text)).lower()
+    return "".join(p[0] for p in fn(text)).lower()
 
 
 def _read_json(path):
@@ -410,7 +427,7 @@ def search_stock(query: str, limit: int = 10) -> list:
             save_pinyin_cache()
 
         # 拼音查询: 校验网络结果的名称拼音是否真正匹配, 过滤误匹配
-        if is_pinyin and results and _HAS_PINYIN:
+        if is_pinyin and results and _get_lazy_pinyin():
             q = query.lower()
             filtered = []
             for item in results:

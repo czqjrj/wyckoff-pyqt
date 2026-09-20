@@ -8,11 +8,7 @@
 import re
 import time
 
-try:
-    from openai import OpenAI
-    _OPENAI_AVAILABLE = True
-except Exception:  # pragma: no cover
-    _OPENAI_AVAILABLE = False
+from ._shared import openai_client_cls
 
 # AI 请求超时 (秒): 端点卡住时在 60s 内失败, 而不是默认 ~600s 挂死后台线程
 _AI_TIMEOUT = 60
@@ -33,7 +29,7 @@ def llm_client(settings, require_enabled=True):
     require_enabled=False: 仅需 API Key 即可 (用于用户显式点击的『生成 AI 解读』,
     只要有 Key 就能用, 不再被自动解读开关误卡)。
     """
-    if not _OPENAI_AVAILABLE:
+    if openai_client_cls() is None:
         return None
     key = _get(settings, "ai_api_key", "")
     if not key:
@@ -41,9 +37,9 @@ def llm_client(settings, require_enabled=True):
     if require_enabled and not _get(settings, "ai_interpret_enabled", False):
         return None
     try:
-        return OpenAI(api_key=key,
-                      base_url=_get(settings, "ai_api_base", "https://api.deepseek.com"),
-                      timeout=_AI_TIMEOUT)
+        return openai_client_cls()(api_key=key,
+                                   base_url=_get(settings, "ai_api_base", "https://api.deepseek.com"),
+                                   timeout=_AI_TIMEOUT)
     except Exception:
         return None
 

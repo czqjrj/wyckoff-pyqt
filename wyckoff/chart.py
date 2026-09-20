@@ -1,13 +1,7 @@
 """K线图 / 资金透视 (资金/筹码/股东) 绘制。"""
 from collections import defaultdict
 
-import matplotlib.dates as mdates
 import numpy as np
-from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
-from matplotlib.offsetbox import AnnotationBbox, DrawingArea
-from matplotlib.patches import Arc, Circle, Rectangle
-from matplotlib.text import Text
 
 from .config import (
     _PHASE_STYLE,
@@ -83,7 +77,9 @@ def _fast_bars(ax, x, heights, bottom=None, colors=None, width=0.6,
     走一遍 datalim 更新), add_artist 跳过 datalim 计算, 700 根柱时耗时从
     ~330ms 降到 ~60ms。外观与 ax.bar 逐像素一致 (含亚像素柱的整数像素化)。
     heights 允许为负 (向下绘制, 对应 MACD 绿柱)。"""
-    from matplotlib.patches import Rectangle
+    from .config import mpl_members
+
+    Rectangle = mpl_members()["Rectangle"]
     x = np.asarray(x, dtype=float)
     heights = np.asarray(heights, dtype=float)
     rooted_at_zero = bottom is None
@@ -118,6 +114,15 @@ def draw_lock(ax, x, y, label="", size=18, offset_pt=6, color=_DN, dark="#15803d
     """在数据点 (x, y) 右侧画一把小锁 (像素单位, 不依赖字体字形)。
     label 非空时在锁身上显示编号 (如 1/2/3), 便于区分逐把上锁的顺序。
     color/dark 控制锁身与锁环颜色: 买点用红, 卖点用绿。"""
+    from .config import mpl_members
+
+    _M = mpl_members()
+    DrawingArea = _M["DrawingArea"]
+    Rectangle = _M["Rectangle"]
+    Arc = _M["Arc"]
+    Text = _M["Text"]
+    Circle = _M["Circle"]
+    AnnotationBbox = _M["AnnotationBbox"]
     w, h = size, int(size * 1.15)
     da = DrawingArea(w, h, 0, 0)
     body = Rectangle((w * 0.16, h * 0.28), w * 0.68, h * 0.52,
@@ -168,6 +173,9 @@ def plot_indicators(df, fig=None, index_series=None):
     """技术指标图: 布林带+大盘对比 / 量能+量比 / MACD / KDJ / RSI / OBV / 量价分布。
     index_series: 上证指数K线 (含 close 列), 用于与个股归一化叠加对比。"""
     _deprecated_matplotlib()
+    from .config import mpl_members
+
+    Figure = mpl_members()["Figure"]
     if fig is None:
         fig = Figure(figsize=(8.5, 13.5), dpi=100)
     else:
@@ -832,6 +840,11 @@ def plot_chart(df, pivots, events, title, fig=None, waves=None, draw_locks=True,
     struct: structure_lines() 的辅助画线/结构标签数据 (Creek/Ice/S·R/Throwback/SOT)。
     sd/pnf_t: 供求定律 / 因果定律 (P&F 横向计数) 摘要, 供标注卡。"""
     _deprecated_matplotlib()
+    from .config import mpl_members
+
+    _M = mpl_members()
+    Figure = _M["Figure"]
+    Line2D = _M["Line2D"]
     if fig is None:
         fig = Figure(figsize=(11, 7.5), dpi=100)
     else:
@@ -1216,6 +1229,9 @@ def plot_market(market, fig):
     """资金透视 2×2 面板: 主力资金流向 / 资金分项 / 当前筹码堆积形态 / 股东户数。
     供需强度与估值卡片合并进底部总结。"""
     _deprecated_matplotlib()
+    from .config import mpl_members
+
+    mdates = mpl_members()["mdates"]
     import pandas as _pd
     fig.clear()
     fig.set_layout_engine(None)

@@ -30,8 +30,8 @@
     / _中 (中点);
   - 近端参考目标为本项目自创的可到达口径, 非威科夫概念 (见 _pnf_targets_at)。
 """
+# Figure 不顶层导入: matplotlib 全家 import 约 1s, 惰性经 plot_pnf 内按需加载。
 import pandas as pd
-from matplotlib.figure import Figure
 
 from .config import _fs
 
@@ -988,6 +988,9 @@ def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
     用于检验威科夫横向/纵向计数在历史段上的准确度。
     box_mode/atr_factor: 透传给标题显示格值来源 (见 pnf_box_label)。
     """
+    from .config import mpl_members
+
+    Figure = mpl_members()["Figure"]
     if fig is None:
         fig = Figure(figsize=(11, 7.5), dpi=100)
     else:

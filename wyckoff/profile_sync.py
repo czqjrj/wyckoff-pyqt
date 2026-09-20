@@ -25,6 +25,7 @@ from . import account, cloud_db, storage
 from . import paths as P
 from . import settings_keys as SK
 from ._shared import atomic_write_json
+from ._shared import no_net as _no_net
 
 DATA_DIR = P.DATA_DIR
 SETTINGS_FILE = P.SETTINGS_FILE
@@ -36,7 +37,6 @@ PAPER_FILE = P.PAPER_FILE
 
 PROFILE_SHADOW_FILE = os.path.join(DATA_DIR, "profile_shadow.json")
 SCHEMA = 1
-NO_NET_ENV = "WYCKOFF_NO_NET"
 
 # 同步的对象类型 (顺序即优先级)
 TYPES = ("settings", "watchlist", "notes", "portfolio", "candidates", "paper")
@@ -429,10 +429,6 @@ def _persist_shadow(bundle, skip_types=()):
 
 
 # ── 云端传输 ────────────────────────────────────────────────
-def _no_net():
-    return os.environ.get(NO_NET_ENV, "").strip() in ("1", "true", "TRUE")
-
-
 def _cloud_enabled():
     """MySQL 云后端可用: 在线 + 已登录账户 (按用户隔离) + 已配置。
 

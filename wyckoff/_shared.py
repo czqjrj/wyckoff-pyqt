@@ -44,6 +44,36 @@ _PARALLEL_WORKERS_MAX = min(_CPU_COUNT, 12) if _CPU_COUNT else 8
 _HW_PHASE_CACHE_DAYS = 3 if _CPU_COUNT and _CPU_COUNT >= 8 else 2
 
 
+# ── 离线判定 (account/cloud_db/profile_sync 共用单一实现, 防分叉漂移) ──
+def no_net():
+    return os.environ.get("WYCKOFF_NO_NET", "").strip() in ("1", "true", "TRUE")
+
+
+# ── OpenAI 惰性导入 (interpret/falsify 共用) ──
+# `import openai` 会连坐拉起 pydantic/httpx/aiohttp/distro 等 ~3.9s; AI 解读/证伪
+# 未配置 Key 或未启用时这些成本纯浪费, 还拖慢 UI 启动 (interpret 被 analysis 顶层
+# 引用)。统一惰性探测 + 线程安全 + 结果缓存: 首次真正构造客户端时才 import。
+_OPENAI_CLS_SENTINEL = object()
+_OPENAI_CLS = _OPENAI_CLS_SENTINEL
+_OPENAI_CLS_LOCK = threading.Lock()
+
+
+def openai_client_cls():
+    """返回 OpenAI 客户端类; 不可用返回 None (惰性 import, 线程安全, 结果缓存)。"""
+    global _OPENAI_CLS
+    if _OPENAI_CLS is not _OPENAI_CLS_SENTINEL:
+        return _OPENAI_CLS or None
+    with _OPENAI_CLS_LOCK:
+        if _OPENAI_CLS is _OPENAI_CLS_SENTINEL:
+            try:
+                from openai import OpenAI
+            except Exception:
+                _OPENAI_CLS = None
+            else:
+                _OPENAI_CLS = OpenAI
+    return _OPENAI_CLS or None
+
+
 def http_session():
     """返回全局共享 requests.Session (懒初始化, 线程安全)。"""
     global _SESSION
