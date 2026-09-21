@@ -111,3 +111,62 @@ def test_history_hit_suffix_helper():
     assert _hit_suffix(True, None) == ""
     assert _hit_suffix(False, "2026-01-01") == ""
     assert _hit_suffix(False, "") == ""
+
+
+def test_reach_status_unreached_shows_space():
+    from wyckoff.pnf import pnf_reach_status
+    t = {"横向计数上方目标_保守": 12.34, "上方空间_保守%": 5.2,
+         "上方概率_保守": 0.45}
+    assert pnf_reach_status(t, "上方", "上涨") == "上涨目标12.34 空间+5.2% 概率45%"
+    t2 = {"横向计数下方目标_保守": 9.87, "下方空间_保守%": -8.1,
+          "下方概率_保守": 0.60}
+    assert pnf_reach_status(t2, "下方", "下跌") == "下跌目标9.87 空间-8.1% 概率60%"
+
+
+def test_reach_status_reached_shows_overshoot_and_date():
+    from wyckoff.pnf import pnf_reach_status
+    t = {"横向计数上方目标_保守": 12.34, "上方空间_保守%": -1.2,
+         "上方概率_保守": 0.45, "上方hit_保守": True,
+         "上方hit日期_保守": "2024-08-21"}
+    assert pnf_reach_status(t, "上方", "上涨") == \
+        "上涨目标12.34 已到2024-08-21(超1.2%) 概率45%"
+    # 已到但无日期: 不显示日期也不报错
+    t2 = {"横向计数下方目标_保守": 9.87, "下方空间_保守%": 3.0,
+          "下方hit_保守": True}
+    assert pnf_reach_status(t2, "下方", "下跌") == "下跌目标9.87 已到"
+
+
+def test_reach_status_missing_target():
+    from wyckoff.pnf import pnf_reach_status
+    assert pnf_reach_status({}, "上方", "上涨") == "上涨目标待确认"
+
+
+def test_reach_status_from_real_pnf_targets(app):
+    from wyckoff.pnf import pnf_reach_status
+    df = _df_with_trends()
+    cols, box = build_pnf(df)
+    t = pnf_targets(df, cols, box)
+    up = pnf_reach_status(t, "上方", "上涨")
+    dn = pnf_reach_status(t, "下方", "下跌")
+    assert "上涨目标" in up and "下跌目标" in dn
+    assert ("空间" in up or "已到" in up) and ("空间" in dn or "已到" in dn)
+
+
+def test_widget_info_bar_shows_both_directions(app):
+    """顶部信息条两个方向都常显, 且到达状态置于行首并左对齐。
+
+    信息条整行远宽于视口, 居中会被两端截断; 到达状态必须在行首 + 左对齐锚点,
+    否则用户看不到。"""
+    from ui.pnf_widget import PnfWidget
+    df = _df_with_trends()
+    cols, box = build_pnf(df)
+    t = pnf_targets(df, cols, box)
+    t["direction"] = "up"          # 即使方向为上涨, 下跌侧也应显示
+    w = PnfWidget()
+    w.set_data(cols=cols, box=box, title="t", targets=t)
+    bar = next(ti for ti, fy in w._pinned
+               if hasattr(ti, "toPlainText") and fy == 0.018)
+    txt = bar.toPlainText()
+    assert txt.startswith("上涨目标"), "到达状态应置于信息条行首"
+    assert "下跌目标" in txt
+    assert bar._pin_anchor == (0, 0.5), "信息条应左对齐以避开右侧截断"

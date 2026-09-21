@@ -979,6 +979,34 @@ def pnf_cap(targets, cols):
     return cap, cap_color
 
 
+def pnf_reach_status(targets, prefix: str, label: str, tier: str = "保守") -> str:
+    """单侧 (上方/下方) 计数目标的"是否到达 + 空间"文本。
+
+    targets 为 pnf_targets() 结果 (已由 _annotate_current_reached 写入 hit 标注);
+    prefix = "上方"/"下方"; label = 展示用方向名 ("上涨"/"下跌"); tier 默认保守档。
+    未到达: "上涨目标12.34 空间+5.2% 概率45%";
+    已到达: "上涨目标12.34 已到2024-08-21(超1.2%) 概率45%"。
+    缺目标价或空间时返回 "<label>目标待确认"。
+    """
+    t = targets.get(f"横向计数{prefix}目标_{tier}")
+    s = targets.get(f"{prefix}空间_{tier}%")
+    if t is None or s is None:
+        return f"{label}目标待确认"
+    seg = f"{label}目标{t:.2f}"
+    if targets.get(f"{prefix}hit_{tier}"):
+        d = targets.get(f"{prefix}hit日期_{tier}")
+        seg += f" 已到{d}" if d else " 已到"
+        if s < 0:
+            seg += f"(超{abs(s):.1f}%)"
+    else:
+        sign = "+" if s > 0 else ""
+        seg += f" 空间{sign}{s:.1f}%"
+    p = targets.get(f"{prefix}概率_{tier}")
+    if p is not None:
+        seg += f" 概率{int(p * 100)}%"
+    return seg
+
+
 def plot_pnf(df: pd.DataFrame, cols, box, title, fig=None, targets=None,
              history=None, box_mode: str = "pct", atr_factor: float = 0.5):
     """绘制点数图, 按威科夫计数原理标注 TR 区间、计数起止点与上涨/下跌目标位。

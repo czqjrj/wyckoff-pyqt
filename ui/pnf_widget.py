@@ -20,7 +20,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 from pyqtgraph.Qt.QtCore import Qt
 
-from wyckoff.pnf import pnf_box_label, pnf_cap, pnf_hist_title
+from wyckoff.pnf import pnf_box_label, pnf_cap, pnf_hist_title, pnf_reach_status
 
 from . import theme
 from .base_plot import PlotStyleMixin, ViewHistoryMixin
@@ -659,66 +659,21 @@ class PnfWidget(ViewHistoryMixin, PlotStyleMixin, pg.GraphicsLayoutWidget):
             _ca = float(targets.get("cause", 0))
             cause_ratio = _ca / (tr_top - tr_bottom) if (tr_top - tr_bottom) > 0 else 0
             tr_pos = targets.get("tr_position%")
-            # 方向优先概率/空间: 向上→取保守档上方概率, 向下→保守档下方概率
-            if targets.get("direction") == "up":
-                p = targets.get("上方概率_保守")
-                s = targets.get("上方空间_保守%")
-                t = targets.get("横向计数上方目标_保守")
-                if p is not None and s is not None and t is not None:
-                    sign = "+" if s > 0 else ""
-                    ps = f"保守目标 {t:.2f}{sign}{s:.1f}% 概率{int(p*100)}%"
-                    if targets.get("上方hit_保守"):
-                        _d = targets.get("上方hit日期_保守")
-                        if _d:
-                            ps += f" ·已到{_d}"
-                else:
-                    ps = "目标待确认"
-            elif targets.get("direction") == "down":
-                p = targets.get("下方概率_保守")
-                s = targets.get("下方空间_保守%")
-                t = targets.get("横向计数下方目标_保守")
-                if p is not None and s is not None and t is not None:
-                    sign = "+" if s > 0 else ""
-                    ps = f"保守目标 {t:.2f}{sign}{s:.1f}% 概率{int(p*100)}%"
-                    if targets.get("下方hit_保守"):
-                        _d = targets.get("下方hit日期_保守")
-                        if _d:
-                            ps += f" ·已到{_d}"
-                else:
-                    ps = "目标待确认"
-            else:
-                up_p = targets.get("上方概率_保守")
-                up_s = targets.get("上方空间_保守%")
-                up_t = targets.get("横向计数上方目标_保守")
-                dn_p = targets.get("下方概率_保守")
-                dn_s = targets.get("下方空间_保守%")
-                dn_t = targets.get("横向计数下方目标_保守")
-                parts = []
-                if up_t is not None and up_s is not None and up_p is not None:
-                    sign = "+" if up_s > 0 else ""
-                    parts.append(f"上{up_t:.2f}{sign}{up_s:.1f}%{int(up_p*100)}%")
-                if dn_t is not None and dn_s is not None and dn_p is not None:
-                    sign = "+" if dn_s > 0 else ""
-                    parts.append(f"下{dn_t:.2f}{sign}{dn_s:.1f}%{int(dn_p*100)}%")
-                if parts:
-                    if targets.get("上方hit_保守"):
-                        _d = targets.get("上方hit日期_保守")
-                        if _d:
-                            parts.append(f"上已到{_d}")
-                    if targets.get("下方hit_保守"):
-                        _d = targets.get("下方hit日期_保守")
-                        if _d:
-                            parts.append(f"下已到{_d}")
-                ps = " / ".join(parts) if parts else "目标待确认"
+            # 上涨/下跌两侧常显: 是否到达 + 剩余空间 + 概率 (保守档口径)。
+            # 放在行首并左对齐: 信息条整行远宽于视口, 居中会被两端截断, 左对齐
+            # 才能保证"是否到达 + 空间"始终可见 (右侧区间/计数细节可被裁掉)。
+            ps = (f"{pnf_reach_status(targets, '上方', '上涨')}"
+                  f"  |  {pnf_reach_status(targets, '下方', '下跌')}")
             poc_s = f" · POC {float(poc):.2f}" if poc else ""
             pos_s = f" · TR位{tr_pos:.0f}%" if tr_pos is not None else ""
             ratio_s = f" · 因/TR={cause_ratio:.2f}" if cause_ratio > 0 else ""
-            line = (f"{zone_label} {tr_bottom:.2f}~{tr_top:.2f}{pos_s}{poc_s}"
+            line = (f"{ps}"
+                    f"  |  {zone_label} {tr_bottom:.2f}~{tr_top:.2f}{pos_s}{poc_s}"
                     f"  |  威科夫横向计数: {_cn}列×格×反转 因{_ca:.2f}{ratio_s}"
-                    f"  |  {ps}"
                     f"  |  {zone_note}")
             _, t_edge = self._zone_colors(targets)
-            self._pin(line, t_edge, 0.018, bold=True, size=self._fs(1))
+            self._pin(line, t_edge, 0.018, bold=True, size=self._fs(1),
+                      anchor=(0, 0.5), fx=0.02)
         if history:
             parts = []
             for h in history[-4:]:
