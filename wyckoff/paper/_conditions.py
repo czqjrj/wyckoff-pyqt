@@ -132,11 +132,13 @@ def _apply_auto_conditions(st, cand, weak=False):
         reason = f"自动:{e.get('strategy','')}:{e.get('type')}({e.get('conf',0)})"
         # 策略级信号追踪: 廉价记录 (只落盘, 不拉行情), 供准确度/盈利聚合。
         # 同策略+同标的+同事件在冷却窗(20根)内重复扫描自动合并。
+        # 锚点用事件日/事件价 (候选携带), 与回测口径对齐; 缺时回退扫描日。
         try:
             paper_strategy_accuracy.record_signal(
                 e.get("strategy", ""), code, code, e.get("name", ""),
                 e.get("type", ""), e.get("conf", 0),
-                time.strftime("%Y-%m-%d"), e.get("last", 0) or 0,
+                str(e.get("event_date") or time.strftime("%Y-%m-%d")),
+                float(e.get("event_px") or e.get("last") or 0),
                 fired=paper.has_position(st, code))
         except Exception:
             pass

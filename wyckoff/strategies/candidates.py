@@ -28,9 +28,11 @@ from wyckoff.strategies.constants import (
 from wyckoff.strategies.evaluators import evaluate_strategy_value_accumulation
 
 # ── 模拟盘策略注册信息 (选股策略的单一来源) ──────────────────────
-# 优先序: 纪律 > 左侧买点 > 事件+VSA双因 (回测期望依次由高到低; 双因共振口径
-# 最严, 仅在高优先级策略未命中时兜底加候选, 不顶替 Spring-only)。
-STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT, STRATEGY_EVENT_VSA)
+# 优先序: 纪律 > 左侧买点 > 事件+VSA双因 > 价值吸筹(回退) (回测期望依次
+# 由高到低; 价值吸筹属底部整固兜底, 仅在高优先级策略未命中时回退, 且受
+# _selection.enable_va 门禁控制 — 默认关闭, 显式 paper_enable_va=true 生效)。
+STRATEGY_ORDER = (STRATEGY_DISCIPLINE, STRATEGY_LONG_LEFT,
+                  STRATEGY_EVENT_VSA, STRATEGY_VALUE_ACC)
 STRATEGY_CN = {
     STRATEGY_DISCIPLINE: "Spring-only",
     STRATEGY_VALUE_ACC: "价值吸筹",

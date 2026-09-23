@@ -38,33 +38,25 @@
 
 ### P0 — 有现成代码但未接入交易链
 
-- [ ] **5.1 高价值 VSA 独立策略入池 (策略2)**
-  - 现状: `wyckoff_backtrader_strategy.py` 定义了"事件+高价值VSA"策略, 但只是回测脚本;
-    `wyckoff/strategies/candidates.py:28` 的 `STRATEGY_ORDER = (DISCIPLINE, LONG_LEFT)`,
-    VSA 策略未注册。VSA 目前只作为 `fusion.py` 的一个融合维度。
-  - 依据: `strategy_analysis_report.md` 策略2 胜率 76.9% (n=26); `accuracy_report.md` §二
-    VSA 单独用贴近随机 (49–60%), 只有作强事件确认证据才增值。
-  - 建议: 在 `candidates.py` 增加 `STRATEGY_EVENT_VSA` producer (强梯队事件 ∧ 高价值VSA
-    `{CHOC,DEM,SUP,LPS,ST,Spring}` 且 `vr≥1.5`), 复用现有 `scan_individual` 优先序;
-    先以独立赛道 (不受门禁) 或仅作加分项验证, 勿直接替换 Spring-only。
-  - 验收: `tests/` 新增用例; 回测对照 Spring-only 的单笔期望/胜率不劣化。
+- [x] **5.1 高价值 VSA 独立策略入池 (策略2)** (✅ 2026-09-18, commit `ccf2cb7`)
+  - 落地: `candidates.py` 已注册 `STRATEGY_EVENT_VSA` producer (`event_vsa_candidate`,
+    强多头事件 ∧ 高价值VSA `{CHOC,DEM,SUP,TEST,SPR,SC}` 且 `vr≥1.5` conf≥85, 共时窗口
+    `EVENT_VSA_CO_WINDOW`), 入 `STRATEGY_ORDER` 第三优先兜底、`CANDIDATE_GATED=False`
+    独立赛道 (不受门禁)。常量在 `strategies/constants.py`, 测试 `tests/test_candidates_event_vsa.py` (7 条)。
 
-- [ ] **5.2 多周期共振接入入场硬门禁**
-  - 现状: `multitime.py` 已产出日/周/月方向, 但 `entries.py` 未调用; 只在 `conclusion.py`
-    展示层出现。
-  - 依据: 高周期同向确认可过滤日线假信号 (与"大盘 MA20 门"同源逻辑)。
-  - 建议: 在 `find_entry_signals` 增加可选参数 `htf_dir` (由 `_scan_one` 从 `multi_tf_analysis`
-    注入), 日线多头入场要求周线不反向; 数据缺失 fail-open 或 fail-close 需实测选定。
-  - 验收: 回测对照 (开/关) 单笔期望与回撤; 不得显著削减样本 (目标 n 下降 <30%)。
+- [x] **5.2 多周期共振接入入场硬门禁** (✅ 2026-09-18/19, commits `b08e4d3`/`66c1fe0`)
+  - 落地: `find_entry_signals` 新增 `htf` 可选参数 + `_scan_one` 从 `multi_tf_analysis`
+    → `htf_direction` 注入 (纯本地指标, 无网络); `ENTRY_HTF_GATE` fail-open/fail-close 双档。
+  - 实证: `scripts/htf_gate_survey.py` (n=2419) 证伪该门 —— 周/月线偏空组强多头事件
+    20根命中 69.0% 不低于非偏空组 68.6%, 且开门会拦下 ~50% 样本 (远超 30% 验收线);
+    Spring 诞生于超跌环境, 高周期偏空不构成反向 → **门默认关 (IDLE), 保留开关**。
 
-- [ ] **5.3 板块级去重后的组合回测**
-  - 现状: `conservative_bt.dedup_signals` 已支持 `sector`/`chain` 模式, 但**未用其重跑**
-    组合口径。
-  - 依据: `docs/profitability_bt.md` §六.2 指出同日同板块重叠使真实回撤 > 单笔模拟;
-    §七 待验证①。
-  - 建议: `python -m scripts.conservative_bt --conf 90 --dedup sector --report ...` 与
-    `--dedup chain` 对照 `none`, 量化相关性回撤。
-  - 验收: 产出对照报告存档 `docs/`。
+- [x] **5.3 板块级去重后的组合回测** (✅ 2026-09-23, 见 `docs/bt_dedup_comparison.md`)
+  - 落地: `python scripts/build_stock_sector_map.py` (东财板块→成分股反解, 2573/3109 标的,
+    83%; per-stock f127 被墙时走板块批量交接) + `conservative_bt --dedup none/date/sector/chain`
+    对照。结论: date 最激进 (12,931→698 笔), sector/chain 保留 ~44% (5.6~5.9k 笔) 且盈亏比
+    2.25 稳健; 组合槽位 CAGR 四模式仅差 ≤0.8pt; `sector` 建议为保守基准。
+  - 遗留: `port_max_drawdown` 恒 0 (无逐日路径), 相关性真实回撤需逐日净值验证。
 
 ### P1 — 验证与校准
 
@@ -90,10 +82,20 @@
 
 ### P2 — 工程债
 
-- [ ] **5.8 模拟盘实盘口径与回测对齐**
+- [x] **5.8 模拟盘实盘口径与回测对齐** (✅ 2026-09-23)
   - 依据: `docs/spring_only_progress.md` 待办 1-3: 运行实例 `max_pos` 被写回 3 (应为 4);
     本地 `paper_stop_loss=0.05` 对回测 -4%、`paper_trailing_stop=false` 对回测开启。
-  - 建议: UI 设置改 4 + stop/trail 对齐后重跑对照; 复核 `_record_equity` 修复后净值曲线。
+  - 落实:
+    - 实盘/默认参数已对齐: `wyckoff_settings.json` + `_params.py` = `max_pos=5`,
+      `stop_loss=0.04`, `trailing_stop=true`, `trail_back_pct=0.06`, `stop_cooldown=20`
+      (与 `paper_replay_bt` 基线一致; trail_back 0.06 为当前默认, 文档基线 0.08 需注意)。
+    - `_record_equity` 已确认按交易日 upsert 最新净值 (同日多周期只留最新)。
+    - **事件日锚点修复 (口径不一致头号原因)**: 回测用事件日+事件价, 实盘之前用扫描日+last
+      (候选可在事件后 0~10 根才被识别, 评估整体右移 → 命中率系统低估)。
+      修复: `paper/_selection.py` 给候选附加 `event_date`/`event_px` (取自候选事件 bar idx);
+      `paper/_conditions.py` 记录信号优先用事件锚点, 缺时回退扫描日。
+      新增 2 条回归测试 (事件锚点优先 / 旧格式回退) + 保留既有冷却合并逻辑 (df=None 用日期合并)。
+  - 验收: `tests/test_strategy_accuracy.py` 9 passed。
 
 - [ ] **5.9 板块强度历史快照回填**
   - 依据: `docs/backtest_comparison_report.md` §6: 快照仅自 2026-08 起, 历史回测门禁近乎空转。
@@ -116,10 +118,16 @@
     样本 18/20<100)、③冷却合并失效致重复入库 (已修)、④样本仅 2 个扫描日。
   - 待办: 需 `_conditions.py` 记录事件日/事件价后重估 (见 `docs/spring_live_accuracy_review.md`)。
 
-- [ ] **5.11 价值吸筹 producer 未在扫描序**
-  - 现状: `candidates.py` 注册了 `_produce_value_acc` 与 `STRATEGY_CN`, 但 `STRATEGY_ORDER`
-    只含 discipline + left_buy, 价值吸筹实际不参与扫描 (与文件注释"纪律>价值吸筹>左侧"不一致)。
-  - 建议: 确认是有意下线还是遗漏; 若保留, 需按 `winrate_improve_eval.md` 结论设 conf 门槛。
+- [x] **5.11 价值吸筹 producer 未在扫描序** (✅ 2026-09-23)
+  - 结论: **有意下线** (09-10 commit `34031d0` "移除价值吸筹，纪律+左侧买点"), 依据
+    `docs/replay_improvements_v2.md` ⑦ (56 笔 -53%, 均收 -0.95%) 默认关闭,
+    `docs/strategy4_discipline_improvements.md` (价值吸筹回退纯负贡献)。
+    但 `winrate_improve_eval.md` 四.1 与 五.④ 强调其依赖事件方向命中质量高、**不推荐砍死**,
+    且 `settings_keys.py:307` 仍承诺"显式 `paper_enable_va=true` 可选开启"。
+  - 修复: `STRATEGY_ORDER` 补回 `STRATEGY_VALUE_ACC` (置于末位=回退兜底, 语义与
+    "纪律优先→无信号回退价值吸筹" 一致); 默认仍由 `enable_va=false` 门禁剔除, 行为不变;
+    `enable_va=true` 时真实生效 (此前扫描序过滤掉该 producer, 开关形同虚设)。
+  - 验收: `tests/test_paper_account.py` 价值吸筹开关三用例 + 事件VSA 专项 + 边界 conf 全绿 (53 passed)。
 
 - [ ] **5.12 类型检查 + 覆盖率门槛**
   - 现状: 仅 ruff(E/F/W/I/UP) + compileall + pytest, 无 mypy/pyright 类型检查、无 coverage 门槛;

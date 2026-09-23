@@ -12,8 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from wyckoff.fundamental import fetch_sector
-from wyckoff.utils import normalize_symbol
+from wyckoff.fundamental import _fetch_constituents_em, _load_board_map, fetch_sector
 
 
 def main():
@@ -22,33 +21,53 @@ def main():
     keys = [k for k in keys if k]
     print(f"信号库 {len(recs)} 条 / 去重标的高代码 {len(keys)} 个")
 
-    out = {}
     cache = "wyckoff_stock_sector.json"
+    out = {}
     if os.path.exists(cache):
         out = json.load(open(cache, encoding="utf-8"))
         print(f"复用已有缓存 {len(out)} 个")
 
-    pending = [(k, normalize_symbol(k)) for k in keys if str(k) not in out]
-    if not pending:
-        print("全部已映射")
-        json.dump({k: out[str(k)] for k in sorted(out)}, open(cache, "w", encoding="utf-8"),
-                  ensure_ascii=False, indent=1)
-        return
+    # 优先走板块→成分股全量反解 (每板块一次批量请求, 远快于逐股 f127):
+    # 个别环境股票级请求被墙时仍可完整建图; 已映射的股票跳过。
+    pending = {k for k in keys if str(k) not in out}
+    if pending:
+        # 映射规则: 板块 fetcher 频控由内部信号量控制, 板块级并行即可
+        def _board_job(item):
+            name, bk = item
+            try:
+                stocks = _fetch_constituents_em(bk, limit=600) or []
+            except Exception:
+                stocks = []
+            return name, stocks
 
-    def _one(item):
-        code, sym = item
+        bmap = _load_board_map()
+        hits = {}
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            for name, stocks in ex.map(_board_job, sorted(bmap.items())):
+                for code, _nm, _px in stocks:
+                    c6 = str(code)[-6:]
+                    if c6 in pending:
+                        hits[c6] = name
+        add = {c: s for c, s in hits.items() if c in pending}
+        pending -= set(add)
+        out.update(add)
+        print(f"板块反解命中 {len(add)} 个 (剩余 {len(pending)} 个走逐股兜底)")
+
+    def _one(code):
         try:
-            return code, fetch_sector(sym)
+            return code, fetch_sector(code)
         except Exception:
             return code, None
 
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        for code, sec in ex.map(_one, pending):
-            if sec:
-                out[str(code)] = sec
-                print(f"  {code} -> {sec}", flush=True)
-            else:
-                print(f"  {code} -> (无)", flush=True)
+    pending = sorted(pending)
+    if pending:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for code, sec in ex.map(_one, pending):
+                if sec:
+                    out[str(code)] = sec
+                    print(f"  {code} -> {sec}", flush=True)
+                else:
+                    print(f"  {code} -> (无)", flush=True)
 
     json.dump({k: out[k] for k in sorted(out)}, open(cache, "w", encoding="utf-8"),
               ensure_ascii=False, indent=1)

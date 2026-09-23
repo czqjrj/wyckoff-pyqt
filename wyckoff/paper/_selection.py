@@ -331,6 +331,13 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
             cand["name"] = name
             cand["last"] = round(float(df["close"].iloc[-1]), 2)
             cand["day"] = str(df["day"].iloc[-1])
+            # 事件日/事件价锚点: 候选自带事件 bar idx, 据此记录事件真实发生日与
+            # 事件价, 供策略信号库与回测口径对齐 (扫描日可能晚于事件日 0~10 根,
+            # 用扫描日记录会使准确度评估整体右移、系统低估命中率; 见 spring review)。
+            _ei = cand.get("idx")
+            if isinstance(_ei, int) and 0 <= _ei < len(df):
+                cand["event_date"] = str(df["day"].iloc[_ei])[:10]
+                cand["event_px"] = round(float(df["close"].iloc[_ei]), 3)
             # 低质池过滤 (北交所/ST/低价) — 各策略统一适用, 防垃圾入池
             if _is_low_quality(code, price=cand["last"], name=name):
                 return code, None, None

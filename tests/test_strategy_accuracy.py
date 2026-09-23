@@ -131,3 +131,57 @@ def test_strategy_report_renders():
     assert "paper_discipline_bull" in rep
     assert "模拟盘策略追踪报告" in md
     assert "%" in md
+
+
+def test_apply_auto_conditions_uses_event_anchor(monkeypatch):
+    """实盘条件记录应以事件日/事件价锚点入库, 而非扫描日 (5.8 对齐回测口径)。"""
+    import wyckoff.paper as paper
+    import wyckoff.paper._conditions as cond
+    captured = {}
+
+    def fake_record(strategy, symbol, code, name, event_type, conf, date, price,
+                    fired=False):
+        captured.update(strategy=strategy, symbol=symbol, code=code,
+                        event_type=event_type, conf=conf, date=date,
+                        price=price, fired=fired)
+        return 1
+
+    monkeypatch.setattr(cond.paper_strategy_accuracy, "record_signal", fake_record)
+    monkeypatch.setattr(paper, "has_position", lambda *_a, **_k: False)
+    st = load_state()
+    st["conditions"] = []
+    cand = {
+        "code": "600001", "name": "测试", "strategy": "paper_discipline_bull",
+        "type": "Spring", "conf": 92, "auto_cond_price": 11.0,
+        "event_date": "2024-03-05", "event_px": 9.8,
+    }
+    cond._apply_auto_conditions(st, [cand])
+    assert captured["date"] == "2024-03-05"
+    assert captured["price"] == pytest.approx(9.8)
+    assert captured["event_type"] == "Spring"
+    assert captured["conf"] == 92
+
+
+def test_apply_auto_conditions_falls_back_to_scan_day(monkeypatch):
+    """候选不带事件锚点 (旧格式/外部候选) 时回退扫描日, 不崩。"""
+    import wyckoff.paper as paper
+    import wyckoff.paper._conditions as cond
+    captured = {}
+
+    def fake_record(strategy, symbol, code, name, event_type, conf, date, price,
+                    fired=False):
+        captured.update(date=date, price=price)
+        return 1
+
+    monkeypatch.setattr(cond.paper_strategy_accuracy, "record_signal", fake_record)
+    monkeypatch.setattr(paper, "has_position", lambda *_a, **_k: False)
+    st = load_state()
+    st["conditions"] = []
+    cand = {
+        "code": "600002", "name": "测试", "strategy": "paper_discipline_bull",
+        "type": "Spring", "conf": 90, "auto_cond_price": 12.0,
+        "last": 9.5,
+    }
+    cond._apply_auto_conditions(st, [cand])
+    assert captured["date"].startswith("20")
+    assert captured["price"] == pytest.approx(9.5)
