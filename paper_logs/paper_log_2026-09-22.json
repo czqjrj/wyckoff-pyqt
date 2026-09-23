@@ -1,0 +1,86 @@
+{
+  "date": "2026-09-22",
+  "events": [
+    {
+      "ts": "2026-09-22 09:29:27",
+      "type": "account",
+      "detail": {
+        "equity": 1000000.0,
+        "cash": 1000000.0,
+        "positions_count": 0,
+        "closed_count": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 10:29:38",
+      "type": "scan",
+      "detail": {
+        "scan_count": 35,
+        "codes_scanned": 57,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 11:11:26",
+      "type": "scan",
+      "detail": {
+        "scan_count": 36,
+        "codes_scanned": 57,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 11:42:54",
+      "type": "scan",
+      "detail": {
+        "scan_count": 37,
+        "codes_scanned": 56,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 13:41:16",
+      "type": "scan",
+      "detail": {
+        "scan_count": 38,
+        "codes_scanned": 56,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 14:11:30",
+      "type": "scan",
+      "detail": {
+        "scan_count": 39,
+        "codes_scanned": 55,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 14:56:33",
+      "type": "scan",
+      "detail": {
+        "scan_count": 40,
+        "codes_scanned": 55,
+        "candidates_found": 0
+      }
+    },
+    {
+      "ts": "2026-09-22 15:19:35",
+      "type": "scan",
+      "detail": {
+        "scan_count": 41,
+        "codes_scanned": 55,
+        "candidates_found": 0
+      }
+    }
+  ],
+  "summary": {
+    "scan_count": 7,
+    "buy_count": 0,
+    "sell_count": 0,
+    "condition_count": 0,
+    "risk_block_count": 0,
+    "rebalance_count": 0
+  }
+}

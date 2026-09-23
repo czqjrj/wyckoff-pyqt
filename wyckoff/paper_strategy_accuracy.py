@@ -166,9 +166,14 @@ def _resolve_idx(df, rec):
 
 # ── 记录 ────────────────────────────────────────────────
 def _cooldown_dup(existing, rec, df, cooldown_bars):
-    """冷却窗内找同策略+同标的+同事件类型的未评估旧记录 (合并用), 无则 None。"""
+    """冷却窗内找同策略+同标的+同事件类型的旧记录 (合并用), 无则 None。
+
+    有 df 时按 bar 索引间距判冷却 (精确至交易日); df 缺失 (实盘扫描路径,
+    _conditions.py 廉价记录不拉行情) 时退化为按日历日近似, 保证同一事件在
+    跨扫描日重复命中时自动合并, 避免重复入库。
+    """
     if df is None or df.empty:
-        return None
+        return _cooldown_dup_by_date(existing, rec, cooldown_bars)
     rec_idx = _resolve_idx(df, rec)
     if rec_idx is None:
         return None
@@ -183,6 +188,31 @@ def _cooldown_dup(existing, rec, df, cooldown_bars):
         if o_idx is None:
             continue
         if abs(int(o_idx) - int(rec_idx)) <= cooldown_bars:
+            return key
+    return None
+
+
+def _cooldown_dup_by_date(existing, rec, cooldown_bars):
+    """df 缺失时的冷却合并: 同策略+同标的+同事件, 且记录日相差 ≤ 冷却窗(日历日)。"""
+    if cooldown_bars <= 0:
+        return None
+    import datetime as _dt
+    try:
+        rec_d = _dt.date.fromisoformat(str(rec.get("date", ""))[:10])
+    except ValueError:
+        return None
+    for key, old in existing.items():
+        if old.get("strategy") != rec.get("strategy"):
+            continue
+        if old.get("symbol") != rec.get("symbol"):
+            continue
+        if old.get("event_type") != rec.get("event_type"):
+            continue
+        try:
+            o_d = _dt.date.fromisoformat(str(old.get("date", ""))[:10])
+        except ValueError:
+            continue
+        if abs((rec_d - o_d).days) <= cooldown_bars:
             return key
     return None
 

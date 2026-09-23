@@ -60,6 +60,31 @@ def test_record_cooldown_merge():
     assert recs[0]["ref_px"] == 11.0
 
 
+def test_record_cooldown_merge_without_df():
+    """实盘扫描路径 df=None 时, 冷却窗内跨扫描日同事件仍应合并 (防重复入库)。"""
+    psa.record_signal("paper_discipline_bull", "600001", "600001", "测试",
+                      "Spring", 90, "2024-01-02", 10.0)
+    rc = psa.record_signal("paper_discipline_bull", "600001", "600001", "测试",
+                           "Spring", 95, "2024-01-03", 11.0)
+    assert rc == -1
+    recs = psa.load_signals()
+    assert len(recs) == 1
+    assert recs[0]["conf"] == 95
+    assert recs[0]["ref_px"] == 11.0
+    assert recs[0]["date"] == "2024-01-03"
+
+
+def test_record_without_df_cooldown_not_merged_outside_window():
+    """df=None 时超出冷却窗(日)的同事件应作为新信号入库。"""
+    psa.record_signal("paper_discipline_bull", "600001", "600001", "测试",
+                      "Spring", 90, "2024-01-02", 10.0)
+    rc = psa.record_signal("paper_discipline_bull", "600001", "600001", "测试",
+                           "Spring", 95, "2024-03-05", 15.0)
+    assert rc == 1
+    recs = psa.load_signals()
+    assert len(recs) == 2
+
+
 def test_cond_accuracy():
     st = load_state()
     st["conditions"] = [
