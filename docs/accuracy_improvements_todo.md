@@ -102,6 +102,20 @@
 - [ ] **5.10 分析级评估窗口成熟**
   - 依据: `docs/accuracy_report.md` §六: 109 条整股结论全 pending; cron 15:01 自动闭环。
 
+- [x] **5.14 模拟盘信号库冷却合并 df=None 失效修复** (✅ 2026-09-23, commit `d73e7c5`)
+  - 现状: `_conditions.py` 廉价记录不传 df → `_cooldown_dup` 遇 `df=None` 直接返回 None,
+    冷却窗合并从未在实盘路径生效 → 同事件跨扫描日重复入库 (公牛 sh603195 / 老凤祥
+    sh600612 各在 09-09/09-10 入两条同价)。
+  - 落地: `paper_strategy_accuracy._cooldown_dup_by_date` 日历日近似合并 + 3 条 df-less
+    用例 (窗内合并 / 窗外新增 / 合并刷新 conf·ref_px)。场景详见 `docs/spring_live_accuracy_review.md`。
+
+- [x] **5.15 Spring-only 实盘准确率归因** (✅ 2026-09-23, commit `d73e7c5`)
+  - 结论: n=18 唯一信号 H5 40% (Wilson 95%CI [20%,61%]), 与回测 93% / 随机 50% 均区间
+    重叠 → 统计上无法确证退化; 真正根因是 4 系统性偏差: ①事件日↔扫描日锚点错位
+    (回测用事件日 open, 实盘用扫描日 close)、②conf<100 垫底信号混入 (生产门槛 100,
+    样本 18/20<100)、③冷却合并失效致重复入库 (已修)、④样本仅 2 个扫描日。
+  - 待办: 需 `_conditions.py` 记录事件日/事件价后重估 (见 `docs/spring_live_accuracy_review.md`)。
+
 - [ ] **5.11 价值吸筹 producer 未在扫描序**
   - 现状: `candidates.py` 注册了 `_produce_value_acc` 与 `STRATEGY_CN`, 但 `STRATEGY_ORDER`
     只含 discipline + left_buy, 价值吸筹实际不参与扫描 (与文件注释"纪律>价值吸筹>左侧"不一致)。
