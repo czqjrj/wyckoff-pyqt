@@ -63,6 +63,33 @@ def no_pinyin_network(monkeypatch):
                         os.path.join(_TMP_DATA, "wyckoff_stock_names.json"))
 
 
+@pytest.fixture(autouse=True)
+def restore_module_paths():
+    """每个测试后还原被测试改写的用户数据路径模块全局。
+
+    多个测试直接把 `wyckoff.accuracy.ACCURACY_FILE` /
+    `signal_accuracy.SIGNAL_ACCURACY_FILE` 指向自己的 tmp_path 以隔离写入,
+    但从不还原 —— 全局一旦被改, 后续测试读写的就是那个已失效的临时路径
+    (跨模块污染: 写 accuracy 库的测试会把记录落在别的测试的 tmp 里, 表现为
+    后续测试看到"凭空多出来的记录")。这里在 teardown 统一还原。
+    """
+    import importlib
+    saved = {}
+    for mod_name, attr in (("wyckoff.accuracy", "ACCURACY_FILE"),
+                           ("wyckoff.signal_accuracy", "SIGNAL_ACCURACY_FILE")):
+        try:
+            mod = importlib.import_module(mod_name)
+            saved[(mod_name, attr)] = getattr(mod, attr)
+        except Exception:
+            pass
+    yield
+    for (mod_name, attr), old in saved.items():
+        try:
+            setattr(importlib.import_module(mod_name), attr, old)
+        except Exception:
+            pass
+
+
 def pytest_sessionfinish(session, exitstatus):
     """清理会话级临时数据目录。"""
     shutil.rmtree(_TMP_DATA, ignore_errors=True)

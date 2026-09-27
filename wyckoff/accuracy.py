@@ -31,7 +31,7 @@ from .events import detect_all
 from .fusion import fuse_signals
 from .indicators import add_indicators, find_pivots
 from .paths import ACCURACY_FILE, DATA_DIR
-from .phases import judge_phase
+from .phases import judge_phase, phase_tone_of
 from .pnf import build_pnf, pnf_targets
 from .vsa import vsa_classify
 from .waves import calc_targets
@@ -131,9 +131,7 @@ def capture_snapshot(df, symbol, code, scale, datalen, name="",
     if phase_label:
         phase = phase_label
     base_phase = phase.replace("高置信 ", "").replace(" (需谨慎)", "").split(" ")[0]
-    phase_tone = {"底部整固": "bullish", "上升趋势": "bullish",
-                  "顶部构筑": "bearish", "下跌趋势": "bearish"}.get(
-        base_phase, "neutral")
+    phase_tone = phase_tone_of(base_phase)
     phase_conf = (conf_q if conf_q else
                   ("high" if phase.startswith("高置信")
                    else "caution" if "需谨慎" in phase else ""))
@@ -265,11 +263,12 @@ def record_analysis(df, symbol, code, scale, datalen, name="",
         return rec
 
 
-def _evaluate_against_df(rec, df):
+def _evaluate_against_df(rec, df, bench=None):
     """用传入 df 立即评估单条分析记录缺失周期 (可评估即补, 无则 False)。
 
     ref_dt 定位成功且未来周期已走满才落结果; 不触发网络抓取。
-    返回是否产生了新评估。"""
+    bench: 可选 {"close": ndarray}, 需与 df 按位置对齐 (回填路径按日期对齐后传入);
+    缺省则不落超额收益。返回是否产生了新评估。"""
     scale = int(rec.get("scale", 240))
     if int(rec.get("scale", 240)) != scale:
         return False
@@ -283,7 +282,7 @@ def _evaluate_against_df(rec, df):
         if k in results:
             continue
         if idx + h < len(df):
-            r = _horizon_result(df, idx, h, rec, bench=None)
+            r = _horizon_result(df, idx, h, rec, bench=bench)
             if r is not None:
                 results[k] = r
                 changed = True

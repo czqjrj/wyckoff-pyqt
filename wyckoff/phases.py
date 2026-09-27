@@ -32,6 +32,35 @@ from .config import (
     W_RECENT,
 )
 
+# 阶段 → 方向断言 tone。conclusion.py (实盘建议) 与 accuracy.py (评估通道)
+# 共用此表, 避免两份副本各自漂移。
+PHASE_TONE = {
+    "底部整固": "bullish", "上升趋势": "bullish", "区间整理": "neutral",
+    "顶部构筑": "bearish", "下跌趋势": "bearish",
+}
+
+# 实测无预测力的阶段: 阶段照常识别与展示, 但不再输出方向断言 (tone=neutral)。
+# 依据 2026-09-27 全市场主板回填 (2913 条已评估 / 364 只 / 样本约 2022-2026,
+# 逐标的聚类稳健 95%CI, 扣双边 0.15% 成本后的**净期望**):
+#     阶段        n      10根      20根      40根     调用点 pos
+#     下跌趋势   382   -3.42%   -4.68%   -3.90%    0.211
+#     上升趋势   275   -0.14%   -0.81%   -3.68%    0.528
+# 下跌趋势三个周期一致为负, 且 pos=0.211 说明它在下一段 20 根区间的**最低点**
+# 给出看空 (20 根内 68.3% 上涨、均值 +4.53%) —— 纯接刀, 属实现缺陷而非行情噪声。
+# 上升趋势未纳入: 其 10 根盈亏比 1.42 (输多赢少但赢得大), 毛期望 +0.01% 接近
+# 打平, 属"持有期不匹配"而非无信息, 待持有期维度确定后再定。
+# 注意: 顶部构筑的 edge 强烈依赖持有期 (10根净期望 +1.66%, 20根 -0.25%,
+# 40根 -1.79%), 而 tone 本身与持有期无关 —— 该问题需由 regime/持有期门禁解决,
+# 不能靠改 tone 表。详见 docs/accuracy_improvements_todo.md 5.10。
+PHASE_TONE_SUPPRESSED = frozenset({"下跌趋势"})
+
+
+def phase_tone_of(base_phase: str) -> str:
+    """阶段名 → 方向 tone。落在 PHASE_TONE_SUPPRESSED 的阶段返回 neutral。"""
+    if base_phase in PHASE_TONE_SUPPRESSED:
+        return "neutral"
+    return PHASE_TONE.get(base_phase, "neutral")
+
 
 def _vol_pct_median(df, window: int = 20) -> float:
     """计算最近 window 根 K 线的收盘价波动率中位数 (%): 以中位而非均值，避免极端行情 (黑天鹅/封 ST) 污染。

@@ -14,8 +14,9 @@
 | 4 | 三重共振 (大盘 MA20+板块+资金) | ✅ 已落实 | `wyckoff/discipline.py` → `entries.py:94` / `paper/_selection.py:16` |
 | 5 | 高价值 VSA 标签交叉验证 | ⚠️ 部分 (仅融合维度) | `wyckoff/fusion.py`；独立策略未入池 |
 | 6 | 九大检验点 / 多周期 / 阶段先验 | ✅ 已落实 (分散) | `ninetests` / `multitime.py` / `feedback` |
+| 7 | 分析层历史快照回填 (5.10) | ✅ 已落实 | `wyckoff/backfill_analysis.py` |
 
-结论: **5 项已落实, 1 项部分落实**; 另有 11 项工程/验证缺口待补。
+结论: **6 项已落实, 1 项部分落实**; 另有 11 项工程/验证缺口待补。
 
 ---
 
@@ -101,8 +102,66 @@
   - 依据: `docs/backtest_comparison_report.md` §6: 快照仅自 2026-08 起, 历史回测门禁近乎空转。
   - 建议: 按日/周回填东财行业分位, 使板块门禁在历史区间真实生效。
 
-- [ ] **5.10 分析级评估窗口成熟**
-  - 依据: `docs/accuracy_report.md` §六: 109 条整股结论全 pending; cron 15:01 自动闭环。
+- [x] **5.10 分析级评估窗口成熟** (✅ 2026-09-27, `wyckoff/backfill_analysis.py`)
+  - 病因: `record_analysis` 生产代码里**只有 GUI 分析线程一个调用方**
+    (`ui/threads/analysis_thread.py:35`) → 库只记"用户点开那一刻"的结论, 覆盖约
+    99 只自选股、每只 1 个时点。信号层早有批量回填 (`scripts/backfill_live_signals.py`),
+    分析层缺对应通道, 两者样本量差三个数量级。实测落地前 `wx_accuracy.json` 仅
+    **5 条记录 / 0 条已评估**, `wx_calibration.json` 的 `acc_evaluated` 为 0 →
+    `calibrate` 的 `phase_mislabel` 自检与 `accuracy_stats` 全部无数据可跑。
+  - 落地: 新增 `wyckoff/backfill_analysis.py` (`python -m wyckoff.backfill_analysis`)。
+    对每只标的按步长取历史切点, 用**截至该切点的前缀 df** 重跑
+    `accuracy.capture_snapshot` (阶段/P&F/融合/目标位/交易计划), 再用同一份全量 df
+    经 `_evaluate_against_df` **离线**补齐 10/20/40 根收益 (不额外联网), 最后批量
+    落盘 (避开 `record_analysis` 逐条全量读写的 O(N²))。
+    - 严格无前视: 指标列在全量 df 上算好后切片 (rolling/EWMA 均为后视窗口),
+      其余管线只跑前缀; 回归测试 `test_backfill_one_symbol_is_causal` 断言
+      "截断未来数据后同一 ref_dt 的决策字段逐字不变"。
+    - 基准 (超额收益) 按**交易日**对齐而非按位置 (个股/指数抓取窗口长度不一致,
+      按位置会整体错位), 跨度 >7 自然日留 NaN 不前向填充。
+    - 切点须距末端 >= max(HORIZONS)=40 根, 否则没有可评估的未来行情。
+    - 有意不含: 新闻维度 (历史新闻无法回溯, `news_score` 恒 None, 新闻自校准仍
+      只能靠 GUI 路径); `record_signals`/`auto_evaluate_feedback` (各有独立通道)。
+  - 首跑实证 (全市场主板 359 只 × 8 切点 = 2817 条, 512s; 累计 2913 条已评估 / 364 只,
+    样本约 2022-2026):
+    **按标的聚类稳健 95%CI** (每标的 8 条窗口重叠, 朴素 CI 会把有效样本高估约
+    sqrt(8)≈2.8 倍, 故一律按 symbol 做 t 检验) 下的 20 根方向命中率:
+
+    | 阶段/tone | n | 命中率 | 聚类 95%CI | 判定 |
+    |---|---|---|---|---|
+    | 顶部构筑/bearish | 703 | **55.7%** | [51.7, 59.7] | **唯一显著为正** |
+    | 底部整固/bullish | 478 | 49.2% | [44.3, 54.0] | 无差异 |
+    | 下跌趋势/bearish | 382 | **28.7%** | [24.0, 33.5] | **显著劣于随机** |
+    | 上升趋势/bullish | 275 | **39.1%** | [33.0, 45.3] | **显著劣于随机** |
+
+    汇总 tone 口径: 10 根无差异 (bullish 48.3% / bearish 49.1%); 20 根 bullish 45.1%、
+    bearish 46.3% **双双显著劣于抛硬币**; 40 根 bullish 38.8% (中位 -4.06%) 显著劣,
+    bearish 50.3% 无差异。
+
+    即: **方向层当前不具备正预测力, 且 20/40 根上多数格子是负的** —— 这不是调参能
+    修的问题。`下跌趋势` 标 bearish 后 20 根均值 +4.53% / 中位仍为负, 是"接刀"形态;
+    `上升趋势` 标 bullish 后 40 根中位 -4.06%, 是"追高"形态。因果性测试已证明
+    阶段字段无前视 (截断未来数据后逐字不变), 故属**分类质量问题而非前视 bug**。
+    另: `区间整理/neutral` 占 1075/2913 (37%) —— 分类器近四成时间在"无结论"。
+
+  - 顺带发现 5.6 结论**不成立**: 20 根上方目标命中 69.0% [67.3, 70.6]、下方 57.1%,
+    均被判为"正常"。但按 `pnf_dir` 拆开仍见反向: `pnf_dir=down` (n=461) 上方命中
+    80.3% 而下方仅 37.1% —— 与上面的看空反向问题同源, 而非"上方高估"。
+  - 遗留:
+    - 未做样本外切分 (5.4); 事件维度因 UTAD/Spring/AR 出现率过高 (n>1500/2913)
+      而无法分离, 暂不可用。
+    - `calibrate.py` 自身两处缺陷 (本次未改, 需决策):
+      ① `:149` `{ex_mean:+.2%}%` 重复 `%` → 输出 `42.50%%`;
+      ② "超额" 语义不一致 —— `_win()` 返回**布尔** (跑赢/跑输大盘的比例) 而
+      `:216` pnf 段返回**收益差**, 两处同名为"超额", 导致"均值 -0.02% 却超额
+      +56.58%"这类自相矛盾的输出, 干扰定位。
+  - 遗留: 全市场回填已跑 359 只, 但仍非全市场 (约 3100 只主板) 且未做样本外切分。
+  - 顺带修: (a) `load_symbols` 改走 `fundamental.universe()` 统一入口 —— 原先直接调
+    `fetch_market_universe` 单页请求且失败返回 `[]`, 无兜底, 实测要 500 只只回 32 只
+    (该接口当前整站不可达), 换用带 local 兜底的入口后正常取到 400 只;
+    (b) `tests/conftest.py` 新增 `restore_module_paths` —— 多个测试直接把
+    `wyckoff.accuracy.ACCURACY_FILE` / `signal_accuracy.SIGNAL_ACCURACY_FILE`
+    指向自己的 tmp_path 且从不还原, 导致后续测试读写失效路径 (跨模块污染)。
 
 - [x] **5.14 模拟盘信号库冷却合并 df=None 失效修复** (✅ 2026-09-23, commit `d73e7c5`)
   - 现状: `_conditions.py` 廉价记录不传 df → `_cooldown_dup` 遇 `df=None` 直接返回 None,

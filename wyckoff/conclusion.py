@@ -6,7 +6,7 @@ from .counterevidence import ce_lines
 from .falsify import fal_lines
 from .filters import build_filter_sections, filter_summary_cards
 from .ninetests import nt_lines
-from .phases import flow_confirmed, judge_phase
+from .phases import flow_confirmed, judge_phase, phase_tone_of
 from .vsa_explain import LONG_ONLY_NOTE, VSA_EXPLAIN, meaning_pure
 
 
@@ -179,9 +179,7 @@ def build_signal_summary(df, pivots, events, structure=None, pnf_t=None,
 
     # 阶段 (附 资金确认/背离 徽标: 仅K线量价资金口径, 离线可用)
     phase, _ = judge_phase(df, pivots, events)
-    tone = {"底部整固": "bullish", "上升趋势": "bullish", "区间整理": "neutral",
-            "顶部构筑": "bearish", "下跌趋势": "bearish"}.get(
-        phase.split(" ")[0], "neutral")
+    tone = phase_tone_of(phase.split(" ")[0])
     try:
         _fc = flow_confirmed(df)
         _base = phase.split(" ")[0]
@@ -694,7 +692,7 @@ def build_conclusion(df, pivots, events, phase, detail, wave_lines=None, targets
     # ── 卖点提示 ──
     sell_lines = ["卖点提示 (威科夫):"]
     base_ph = phase.split(" ")[0]
-    bearish_ph = base_ph in ("顶部构筑", "下跌趋势")
+    bearish_ph = phase_tone_of(base_ph) == "bearish"
     sell_conf = None
     if bearish_ph:
         if conf_q == "high":
