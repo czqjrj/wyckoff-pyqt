@@ -323,6 +323,11 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
     """Spring / UTAD / SOS - 使用预分离的枢轴数组。"""
     ctx = _as_ctx(ctx)
     lows, highs = _split_pivots(pivots)
+    # 排除未确认实时末 bar 生成的虚拟枢轴 (idx==n-1): 盘中高低点未定型,
+    # 方向性信号 (Spring/SOS 等) 不应在未确认 bar 上触发。
+    n = ctx.n
+    lows = [p for p in lows if p["idx"] < n - 1]
+    highs = [p for p in highs if p["idx"] < n - 1]
     events = []
     n = ctx.n
     closes = ctx.close
@@ -389,6 +394,8 @@ def detect_ar_st(ctx: _EventContext, pivots, climax):
     """AR / ST - 向量化查找首个符合条件的枢轴。"""
     ctx = _as_ctx(ctx)
     lows, highs = _split_pivots(pivots)
+    lows = [p for p in lows if p["idx"] < ctx.n - 1]
+    highs = [p for p in highs if p["idx"] < ctx.n - 1]
     events = []
     volume = ctx.volume
 
@@ -445,7 +452,8 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
     raw_joc = joc_vol & (cvals > ctx.prev_high_60 * 1.01)
     raw_sos = vol_ok & ~raw_joc & (cvals > ctx.prev_close_30)
 
-    idx = np.where((raw_joc | raw_sos) & (np.arange(ctx.n) >= 61))[0]
+    idx = np.where((raw_joc | raw_sos) & (np.arange(ctx.n) >= 61)
+                   & (np.arange(ctx.n) < ctx.n - 1))[0]
     for i in idx:
         i = int(i)
         # 高位过滤: boll_pct>0.8 时多头突破信号易失败 (SOS 48% / JOC 42% 胜率)。
@@ -472,9 +480,9 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
     events = _dedup(events, span=15)
 
     # LPS / BU
-    low_idx = np.array([p["idx"] for p in lows]) if len(lows) else np.array([], dtype=int)
-    low_price = np.array([p["price"] for p in lows]) if len(lows) else np.array([])
-    low_date = [p["date"] for p in lows] if len(lows) else []
+    low_idx = np.array([p["idx"] for p in lows if p["idx"] < ctx.n - 1]) if len(lows) else np.array([], dtype=int)
+    low_price = np.array([p["price"] for p in lows if p["idx"] < ctx.n - 1]) if len(lows) else np.array([])
+    low_date = [p["date"] for p in lows if p["idx"] < ctx.n - 1] if len(lows) else []
     high_arr = ctx.high
     low_arr = ctx.low
 
@@ -508,6 +516,7 @@ def detect_ut(ctx: _EventContext, pivots, base_events):
     """UT - 向量化。"""
     ctx = _as_ctx(ctx)
     _, highs = _split_pivots(pivots)
+    highs = [p for p in highs if p["idx"] < ctx.n - 1]
     events = []
     if not len(highs):
         return events
@@ -545,6 +554,7 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
     """SOW / Shakeout - 向量化。"""
     ctx = _as_ctx(ctx)
     lows, _ = _split_pivots(pivots)
+    lows = [p for p in lows if p["idx"] < ctx.n - 1]
     events = []
     if not len(lows):
         return events
@@ -570,8 +580,12 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
             i = int(low_idx[lo_i])
             if low_price[lo_i] < floor * 0.97 and volume[i] >= vol_ma20[i] * 1.25 and close[i] < floor:
                 a, b = i + 1, min(i + 1 + confirm_bars, n)
-                fut_close = close[a:b] if a < b else np.array([])
-                new_low = a < b and float(lowv[a:b].min()) < low_price[lo_i]
+                # 无未来确认窗口 (末根未确认破位): 不标任何 SOW/TSO/Shakeout,
+                # 否则 new_low/fast_rebound 恒 False 落入 else 误标"Shakeout"。
+                if a >= b:
+                    continue
+                fut_close = close[a:b]
+                new_low = float(lowv[a:b].min()) < low_price[lo_i]
                 # 快速反弹过滤: 破位后 confirm_bars 内收盘反弹回支撑上方 → 震仓/诱空
                 fast_rebound = len(fut_close) > 0 and float(fut_close.max()) > floor
                 if new_low and not fast_rebound:

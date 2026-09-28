@@ -292,6 +292,9 @@ def find_pivots(df: pd.DataFrame, order: int = None, sensitivity: str = "normal"
             pf.append(p)
 
     # 追加最新虚拟枢轴, 让最新行情参与阶段判断与支撑阻力
+    # unconfirmed=True: 该枢轴由"当前/实时未确认 bar"生成, 高低点可为盘中值,
+    # 方向性事件 (Spring/SOS/LPS/BU/SOW/JOC 等) 须排除 (events.py 统一过滤
+    # idx==n-1); 中性结构 (PSY/PSUP/阶段/支撑阻力) 仍可使用。
     if pivots:
         last_close, prev_close = df["close"].values[-1], df["close"].values[-2]
         t = "high" if last_close >= prev_close else "low"
@@ -300,5 +303,6 @@ def find_pivots(df: pd.DataFrame, order: int = None, sensitivity: str = "normal"
             "date": pd.Timestamp(day_v[-1]),
             "type": t,
             "price": float(high_v[-1]) if t == "high" else float(low_v[-1]),
+            "unconfirmed": True,
         })
     return pf
