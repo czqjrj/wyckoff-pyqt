@@ -590,32 +590,62 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
     return _dedup(events)
 
 
+# LPSY 检测窗口与位置门 (600104 实测回归):
+# 经典威科夫 LPSY = UTAD/BC 冲高回落后, 二次反抽"回到供应区附近"再失败
+# 的最后测试点。旧实现只要求"缩量且低于前高"的任何反弹高点, 会把 AR 首轮
+# 反弹 (远离供应区、贴着回调低点) 误标为 LPSY。
+LPSY_WINDOW = 25        # UTAD/BC 后搜索窗口 (根)
+LPSY_NEAR_TOP = 0.93    # 反抽高点必须 ≥ 锚×0.93 (回到前高 7% 以内才算测试供应区)
+
+
 def detect_lpsy(ctx: _EventContext, pivots, base_events):
-    """LPSY - 向量化。"""
+    """LPSY - 向量化。
+
+    最后供应点 (Last Point of Supply): UTAD/BC 刷出顶部高点后, 价格回调
+    (AR 低点) 再反抽测试供应区, 缩量且无法站上前高 → 派发末端最后卖出点。
+    三道闸:
+    1) 反抽高点须回到锚点附近 (≥ 锚×LPSY_NEAR_TOP) —— 远离供应区的首轮
+       AR 反弹不构成"对前高的测试";
+    2) 锚点与反抽高点之间须存在回调低点枢轴 (AR), 保证这是回调后的
+       "二次反弹"而非首次反弹;
+    3) 排除最新虚拟枢轴 (find_pivots 对末根未确认 bar 追加, idx==n-1),
+       避免实时未完成 bar 触发空头事件 (600104 2026-09-28 复现)。
+    """
     ctx = _as_ctx(ctx)
     _, highs = _split_pivots(pivots)
     events = []
     if not len(highs):
         return events
+    lows, _ = _split_pivots(pivots)
+    low_idx = np.array([p["idx"] for p in lows]) if len(lows) else np.array([], dtype=int)
 
     high_idx = np.array([p["idx"] for p in highs])
     high_price = np.array([p["price"] for p in highs])
     high_date = [p["date"] for p in highs]
     volume = ctx.volume
     vol_ma20 = ctx.vol_ma20
+    n = ctx.n
 
     for base in base_events:
         if base["type"] not in ("UTAD", "BC"):
             continue
         b_idx = base["idx"]
         anchor = base["price"]
-        mask = (high_idx > b_idx) & (high_idx <= b_idx + 25) & \
-               (volume[high_idx] < vol_ma20[high_idx]) & (high_price < anchor)
-        if np.any(mask):
-            hi_i = np.where(mask)[0][0]
-            events.append(dict(type="LPSY", idx=int(high_idx[hi_i]), date=high_date[hi_i],
-                               price=float(high_price[hi_i]), desc="缩量反弹未过前高",
-                               color=EVENT_COLORS["LPSY"]))
+        mask = (high_idx > b_idx) & (high_idx <= b_idx + LPSY_WINDOW) & \
+               (high_idx < n - 1) & \
+               (volume[high_idx] < vol_ma20[high_idx]) & \
+               (high_price < anchor) & (high_price >= anchor * LPSY_NEAR_TOP)
+        if not np.any(mask):
+            continue
+        hi_i = int(np.where(mask)[0][0])
+        hi_idx = int(high_idx[hi_i])
+        # 闸 2: 反抽前须已有回调低点 (自动回落 AR) —— 无回调低点的反弹是
+        # UTAD/BC 后的首轮上冲 (AR 阶段), 归 UT 而非 LPSY。
+        if not np.any((low_idx > b_idx) & (low_idx < hi_idx)):
+            continue
+        events.append(dict(type="LPSY", idx=hi_idx, date=high_date[hi_i],
+                           price=float(high_price[hi_i]), desc="缩量反弹未过前高",
+                           color=EVENT_COLORS["LPSY"]))
     return _dedup(events)
 
 
