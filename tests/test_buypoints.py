@@ -1,7 +1,7 @@
 """威科夫完整做多买点 (buypoints) 单元与集成回归测试。
 
 覆盖: 弹簧/弹簧二次测试/ST 左侧买点, 结构化放量突破(确认站稳)、突破回踩,
-以及"左侧起仓→右侧加仓"门控纪律 (无左侧买点时右侧买点不成立)。
+回调末端止跌(PE) 识别及其负期望禁用纪律, 以及"左侧起仓→右侧加仓"门控纪律。
 """
 import os
 import sys
@@ -306,3 +306,110 @@ def test_latest_buy_points_only_recent():
     assert len(latest) <= 8
     assert all(b["target_price"] is None or b["now"] < b["target_price"]
                for b in latest)
+
+
+# ──────────────────── 回调末端止跌 (PE) 识别 + 禁用纪律 ────────────────────
+
+def _mk_pullback_df(pb_vol=0.35, break_ma50=False, n=150, seed=21):
+    """构造"上升途中 → 缩量回调 → 探底阳线止跌"场景, 供 PE 检测测试。
+
+    形态 (对齐实盘典型: 一段既定拉升 + 缩量回调至生命线 + 带下影阳线止跌):
+      bar 0-19   底部缓慢抬升 10.0 → 10.6 (MA50 预热)
+      bar 20-85  主升 10.6 → 13.2 (+24.5%)
+      bar 85-99  缩量回调 13.2 → 11.9 (-9.8%), 量能 ×pb_vol
+      bar 100    止跌阳线: 开 11.95 / 低 11.78 (探前低) / 高 12.75 / 收 12.62
+
+    pb_vol: 回调段量能倍率 (相对基准量)。<1 为缩量回调 (PE 应触发);
+           传 1.5+ 为放量回调 (卖压未耗尽, PE 不应触发)。
+    break_ma50: True 时回调整体下移 15%, 使收盘深破 MA50 逾 6% (趋势破位,
+               PE 不应触发) —— 仅此一条条件失效, 其余条件均满足。
+    """
+    rng = np.random.default_rng(seed)
+    days = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = np.empty(n)
+    low = np.empty(n)
+    high = np.empty(n)
+    op = np.empty(n)
+    vol = np.full(n, 1.0e6)
+
+    peak = 85           # 回调峰值 bar
+    rev = 100           # 止跌阳线 bar
+    c = 10.0
+    for i in range(n):
+        if i < 20:
+            c = 10.0 + i * 0.03                    # 底部抬升 10.0 → 10.6
+        elif i < peak:
+            c = 10.6 + (i - 20) * 0.04             # 主升 → 13.2
+        elif i < rev:
+            frac = (i - peak) / float(rev - peak)
+            c = 13.2 - frac * 1.3                  # 回调 13.2 → 11.9
+        else:
+            c = 12.3                               # 止跌后横盘
+        c = c + rng.normal(0, 0.03)
+        close[i] = c
+        low[i] = c - 0.15
+        high[i] = c + 0.15
+        op[i] = c + rng.normal(0, 0.02)
+
+    # 回调段量能: pb_vol 控制 (缩量 or 放量)
+    for i in range(peak, rev):
+        vol[i] = 1.0e6 * pb_vol
+
+    # 止跌阳线: 探前低后收回, 收盘位于振幅上沿, 带长下影
+    close[rev] = 12.62
+    op[rev] = 11.95
+    low[rev] = 11.78
+    high[rev] = 12.75
+    vol[rev] = 1.0e6 * pb_vol
+
+    if break_ma50:
+        # 回调整体下移 15% → 收盘深破 MA50 (生命线失守), 其余形态条件不变
+        for i in range(peak, rev + 1):
+            close[i] *= 0.85
+            low[i] *= 0.85
+            high[i] *= 0.85
+            op[i] *= 0.85
+    return add_indicators(pd.DataFrame({
+        "day": days, "open": op, "high": high, "low": low,
+        "close": close, "volume": vol.astype(float)}), symbol="test")
+
+
+def test_pullback_exhaust_detected_on_shrunk_pullback():
+    """缩量回调末端 + 探底阳线 → PE 候选被识别 (识别能力)。"""
+    df = _mk_pullback_df(pb_vol=0.35)
+    cands = BP._pullback_exhaust_candidates(df)
+    assert cands, "缩量回调+止跌阳线应产出 PE 候选"
+    s = cands[-1]
+    assert s["idx"] == 100
+    assert s["peak_idx"] == 85
+    assert s["shrink"] < BP.SHRINK_VOL
+    assert s["stop"] < df["close"].values[s["idx"]]
+    assert s["drop"] >= BP.PULLBACK_DROP_MIN
+    assert s["drop"] <= BP.PULLBACK_DROP_MAX
+
+
+def test_pullback_exhaust_not_triggered_on_heavy_volume():
+    """放量回调 (卖压未耗尽) 不产 PE —— PE 的缩量纪律必须生效。"""
+    df = _mk_pullback_df(pb_vol=1.5)
+    cands = BP._pullback_exhaust_candidates(df)
+    assert not cands, f"放量回调不应产 PE: {cands}"
+
+
+def test_pullback_exhaust_not_triggered_when_ma50_broken():
+    """收盘深破 MA50 (趋势生命线失守) 不产 PE —— 生命线纪律必须生效。"""
+    df = _mk_pullback_df(pb_vol=0.35, break_ma50=True)
+    cands = BP._pullback_exhaust_candidates(df)
+    assert not cands, f"跌破 MA50 不应产 PE: {cands}"
+
+
+def test_pullback_exhaust_disabled_never_executable():
+    """PE 实证负期望, 已在 DISABLED_KINDS 禁用: 不得进入可执行/最新买点。"""
+    assert "pullback_exhaust" in BP.DISABLED_KINDS
+    assert "pullback_exhaust" not in BP.KIND_LEFT
+    assert "pullback_exhaust" not in BP.KIND_RIGHT
+    df = _mk_pullback_df(pb_vol=0.35)
+    events = [{"type": "Spring", "idx": 60, "price": 12.0,
+               "conf": 80, "date": None}]
+    bps = BP.struct_buy_points(df, events)
+    assert not [b for b in bps if b["kind"] in BP.DISABLED_KINDS], \
+        [b["kind"] for b in bps]

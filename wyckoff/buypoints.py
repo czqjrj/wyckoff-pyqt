@@ -42,6 +42,7 @@ KIND_META = {
     "bu_backup": ("突破回踩(BU/LPS)", "right_main", 2.0, 3),
     "markup_break": ("中继放量突破", "right_continuation", 2.0, 2),
     "markup_bu": ("中继回踩加仓", "right_continuation", 2.0, 2),
+    "pullback_exhaust": ("回调末端止跌(PE)", "left_probe", 2.0, 1),
 }
 
 # 归类 → 中文说明 + 扫描基础分
@@ -51,6 +52,24 @@ CLASS_META = {
     "right_main": ("稳健主升启动", 23),
     "right_continuation": ("趋势中继加仓", 20),
 }
+
+# 回调末端止跌反弹 (pullback_exhaust): 上升途中缩量回调 + 带下影阳线止跌。
+# 属"左低右高"左侧试仓: 小仓位 + 紧止损 (回调低点下方), rr 定为 2.0。
+# 与中继回踩 (markup_bu/bu_backup) 的区别: 不要求"放量突破后回踩",
+# 而是一轮既定拉升后的缩量回调末端, 靠"量缩+守支撑+止跌 K 线"确认。
+PULLBACK_LOOK = 15          # 峰值搜索窗口: 峰值须在近 15 根内 (回调新鲜)
+PULLBACK_MIN_BARS = 3       # 距峰值至少 3 根才算"回调" (排除单根大跌)
+PULLBACK_DROP_MIN = 0.03    # 收盘距峰值回撤 ≥3% 视为回调
+PULLBACK_DROP_MAX = 0.25    # 回撤 ≤25% (超过视为趋势破位, 非回调)
+RISE_LOOK = 40              # 拉升考察窗口
+RISE_MIN = 0.08             # 峰值前 RISE_LOOK 根累计涨幅 ≥8% (上升前提)
+SHRINK_VOL = 0.92           # 回调段均量 ≤ vol_ma20×92% (卖压耗尽)
+PULLBACK_MA50_TOL = 0.06    # 收盘跌破 MA50 逾 6% 才算趋势破位 (强拉升时 MA50
+                            # 滞后、正常回调必短暂跌破, 故给容忍; 守 MA50 则加分)
+REV_UPFRACTION = 0.45       # 止跌阳线收盘位于当日振幅上沿 ≥45%
+REV_LOWSHADOW = 0.15        # 下影须 ≥15% 振幅 (盘中下探后收回)
+REV_PROBE_PRIOR = 0.005     # 阳线低点须贴近/低于前 3 根最低 (探底而非逆势反抽)
+REV_HOLD = 0.01             # 但不得跌破前低 1% 以上 (回踩不破平台)
 
 # 结构性参数 (根 K 线)
 SPRING_RECOVER_WIN = 12      # 弹簧低点后收回确认窗口
@@ -86,8 +105,13 @@ RIGHT_LOWER = 0.995          # 左侧买点入场须低于右侧的乘数系数
 KIND_LEFT = ("st_bottom", "lps", "spring", "spring_retest")
 KIND_RIGHT = ("sos_break", "bu_backup", "markup_break", "markup_bu")
 # 实证负期望, 已从可执行买点中剔除 (识别能力保留, 但不进入最新买点/扫描/回测):
-# 放量突破(SOS/JOC)、中继放量突破、中继回踩加仓 30 只回测 PF=0.52~0.86。
-DISABLED_KINDS = frozenset({"sos_break", "markup_break", "markup_bu"})
+# 放量突破(SOS/JOC)、中继放量突破、中继回踩加仓 30 只回测 PF=0.52~0.86;
+# 回调末端止跌(PE) 30 只×500根回测: 严守MA50版 n=23 胜率34.8% PF=0.93,
+# 放宽MA50版 n=51 胜率23.5% 均收益-1.58% PF=0.44 (TP/SL=11/37) —— 止跌阳线
+# 后继续下跌概率高于反弹, 属"接飞刀", 故禁用。检测函数保留供研究/解释使用,
+# 末尾按 DISABLED_KINDS 统一剔除出可执行集合。
+DISABLED_KINDS = frozenset({"sos_break", "markup_break", "markup_bu",
+                            "pullback_exhaust"})
 
 
 # 自适应门控参数: 根据结构类型和波动率返回 (GATE_LEFT_LOOK, RIGHT_LOWER)
@@ -534,6 +558,115 @@ def _structural_pullbacks(df, breakouts):
     return out
 
 
+def _pullback_exhaust_candidates(df):
+    """回调末端止跌反弹的候选 bar 识别 (全部因果, 只用 ≤i 数据)。
+
+    满足"上升途中 → 缩量回调 → 回踩不破 → 止跌阳线"的 bar 列表:
+      1) 止跌阳线: 收阳(close>open)、收高于昨日、收盘位于当日振幅上沿、带下影
+         (盘中下探后收回 = 锤子/丁字性质);
+      2) 探底: 当日低点贴近平前 3 根最低 (真正下探支撑, 而非逆势高位反抽),
+         但不跌破前低 1% 以上 (回踩不破平台);
+      3) 上升前提: 峰值前 RISE_LOOK 根累计涨幅 ≥ RISE_MIN (回调源于既定拉升);
+      4) 新鲜峰值: 峰值在近 PULLBACK_LOOK 根内, 且距当前 ≥ PULLBACK_MIN_BARS;
+      5) 回调: 收盘距峰值 3%~25% (回调幅度, 超出视为趋势破位);
+      6) 缩量: 峰值次日至当日均量 < vol_ma20×SHRINK_VOL (卖压耗尽);
+      7) 趋势生命线: 收盘未跌破 MA50 逾 PULLBACK_MA50_TOL (强拉升 MA50 滞后,
+         正常回调会短暂跌破, 故给容忍; 守住 MA50 计入 conf)。
+
+    同一峰值 (同一回调) 只保留首个止跌阳线 (去抖, 避免一回调多信号)。"""
+    n = len(df)
+    close = df["close"].values
+    high = df["high"].values
+    low = df["low"].values
+    op = df["open"].values
+    vol = df["volume"].values
+    vma = df["vol_ma20"].values
+    ma50 = df["price_ma50"].values
+    out = []
+    for i in range(PULLBACK_LOOK + RISE_LOOK + 5, n):
+        rng = high[i] - low[i]
+        if rng <= 0 or low[i] <= 0:
+            continue
+        if not (_finite(vma[i]) and vma[i] > 0 and _finite(ma50[i]) and ma50[i] > 0):
+            continue
+        # 1) 止跌阳线: 收阳、收高、收在振幅上沿、带下影
+        if close[i] <= op[i] or close[i] < close[i - 1]:
+            continue
+        if close[i] < low[i] + rng * REV_UPFRACTION:
+            continue
+        if min(op[i], close[i]) - low[i] < rng * REV_LOWSHADOW:
+            continue
+        # 2) 探底: 当日低点贴近/低于前 3 根最低 (真下探支撑) 且不跌破前低 1%
+        prior_lo = float(np.min(low[max(0, i - 4):i]))
+        if low[i] > prior_lo * (1 + REV_PROBE_PRIOR):
+            continue
+        if low[i] < prior_lo * (1 - REV_HOLD):
+            continue
+        # 3-4) 峰值窗口
+        lo_idx = max(0, i - PULLBACK_LOOK)
+        hi_idx = i - PULLBACK_MIN_BARS + 1
+        if hi_idx <= lo_idx:
+            continue
+        win = high[lo_idx:hi_idx]
+        if win.size == 0:
+            continue
+        pk = int(np.argmax(win)) + lo_idx
+        peak_c = float(close[pk])
+        if peak_c <= 0:
+            continue
+        # 3) 上升前提: 峰值前 RISE_LOOK 根累计涨幅 ≥ RISE_MIN
+        rc = pk - RISE_LOOK
+        if rc < 0 or close[rc] <= 0 or peak_c / close[rc] - 1 < RISE_MIN:
+            continue
+        # 5) 回调 3%~25%
+        drop = 1.0 - float(close[i]) / peak_c
+        if drop < PULLBACK_DROP_MIN or drop > PULLBACK_DROP_MAX:
+            continue
+        # 6) 回调段缩量
+        pb = vol[pk + 1:i + 1]
+        if pb.size < PULLBACK_MIN_BARS:
+            continue
+        mean_pb = float(np.mean(pb))
+        if mean_pb >= vma[i] * SHRINK_VOL:
+            continue
+        # 7) 趋势生命线: 收盘未深破 MA50 (强拉升时 MA50 滞后, 给 6% 容忍)
+        pull_low = float(np.min(low[pk + 1:i + 1]))
+        if close[i] < ma50[i] * (1 - PULLBACK_MA50_TOL):
+            continue
+        stop = pull_low * STOP_BUF
+        if close[i] <= stop:
+            continue
+        if out and out[-1]["peak_idx"] == pk:
+            continue  # 同一回调只留首个止跌阳线
+        shrink = mean_pb / vma[i]
+        conf = int(min(95, round(58 + max(0.0, (SHRINK_VOL - shrink)) * 30 +
+                                 (8 if drop < 0.20 else 0) +
+                                 (8 if close[i] >= ma50[i] else 0) +
+                                 (4 if pull_low <= ma50[i] * 1.05 else 0))))
+        out.append({"idx": i, "peak_idx": pk, "stop": stop,
+                    "shrink": float(shrink), "conf": conf,
+                    "pull_low": float(pull_low), "drop": float(drop)})
+    return out
+
+
+def _pullback_exhaust_bp(df, context, s):
+    """回调末端止跌反弹 → 买点 (锚点=回调低点, 止损=锚点下方 SAFE)。"""
+    i = s["idx"]
+    entry = float(df["close"].values[i])
+    stop = s["stop"]
+    if entry <= stop:
+        return None
+    bp = _mk_bp(df, "pullback_exhaust", e=None, bar_idx=i, bar_price=entry,
+                entry_price=entry, stop_price=stop, anchor_low=s["pull_low"],
+                conf=s["conf"])
+    bp["stage"] = context
+    bp["validation"] = [f"回调{int(s['drop'] * 100)}%缩量(vol/ma20={s['shrink']:.2f})",
+                        f"回踩{s['pull_low']:.2f}不破平台",
+                        "带下影阳线止跌收回(探底)"]
+    bp["msg"] = f"{bp['label']}: 缩量回调{int(s['drop'] * 100)}%后阳线止跌守住{s['pull_low']:.2f}"
+    return bp
+
+
 def _struct_break_bp(df, context, s, kind):
     """结构性放量突破(确认站稳) → 买点。
 
@@ -679,6 +812,19 @@ def struct_buy_points(df, events, pivots=None, context_cache=None):
         bp = _struct_pullback_bp(df, ctx, s, kind)
         if bp:
             out.append(bp)
+
+    # 回调末端止跌反弹 (PE): 上升途中缩量回调 + 探底阳线止跌, 左侧试仓。
+    # 不依赖事件检测 (事件稀疏的上升段也能覆盖), 派发/下跌阶段直接剔除。
+    # PE 实证负期望 (PF 0.44~0.93, 见 DISABLED_KINDS), 已在其中禁用; 检测仅
+    # 保留供研究/解释使用, 故按其是否可执行决定是否计算 (禁用时零开销跳过)。
+    if "pullback_exhaust" not in DISABLED_KINDS:
+        for s in _pullback_exhaust_candidates(df):
+            ctx = _phase_at(df, pivots, events, s["idx"], cache)
+            if _reject_stage(ctx, ("pullback_exhaust",)):
+                continue
+            bp = _pullback_exhaust_bp(df, ctx, s)
+            if bp:
+                out.append(bp)
 
     # 去重: 同一 kind 同 bar 只留最高 conf
     seen = {}
