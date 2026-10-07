@@ -491,3 +491,31 @@ def test_newest_buyable_st_confirm_semantics():
     assert newest_buyable(rec, 96, require_confirm="all")["type"] == "ST"
     # all 模式: 确认当天 j=95 < ava+1=96 → 拦截
     assert newest_buyable(rec, 95, require_confirm="all") is None
+
+
+def test_signal_anchor_uses_event_day_close():
+    """回放信号锚点必须=事件日+事件日收盘 (与实盘 event_date/event_px、
+    主信号库 event date 同口径); 不能用扫描日/当日开盘, 否则 H5/H10/H20
+    起算点比实盘早 0~10 根 (spring review 待办3)。"""
+    import os
+    import sys
+    _rp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "scripts")
+    if _rp not in sys.path:
+        sys.path.insert(0, _rp)
+    from paper_replay_bt import signal_anchor
+
+    rec = {
+        "day": ["2026-09-01", "2026-09-02", "2026-09-03"],
+        "open": [10.0, 11.0, 12.0],
+        "close": [10.5, 11.5, 12.5],
+    }
+    # 事件 idx=0, 当前模拟日 j=2 (事件后 2 根): 锚点取事件日/事件收盘
+    assert signal_anchor(rec, {"idx": 0}, 2, "2026-09-03") == ("2026-09-01", 10.5)
+    # 事件 idx 缺失 → 回退扫描日开盘 (旧行为)
+    assert signal_anchor(rec, {}, 1, "2026-09-02") == ("2026-09-02", 11.0)
+    # idx 越界 → 同样回退
+    assert signal_anchor(rec, {"idx": 99}, 1, "2026-09-02") == ("2026-09-02", 11.0)
+    # 日期统一裁到 10 位 (Timestamp 带时分时也与实盘 %-Y-%m-%d 对齐)
+    rec2 = {"day": ["2026-09-01 15:00:00"], "open": [1.0], "close": [2.0]}
+    assert signal_anchor(rec2, {"idx": 0}, 0, "2026-09-01") == ("2026-09-01", 2.0)

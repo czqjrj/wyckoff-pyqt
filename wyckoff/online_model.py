@@ -223,7 +223,11 @@ def train_model(records=None, horizon=MODEL_HORIZON, oos_frac=0.3, seed=None):
     返回状态 dict (无论是否达到接管门槛都保存, 供校准中心展示积累进度)。
     """
     if SGDClassifier is None:
-        return _load_state()
+        # sklearn 缺失: 旧实现直接返回旧状态, CLI/cron 会打印"重训完成 + 旧 AUC"
+        # 造成假成功 (2026-10-07 实测复现)。这里带上 note, 由 _cli_train 显式报错退出。
+        st = _load_state()
+        st["note"] = "sklearn 未安装, 无法重训 (pip install \"wyckoff[model]\")"
+        return st
     if seed is None:
         seed = MODEL_SEED
     from .signal_accuracy import load_signals
@@ -584,16 +588,33 @@ def install_task(hour="15:11", remove=False):
                     "/SC", "DAILY", "/ST", hour, "/TR", bat, "/F"], check=True)
 
 
+def _cli_train(quiet=False):
+    """CLI --train: sklearn 缺失时明确失败退出, 不复用旧状态伪装"重训成功"。"""
+    if SGDClassifier is None:
+        print("重训失败: 未安装 scikit-learn, 当前模型状态未改动。"
+              "安装: pip install \"wyckoff[model]\" 或 pip install scikit-learn",
+              file=sys.stderr)
+        raise SystemExit(2)
+    st = run_auto_model_retrain()
+    if not quiet:
+        print(json.dumps(model_status(), ensure_ascii=False, indent=2))
+        print(f"\n重训完成: 标签 {st.get('n_labels', 0)} 条 "
+              f"(训练 {st.get('n_train', 0)} / 样本外 {st.get('n_oos', 0)}), "
+              f"AUC={st.get('auc_oos')}, 接管conf={'是' if st.get('ready') else '否'}")
+    return st
+
+
 if __name__ == "__main__":
     import sys as _sys
     _quiet = "--quiet" in _sys.argv
+    # Windows 控制台默认 GBK, 状态输出里的 ✓ 等字符会直接 UnicodeEncodeError
+    for _stream in (_sys.stdout, _sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     if "--train" in _sys.argv or "--model-train" in _sys.argv:
-        st = run_auto_model_retrain()
-        if not _quiet:
-            print(json.dumps(model_status(), ensure_ascii=False, indent=2))
-            print(f"\n重训完成: 标签 {st.get('n_labels', 0)} 条 "
-                  f"(训练 {st.get('n_train', 0)} / 样本外 {st.get('n_oos', 0)}), "
-                  f"AUC={st.get('auc_oos')}, 接管conf={'是' if st.get('ready') else '否'}")
+        _cli_train(_quiet)
     elif "--status" in _sys.argv:
         print(json.dumps(model_status(), ensure_ascii=False, indent=2))
     elif "--history" in _sys.argv:

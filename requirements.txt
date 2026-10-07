@@ -4,4 +4,5 @@
 #   pip install ".[test]"   # 测试 (pytest + pytest-cov)
 #   pip install ".[lint]"   # 代码检查 (ruff)
 #   pip install ".[qlib]"   # QLib 机器学习模型 (需自行编译环境)
--e .[tts]
+#   pip install ".[model]"  # L4 在线校准模型 (scikit-learn; 缺失时 online_model 无法重训)
+-e .[tts,model]

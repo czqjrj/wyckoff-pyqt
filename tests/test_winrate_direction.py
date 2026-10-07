@@ -130,3 +130,56 @@ def test_fusion_weight_uses_directional_win(monkeypatch):
     monkeypatch.setattr("wyckoff.signal_accuracy.win_rate_of", fake_win_low)
     wl = _winrate_weight("event", "UTAD", direction=-1, before_ts=None)
     assert wl <= 0.5, wl     # 空头低命中 → 降权
+
+
+def test_winrate_weight_discounts_uninformative(monkeypatch):
+    """命中率贴着 50% 随机线的标签按信息量打到地板倍率 (实测 ETR/DEM/UPT/ETF)。"""
+    from wyckoff.fusion import WINRATE_NEUTRAL, _winrate_weight
+
+    def fake_win(kind, type_, horizon=20, baseline=0.5):
+        return 0.504         # UPT 实测 50.4% (n=419) → 无方向信息
+    monkeypatch.setattr("wyckoff.signal_accuracy.win_rate_of", fake_win)
+    w_neutral = _winrate_weight("vsa", "UPT", direction=-1, before_ts=None)
+    assert w_neutral <= 0.6, w_neutral      # 旧曲线给 ≈1.01, 必须实质降权
+    assert w_neutral >= WINRATE_NEUTRAL - 1e-9
+
+    def fake_win_info(kind, type_, horizon=20, baseline=0.5):
+        return 0.554         # TRD 实测 55.4% (n=480) → 有方向信息
+    monkeypatch.setattr("wyckoff.signal_accuracy.win_rate_of", fake_win_info)
+    w_info = _winrate_weight("vsa", "TRD", direction=1, before_ts=None)
+    assert w_info > 1.0, w_info             # 有信息标签权重不受信息门压制
+
+
+def test_winrate_weight_baseline_fallback_stays_neutral(monkeypatch):
+    """样本不足时 win_rate_of 回传 baseline → 保持 1.0 (不误判成无信息打到地板)。"""
+    from wyckoff.fusion import _winrate_weight
+
+    def fake_win(kind, type_, horizon=20, baseline=0.5):
+        return 0.5          # win_rate_of 对 n<MIN_SHRUNK_N 的原样回传值
+    monkeypatch.setattr("wyckoff.signal_accuracy.win_rate_of", fake_win)
+    assert _winrate_weight("event", "Spring", direction=1, before_ts=None) == 1.0
+
+
+def test_winrate_weight_oos_uses_cached_records(monkeypatch):
+    """OOS 路径走 60s TTL 缓存: 连续调用只读一次 ~9MB 信号库 JSON。"""
+    from wyckoff.fusion import _winrate_weight
+    from wyckoff.validation import load_signals as real_load
+    from wyckoff.validation import oos_record_loader
+
+    oos_record_loader.cache_clear()
+    calls = {"n": 0}
+
+    def counting_load():
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr("wyckoff.validation.load_signals", counting_load)
+    try:
+        for _ in range(5):
+            w = _winrate_weight("event", "Spring", direction=1,
+                                before_ts="2026-01-01")
+            assert w == 1.0          # 空库 → baseline → 中性
+        assert calls["n"] == 1, calls
+    finally:
+        oos_record_loader.cache_clear()
+        monkeypatch.setattr("wyckoff.validation.load_signals", real_load)

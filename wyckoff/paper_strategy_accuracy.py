@@ -29,9 +29,13 @@ from ._shared import atomic_write_json, run_pending_eval
 from .datasource import fetch_kline
 from .indicators import add_indicators
 from .paths import PAPER_STRATEGY_ACCURACY_FILE
+from .signal_accuracy import _wilson_ci
 
 # 评估周期 (根, 日线): ≈1周/2周/1月
 HORIZONS = (5, 10, 20)
+
+# 结论最小样本 (spring review 待办: CI n≥50 才下结论, 否则只报区间不定性)
+MIN_CONCLUSION_N = 50
 
 # 多策略注册信息唯一来源: 策略管理器 (STRATEGY_ORDER/STRATEGY_CN 随选股逻辑
 # 一并迁移入 wyckoff.strategies.manager, 此处不再单独维护)。
@@ -150,7 +154,11 @@ def _eval_against(df, idx, rec):
     rec["results"] = results
     done = len(results) >= len(HORIZONS)
     rec["status"] = "done" if done else "pending"
-    if not done and idx + min(HORIZONS) >= len(df):
+    # waiting = 仍有周期缺未来行情 (任一未补齐的 h 走满不了 → 等数据, 非异常)。
+    # 只看最小 h 会漏掉「只差 H20」的记录: 它们每次评估都空转却始终 waiting=False,
+    # 在 run_pending_eval 的轮转排序里永远排在真正能出结果的记录前面 (队头阻塞)。
+    if not done and idx is not None and any(
+            idx + h >= len(df) for h in HORIZONS if str(h) not in results):
         rec["waiting"] = True
     else:
         rec["waiting"] = False
@@ -416,13 +424,17 @@ def signal_stats(records=None, force=False):
         for h in HORIZONS:
             rs = b["horizons"][str(h)]
             if not rs:
-                cum[str(h)] = {"n": 0, "hit": None, "avg": None}
+                cum[str(h)] = {"n": 0, "hit": None, "avg": None,
+                               "ci_lo": None, "ci_hi": None}
                 continue
             hit = sum(1 for v in rs if v > 0)
+            ci_lo, ci_hi = _wilson_ci(len(rs), hit)
             cum[str(h)] = {
                 "n": len(rs),
                 "hit": round(hit / len(rs), 4),
                 "avg": round(statistics.mean(rs), 6),
+                "ci_lo": ci_lo,
+                "ci_hi": ci_hi,
             }
         out[s] = {
             "n": b["n"],
@@ -435,6 +447,10 @@ def signal_stats(records=None, force=False):
     out["_summary"] = {
         "total": sum(base[s]["n"] for s in STRATEGY_ORDER),
         "evaluated": sum(base[s]["evaluated"] for s in STRATEGY_ORDER),
+        # 样本不足 50 → 报告只给区间, 不给"准/不准"结论 (spring review 待办3)
+        "small_sample": sum(base[s]["evaluated"] for s in STRATEGY_ORDER)
+        < MIN_CONCLUSION_N,
+        "min_conclusion_n": MIN_CONCLUSION_N,
     }
     _STATS_CACHE = out
     _STATS_CACHE_KEY = cache_key
@@ -599,6 +615,15 @@ def _render_report(rep):
         def _pct(v):
             return f"{v * 100:.0f}%" if v is not None else "-"
 
+        def _hit20(cell):
+            """20根命中: 命中率 + Wilson 95%CI (小样本必须同时看区间宽度)。"""
+            if not cell or cell.get("hit") is None:
+                return "-"
+            lo, hi = cell.get("ci_lo"), cell.get("ci_hi")
+            if lo is None or hi is None:
+                return _pct(cell.get("hit"))
+            return f"{cell['hit'] * 100:.0f}% [{lo * 100:.0f}, {hi * 100:.0f}]"
+
         pos = (f"{exe.get('correct', 0)}/{exe.get('done', 0)}"
                + (f"({ca * 100:.0f}%)" if ca is not None else ""))
         pf_txt = (f"{pf.get('n', 0)}" if pf.get('n') else "0")
@@ -609,9 +634,14 @@ def _render_report(rep):
         exp = f"{pf['expectancy']:+.4f}" if pf.get("expectancy") is not None else "-"
         L.append(f"| {d.get('name', s)} | {acc.get('n', 0)} | {acc.get('evaluated', 0)} "
                  f"| {_pct(h.get('5', {}).get('hit'))} | {_pct(h.get('10', {}).get('hit'))} "
-                 f"| {_pct(h.get('20', {}).get('hit'))} | {_pct(h.get('20', {}).get('avg'))}"
+                 f"| {_hit20(h.get('20'))} | {_pct(h.get('20', {}).get('avg'))}"
                  f" | {pos} | {pf_txt} | {wr} | {avg} | {cum} | {plr} | {exp} |")
     L.append("")
+    if rep.get("_summary", {}).get("small_sample"):
+        L.append(f"> ⚠ 已评估 {rep['_summary'].get('evaluated', 0)} 条 "
+                 f"(< {rep['_summary'].get('min_conclusion_n', MIN_CONCLUSION_N)}), "
+                 "命中率仅供区间参考, 不下「准/不准」结论 (Wilson 95%CI 见方括号)。")
+        L.append("")
     L.append("> 命中=信号后 N 根方向化命中 (多头 ret>0); 触点=条件单触发时 correct 判断; "
              "盈利=已平仓净收益 (扣成本)。")
     return "\n".join(L)

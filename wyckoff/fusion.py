@@ -88,6 +88,16 @@ BEAR_PHASES = ("顶部构筑", "下跌趋势")
 # (win 相对基准 0.5 的偏移量级 → 0.5~1.5 倍权重; 样本不足的类型不校准)。
 USE_WINRATE_CALIBRATION = True
 
+# 无方向信息标签的权重倍率 (2026-10-07 实测, wx_signal_accuracy n=13,554):
+# ETR 48.4% (n=275) / DEM 49.4% (n=699) / UPT 50.4% (n=419) / ETF 50.7% (n=221)
+# —— 与 50% 随机线无统计差异, 既不反向也不确认, 但旧线性曲线
+# 1.0+(win-0.5)*2.5 对 ±1.6pp 几乎无感 (0.96≈满权), 半池随机信号照常投票。
+# 这类标签按信息量打到 WINRATE_NEUTRAL 倍率, 而非直接剔除: 直接剔除会让
+# VSA 空头侧只剩 UT (n=15), 融合维度退化成单边看多, 破坏"共振/矛盾"判定。
+WINRATE_NEUTRAL = 0.35
+# "有信息"判定带宽: |win-baseline| < 4pp 视为无方向信息 (线性衰减到地板)
+WINRATE_INFO_BAND = 0.04
+
 
 def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
     """按历史实测方向一致性给信号置信加权。
@@ -97,17 +107,21 @@ def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
     (win_rate_of / win_rate_of_oos 已返回方向化命中占比, 空头信号以跌记中。)
     before_ts: 样本外校准 —— 只统计该信号出现之前的样本 (消除"用未来数据
     校准当前信号权重"的前瞻偏差); None 时用全历史 (含未来, 有轻微前瞻)。
-    返回 [0.3, 1.5] 区间系数。样本不足/校准关闭 → 1.0。
+    返回系数 (有信息标签 [0.3, 1.5]; 无方向信息标签最低到 WINRATE_NEUTRAL)。
+    样本不足/校准关闭 → 1.0。
     下限 0.3 而非 0.5: 贴近/劣于随机的标签 (NS/ND/BC/TRU/SUP 等) 应直接打
     到半折以下, 而非被 0.5 地板托住继续实质影响融合分数。
+    信息量门: 命中率贴着基准的标签 (ETR/DEM/UPT/ETF, 见 WINRATE_NEUTRAL 注释)
+    虽然 alignment≈0 却拿近满权 —— 改为按 |alignment| 线性衰减到地板倍率。
     """
     if not USE_WINRATE_CALIBRATION:
         return 1.0
     try:
         if before_ts is not None:
-            from .signal_accuracy import load_signals
-            from .validation import win_rate_of_oos
-            win = win_rate_of_oos(load_signals(), kind, type_, before_ts,
+            from .validation import oos_record_loader, win_rate_of_oos
+            # oos_record_loader 有 60s TTL 缓存; 旧实现逐事件 load_signals()
+            # = 每个事件重读一次 ~9MB JSON
+            win = win_rate_of_oos(oos_record_loader()(), kind, type_, before_ts,
                                   horizon=20, baseline=baseline)
         else:
             from .signal_accuracy import win_rate_of
@@ -115,7 +129,15 @@ def _winrate_weight(kind, type_, direction=0, baseline=0.5, before_ts=None):
         if direction == 0:
             return 1.0
         alignment = win - baseline
-        return max(0.3, min(1.5, 1.0 + alignment * 2.5))
+        if alignment == 0.0:
+            # 样本不足时 win_rate_of/_oos 原样回传 baseline, 无法区分
+            # "真 50%" 与 "无数据" → 保守按中性 (与旧行为一致, 不误伤)
+            return 1.0
+        directional = max(0.3, min(1.5, 1.0 + alignment * 2.5))
+        strength = min(1.0, abs(alignment) / WINRATE_INFO_BAND)
+        # strength=1 (有信息) → 乘数恒为 1.0, 与旧线性曲线完全一致
+        mult = 1.0 - (1.0 - WINRATE_NEUTRAL) * (1.0 - strength)
+        return max(0.15, min(1.5, directional * mult))
     except Exception:
         return 1.0
 

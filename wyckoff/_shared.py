@@ -356,8 +356,11 @@ def run_pending_eval(records, evaluator, horizons, load, save, key,
         if not force and now - (r.get("last_eval_ts") or 0) < min_interval:
             continue
         pending.append(r)
-    # 等未来数据的 waiting 记录排在最后, 优先评估真正可出结果的记录
-    pending.sort(key=lambda r: bool(r.get("waiting")))
+    # 等未来数据的 waiting 记录排在最后, 优先评估真正可出结果的记录;
+    # 同组内按 last_eval_ts 升序轮转 —— force=True 会跳过 min_interval 过滤,
+    # 若仍按文件原顺序取前 N 条, 头部"只差 40 根"的记录会每轮占满名额,
+    # 后面已走满 20 根的记录永远轮不到 (队头阻塞), H20 评估被饿死。
+    pending.sort(key=lambda r: (bool(r.get("waiting")), r.get("last_eval_ts") or 0))
     pending = pending[:max_records]
     n_new = 0
     for r in pending:

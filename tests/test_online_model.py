@@ -298,3 +298,24 @@ def test_overlay_ci_straddles_floor(tmp_path, monkeypatch):
     ov = om._quality_overlay(st)
     assert any("下沿" in w and "不稳固" in w for w in ov["warnings"])
     assert ov["degraded"] is False
+
+
+# ── sklearn 缺失时的诚实失败 (2026-10-07 实测: 旧实现打印"重训完成"+旧 AUC 假成功) ──
+
+def test_train_model_no_sklearn_marks_note(tmp_path, monkeypatch):
+    """无 sklearn: train_model 返回带 note 的旧状态, 且不落盘。"""
+    monkeypatch.setattr(om, "ONLINE_MODEL_FILE", str(tmp_path / "m9.json"))
+    monkeypatch.setattr(om, "SGDClassifier", None)
+    st = om.train_model([_rec(0.1), _rec(-0.1)])
+    assert "sklearn" in st.get("note", "")
+    assert not os.path.exists(str(tmp_path / "m9.json"))
+
+
+def test_cli_train_exits_2_without_sklearn(monkeypatch, capsys):
+    """CLI --train: sklearn 缺失必须非零退出, 不得伪装重训成功。"""
+    monkeypatch.setattr(om, "SGDClassifier", None)
+    with pytest.raises(SystemExit) as ei:
+        om._cli_train()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert "scikit-learn" in err and "未安装" in err

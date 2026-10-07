@@ -185,3 +185,55 @@ def test_apply_auto_conditions_falls_back_to_scan_day(monkeypatch):
     cond._apply_auto_conditions(st, [cand])
     assert captured["date"].startswith("20")
     assert captured["price"] == pytest.approx(9.5)
+
+
+def test_signal_stats_reports_wilson_ci_and_small_sample():
+    """信号统计带 Wilson 95%CI; 样本 <50 打 small_sample 标记 (spring review 待办3)。"""
+    psa.record_signal("paper_discipline_bull", "600001", "600001", "弹簧一",
+                      "Spring", 90, "2024-01-02", 10.0)
+    recs = psa.load_signals()
+    recs[0]["results"] = {"5": {"ret": 0.02}, "10": {"ret": 0.03},
+                          "20": {"ret": 0.05}}
+    psa.save_signals(recs)
+    s = psa.signal_stats(force=True)
+    c = s["paper_discipline_bull"]["horizons"]["20"]
+    assert c["n"] == 1 and c["hit"] == 1.0
+    assert 0.0 < c["ci_lo"] < 1.0          # 小样本不得报 100%±0 的假确定
+    assert c["ci_hi"] <= 1.0
+    assert s["_summary"]["small_sample"] is True
+    assert s["_summary"]["min_conclusion_n"] == 50
+
+
+def test_eval_against_waiting_when_largest_horizon_blocked():
+    """只差 H20 且行情未走满 → waiting=True, 不能误标 False。
+
+    旧条件用 min(HORIZONS): 只差 H20 的记录 waiting 恒 False, 在
+    run_pending_eval 的轮转排序里永久排在前面空转 (队头阻塞)。
+    """
+    import pandas as pd
+
+    def _df(n):
+        return pd.DataFrame({"close": [10.0 + i * 0.01 for i in range(n)]})
+
+    rec = {"results": {"5": {"ret": 0.01}, "10": {"ret": 0.02}}}
+    assert psa._eval_against(_df(15), 0, rec) is False
+    assert rec["waiting"] is True
+    assert rec["status"] == "pending"
+    # 数据走满 → H20 补齐, done, 不再 waiting
+    assert psa._eval_against(_df(25), 0, rec) is True
+    assert "20" in rec["results"]
+    assert rec["status"] == "done" and rec["waiting"] is False
+
+
+def test_report_renders_ci_and_small_sample_warning():
+    """周报 20根命中列渲染区间, 且小样本时显式提示不下结论。"""
+    psa.record_signal("paper_discipline_bull", "600001", "600001", "弹簧一",
+                      "Spring", 90, "2024-01-02", 10.0)
+    recs = psa.load_signals()
+    recs[0]["results"] = {"5": {"ret": 0.02}, "10": {"ret": 0.03},
+                          "20": {"ret": -0.04}}
+    psa.save_signals(recs)
+    txt = psa._render_report(psa.strategy_report())
+    assert "命中率仅供区间参考" in txt
+    assert "Wilson 95%CI" in txt
+    assert "[" in txt and "]" in txt      # 命中率后的 [lo, hi]

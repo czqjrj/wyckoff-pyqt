@@ -15,6 +15,7 @@
 依赖: numpy / pandas (项目已有)。不依赖 scipy (秩相关自行实现)。
 """
 import time
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -260,8 +261,13 @@ def win_rate_of_oos(records, kind, type_, before_ts, horizon=20,
     return sum(1 for v in rets if _hit(kind, type_, v)) / len(rets)
 
 
+@lru_cache(maxsize=1)
 def oos_record_loader():
-    """惰性 + 短缓存 的 records 加载 (融合层高频调用时避免重复读盘)。"""
+    """惰性 + 短缓存 的 records 加载 (融合层高频调用时避免重复读盘)。
+
+    lru_cache 单例: 旧实现每次调用都新建闭包 → TTL 缓存永不复用,
+    fusion._winrate_weight 每个事件都要重读一次 ~9MB 的信号库 JSON。
+    """
     _c = {"ts": 0.0, "records": None}
     _TTL = 60.0
 

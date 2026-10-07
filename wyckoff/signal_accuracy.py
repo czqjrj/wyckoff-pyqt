@@ -197,8 +197,11 @@ def _eval_against(df, idx, rec):
     rec["results"] = results
     done = len(results) >= len(HORIZONS)
     rec["status"] = "done" if done else "pending"
-    if not done and idx is not None and idx + min(HORIZONS) >= n:
-        # 信号落在行情末端: 未来行情未走满, 标记 waiting (等数据, 非异常)
+    if not done and idx is not None and any(
+            idx + h >= n for h in HORIZONS if str(h) not in results):
+        # 信号落在行情末端: 未来行情未走满, 标记 waiting (等数据, 非异常)。
+        # 判「任一未补齐的 h」而非最小 h: 只差 H40 的记录同样无法推进,
+        # 若 waiting=False 会在 run_pending_eval 轮转里永久占据前排 (队头阻塞)。
         rec["waiting"] = True
     else:
         rec["waiting"] = False

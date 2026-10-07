@@ -294,3 +294,63 @@ def test_measured_win_rates_scale_bug(monkeypatch):
     out = e.measured_win_rates(240)
     assert out == {"Spring": {"win": 0.62, "n": 41}}
     assert out, "measured_win_rates 不应返回空"
+
+
+def test_pending_eval_rotates_by_last_eval_ts(tmp_path):
+    """回归: run_pending_eval 在 force=True 下按 last_eval_ts 轮转取记录。
+
+    背景: 原实现按文件原顺序取前 max_records 条, 若头部全是"只差 40 根"的
+    记录 (每轮都产不出新周期), 后面已走满 20 根的记录永远轮不到 → H20 评估
+    饿死。生产路径靠 min_interval 过滤轮转, 但 CLI --eval (force=True) 会跳过
+    该过滤, 暴露队头阻塞。
+    """
+    import threading
+    import time as _t
+
+    from wyckoff._shared import run_pending_eval
+
+    now = _t.time()
+    recs = [
+        {"symbol": "a", "date": "2026-08-01", "waiting": False,
+         "status": "pending", "last_eval_ts": now,
+         "results": {"5": {}, "10": {}, "20": {}}},
+        {"symbol": "b", "date": "2026-08-03", "waiting": False,
+         "status": "pending", "last_eval_ts": 0, "results": {"5": {}}},
+        {"symbol": "c", "date": "2026-09-01", "waiting": True,
+         "status": "pending", "last_eval_ts": 0, "results": {}},
+    ]
+    store = {"recs": recs}
+    called = []
+
+    def ev(r):
+        called.append(r["symbol"])
+        r.setdefault("results", {})["10"] = {"ret": 0.0}
+        return True
+
+    n = run_pending_eval(recs, ev, (5, 10, 20, 40),
+                         lambda: store["recs"],
+                         lambda rs: store.update(recs=rs),
+                         lambda r: (r["symbol"], r["date"]),
+                         threading.Lock(), force=True, max_records=2)
+    assert n == 2
+    # b (上次评估最久) 先于 a 被评估; c 为 waiting 记录被挤出名额
+    assert called == ["b", "a"]
+    assert store["recs"][1]["results"].get("10"), "b 应被补评估"
+
+
+def test_eval_against_waiting_when_h40_blocked():
+    """只差 H40 且行情未走满 → waiting=True。
+
+    旧条件只看 min(HORIZONS)=5: 这类记录 waiting 恒 False, 在
+    run_pending_eval 轮转里永久排在能出新结果的记录前面空转 (队头阻塞)。
+    """
+    df = _df(30)
+    rec = {"results": {"5": {"ret": 0.01}, "10": {"ret": 0.02},
+                       "20": {"ret": 0.03}}}
+    assert sa._eval_against(df, 0, rec) is False
+    assert rec["waiting"] is True
+    assert rec["status"] == "pending"
+    # 数据走满 40 根 → 补齐 H40 → done 且不再 waiting
+    assert sa._eval_against(_df(45), 0, rec) is True
+    assert "40" in rec["results"]
+    assert rec["status"] == "done" and rec["waiting"] is False

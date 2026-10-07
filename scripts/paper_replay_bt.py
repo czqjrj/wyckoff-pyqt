@@ -180,6 +180,23 @@ def newest_buyable(rec, j, window=10, require_confirm=False, event_types=None):
 
 BEAR_TYPES = {"UTAD", "LPSY"}
 
+
+def signal_anchor(rec, ev, j, D):
+    """信号追踪锚点 → (date, ref_px): 事件日 + 事件日收盘。
+
+    与实盘 `paper._selection` 附带的 event_date/event_px (事件 bar idx 的
+    日期+收盘) 以及主信号库 signal_accuracy 的 event date 同口径; 否则回放
+    按扫描日/开盘价记录, H5/H10/H20 起算点比实盘早 0~10 根 (spring review
+    待办3)。事件 idx 缺失/越界时回退到当前模拟日 D 的开盘价 (旧行为)。
+    """
+    ei = ev.get("idx")
+    ei = int(ei) if isinstance(ei, (int, float)) and ei >= 0 else -1
+    days = rec.get("day") or []
+    closes = rec.get("close") or []
+    if 0 <= ei < len(days) and ei < len(closes) and closes[ei]:
+        return str(days[ei])[:10], float(closes[ei])
+    return str(D), float((rec.get("open") or [0])[j] or 0)
+
 _qlib_prob_cache = {}
 
 
@@ -610,6 +627,11 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             if track_on:
                 # 策略信号追踪: 与实盘 run_cycle 同口径记录 (record_signal 冷却合并),
                 # 但回放内先内存收集, 结束时一次性批量落盘 + 立即评估。
+                # 锚点=事件日 + 事件日收盘 (非扫描日/当日开盘): 与实盘
+                # _conditions 记录的 event_date/event_px、以及主信号库
+                # signal_accuracy 的 event date 同口径, 否则回放/实盘两张
+                # 准确度表的 H5/H10/H20 起算点相差 0~10 根 (spring review 待办3)。
+                _ev_day, _ev_px = signal_anchor(rec, ev, j, D)
                 st["_gathered_signals"].append(
                     {
                         "strategy": strategy,
@@ -618,8 +640,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                         "name": "",
                         "event_type": ev["type"],
                         "conf": int(ev["conf"] or 0),
-                        "date": str(D),
-                        "ref_px": float(rec["open"][j] or 0),
+                        "date": _ev_day,
+                        "ref_px": _ev_px,
                         "fired": False,
                         "df": rec["df"],
                     }
