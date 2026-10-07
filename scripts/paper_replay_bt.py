@@ -531,6 +531,11 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             S.Paper.TAKE_PROFIT: params["take_profit"],
             S.Paper.COST: params["cost"],
             S.Paper.MIN_CONF: params["min_conf"],
+            S.Paper.REBALANCE: bool(params.get("rebalance", True)),
+            # None=沿用引擎现值 (0.6); 重跑旧口径报告传 1.0 以还原 2026-09-07 前行为
+            S.Paper.VA_WEIGHT: float(params["va_weight"])
+            if params.get("va_weight") is not None
+            else float(paper._CUR.get("va_weight") or 0.6),
             S.Paper.TRAILING_STOP: bool(params.get("trailing_stop", True)),
             S.Paper.TRAIL_BACK_PCT: float(params.get("trail_back_pct") or 0.0),
             S.Paper.TRAIL_ACTIVATE_PCT: float(params.get("trail_activate_pct") or 0.0),
@@ -881,6 +886,11 @@ def build_report(st, params):
         f"仓位权重{'开(A=1.0/B=0.8/C=0.5/D=0.25)' if params.get('fund_weight') else '关'}"
         " (财报按公告日 as-of 无前视; 无历史财报缓存时 fail-open=门禁放行/权重1.0)"
     )
+    L.append(
+        f"- 周期再平衡: {'开(满仓等权收敛)' if params.get('rebalance', True) else '关'} · "
+        f"价值吸筹仓位权重: "
+        f"{params['va_weight'] if params.get('va_weight') is not None else '引擎现值'}"
+    )
     L.append("")
     if params.get("flow_gate") or params.get("sect_gate"):
         L.append(
@@ -1125,7 +1135,7 @@ def main():
     ap.add_argument(
         "--fund-gate",
         action="store_true",
-        help="基本面硬门禁: 信号日 as-of 财报分层 D (报告期亏损/净利断崖≤-30%) 拦截; "
+        help="基本面硬门禁: 信号日 as-of 财报分层 D (报告期亏损/净利断崖≤-30%%) 拦截; "
              "财报按公告日取数无前视, 无历史财报 fail-open 放行",
     )
     ap.add_argument(
@@ -1134,6 +1144,18 @@ def main():
         dest="fund_weight",
         help="关闭基本面分层仓位权重 (默认开启: A=1.0/B=0.8/C=0.5/D=0.25, "
              "无历史财报=1.0)",
+    )
+    ap.add_argument(
+        "--no-rebalance",
+        action="store_false",
+        dest="rebalance",
+        help="关闭周期级等权再平衡 (引擎默认开启; 重跑 2026-09-03 前旧口径报告时关闭)",
+    )
+    ap.add_argument(
+        "--va-weight",
+        type=float,
+        default=None,
+        help="价值吸筹单仓资金权重 (默认取引擎现值; 重跑 2026-09-07 前旧口径报告传 1.0)",
     )
     ap.add_argument(
         "--no-bear-exit",
@@ -1252,6 +1274,8 @@ def main():
         "sect_gate": args.sect_gate,
         "fund_gate": args.fund_gate,
         "fund_weight": args.fund_weight,
+        "rebalance": args.rebalance,
+        "va_weight": args.va_weight,
         "bear_exit": args.bear_exit,
         "qlib_veto": args.qlib_veto,
         "qlib_veto_hi": args.qlib_veto_hi,

@@ -241,6 +241,8 @@ def replay_once(stocks, params, market_gate, left_on, left_first, day_to_j,
             S.Paper.COST: params["cost"],
             S.Paper.MIN_CONF: params["min_conf"],
             S.Paper.REBALANCE: False,
+            # 移动止盈 (引擎现默认开, 旧口径报告为固定止损止盈) → 默认关, --trail 开启
+            S.Paper.TRAILING_STOP: bool(params.get("trailing_stop", False)),
         }
     )
     cfg = paper._CUR
@@ -437,7 +439,14 @@ def main():
     ap.add_argument("--event-vsa", action="store_true",
                     help="启用事件+VSA 双因兜底赛道 (默认关; 加跑含该策略的配置)")
     ap.add_argument("--va-confirm", action="store_true", help="价值: 事件后首根收盘站上MA10才建仓")
+    ap.add_argument("--trail", action="store_true", help="移动止盈 (默认关=固定止损止盈, 与旧口径一致)")
     ap.add_argument("--va-min-conf", type=int, default=0, help="价值: 事件 conf 门槛 (0=不限)")
+    ap.add_argument(
+        "--events",
+        default="",
+        help="纪律事件集逗号分隔 (默认=当前现网 LONG_EVENT_TYPES; "
+             "历史口径复现传 Spring,ST,LPS — 与 2026-09-06 报告同集)",
+    )
     ap.add_argument(
         "--va-events", default="all", help="价值: 事件白名单逗号分隔 (默认 all=LONG_EVENT_TYPES)"
     )
@@ -476,6 +485,7 @@ def main():
         "cost": args.cost,
         "init_cash": args.cash,
         "window": args.window,
+        "trailing_stop": args.trail,
         "start": args.start,
         "mkt_gate": args.mkt_gate,
         "bear_exit": args.bear_exit,
@@ -530,6 +540,11 @@ def main():
         codes = [c.strip() for c in DEFAULT_CODES.split(",") if c.strip()]
 
     stocks = []
+    event_types = (
+        frozenset(x.strip() for x in args.events.split(",") if x.strip())
+        if args.events
+        else None
+    )
     if args.stocks_cache and os.path.exists(args.stocks_cache):
         import pickle
 
@@ -542,7 +557,9 @@ def main():
     if not stocks:
         for i, c in enumerate(codes):
             try:
-                rec = pbt.load_stock_events(c, args.conf, datalen=args.datalen)
+                rec = pbt.load_stock_events(
+                    c, args.conf, datalen=args.datalen, event_types=event_types
+                )
             except Exception as exc:  # 单票失败 (数据源缺失等) 跳过, 不中断全池
                 print(f"  [{i + 1}/{len(codes)}] {c} 加载失败, 跳过: {exc}", flush=True)
                 rec = None
@@ -618,8 +635,12 @@ def main():
         f"止损-{args.stop * 100:.0f}% · 止盈+{args.tp * 100:.0f}% · 成本{args.cost}",
         "- 纪律/价值: 全局止盈止损+持有上限; 左侧: 买点自带 stop/target "
         "(换算 stop_pct/take_pct, 由引擎逐日判定)",
-        "- 事件集: 纪律 {Spring,ST,LPS} (实盘收紧口径) · 价值吸筹 底部整固+20根事件"
-        " · 左侧 KIND_LEFT (st_bottom/lps/spring/spring_retest)",
+        f"- 事件集: 纪律 {{{args.events}}} (实盘收紧口径) · 价值吸筹 底部整固+20根事件"
+        " · 左侧 KIND_LEFT (st_bottom/lps/spring/spring_retest)"
+        if args.events
+        else "- 纪律/价值: 全局止盈止损+持有上限; 左侧: 买点自带 stop/target "
+        "(换算 stop_pct/take_pct, 由引擎逐日判定) · 事件集: 纪律 现网 LONG_EVENT_TYPES"
+        " · 价值吸筹 底部整固+20根事件 · 左侧 KIND_LEFT (st_bottom/lps/spring/spring_retest)",
         "",
         "| 配置 | 平仓 | 累计收益 | 胜率 | 最大回撤 | 各策略(笔/胜率/平均) |",
         "|---|---|---|---|---|---|",
