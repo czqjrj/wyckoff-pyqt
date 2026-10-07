@@ -24,18 +24,18 @@ def _mkdf(close, high=None, low=None, vol=None, high_at=None, days=None):
     open_ = np.roll(close, 1)
     open_[0] = close[0]
     h = np.maximum(open_, close) * 1.004
-    l = np.minimum(open_, close) * 0.996
+    lo = np.minimum(open_, close) * 0.996
     if high_at:
         for i, p in high_at:
             h[i] = p
     if high is not None:
         h = high
     if low is not None:
-        l = low
+        lo = low
     v = np.full(n, 1e6) if vol is None else vol
     return add_indicators(pd.DataFrame({
         "day": (pd.date_range("2023-01-01", periods=n, freq="D") if days is None else days),
-        "open": open_, "high": h, "low": l, "close": close, "volume": v,
+        "open": open_, "high": h, "low": lo, "close": close, "volume": v,
     }), symbol="synthetic")
 
 
@@ -90,7 +90,6 @@ def test_shakeout_still_fires_on_confirmed_bar():
 # ── Spring ─────────────────────────────────────────────────────────
 def test_spring_not_on_last_bar():
     """末 bar 虚拟低枢轴刺破前低后收回 → 不得标 Spring。"""
-    n = 80
     close = np.concatenate([np.linspace(8.0, 9.2, 78), [8.9, 9.25]])
     low = np.minimum(np.roll(close, 1), close) * 0.996
     low[79] = 8.5                          # 末 bar 虚拟低枢轴
@@ -103,7 +102,6 @@ def test_spring_not_on_last_bar():
 
 def test_spring_still_fires_on_confirmed_low():
     """真实低枢轴刺破后收回 → Spring 仍正常触发。"""
-    n = 80
     close = np.concatenate([np.linspace(8.0, 9.2, 78), [8.9, 9.25]])
     low = np.minimum(np.roll(close, 1), close) * 0.996
     low[78] = 8.5                          # 真实低枢轴

@@ -1,10 +1,12 @@
-# -*- coding: utf-8 -*-
 """Spring-only 策略跟踪·按事件类型拆解 (干净口径: 只看 paper_discipline_bull)。"""
-import json, statistics, collections, sys
+import collections
+import statistics
+import sys
+
 sys.stdout.reconfigure(encoding='utf-8')
 
 from wyckoff.paper_strategy_accuracy import (
-    load_signals, STRATEGY_CN, STRATEGY_ORDER,
+    load_signals,
 )
 
 recs = load_signals()

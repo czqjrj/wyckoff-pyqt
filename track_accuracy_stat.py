@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
 """一次性: 信信号级统计 (Spring-only 与左侧买点, 按事件类型/置信度)."""
-import json, statistics, collections
+import collections
+import statistics
+
 import wyckoff.paper_strategy_accuracy as m
+
 
 def _pct(v):
     return f"{v*100:.0f}%" if v is not None else "-"

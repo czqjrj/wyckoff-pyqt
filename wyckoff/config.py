@@ -385,6 +385,34 @@ W_RECENT = 120    # 近期事件/信号统计窗口
 W_PIVOT_LONG = 200  # 长周期枢轴/结构确认窗口
 W_MA_LONG = 200     # 长期均线(年线)采样窗口
 
+# ── 事件探测阈值 (A5 统一入口, 避免 events.py 内联魔数与两处漂移) ──
+# events.py 的高潮/反转类探测器读 REVERSAL_EVENT_THRESHOLDS, 突破类 (SOS/JOC) 读
+# SOS_THRESHOLDS; 改这里即全局生效, 基线值由 tests/test_event_thresholds.py 锁定。
+# 注意: vsa.py DEFAULT_THRESHOLDS 是按周期校准的逐根量比分级 (可被
+# wx_vsa_thresholds.json 覆盖), 语义与本表不同, 刻意不并入。
+REVERSAL_EVENT_THRESHOLDS = {
+    "climax_vol_ok": 1.6,      # SC: vol/vol_ma20 下限
+    "climax_vol_hi": 2.0,      # BC: vol/vol_ma20 下限
+    "climax_wick_min": 0.30,   # SC/BC: 影线/振幅 下限
+    "climax_lo_zone": 0.15,    # SC: 收盘落于 40 根区间低位区 (< 此比例)
+    "climax_hi_zone": 0.10,    # BC: 收盘距 40 根区间高点 (< 此比例)
+    "climax_min_bar": 20,      # 前置根数不足不产事件
+    "spring_pierce": 0.98,     # Spring: 刺破前低幅度 (与 RANGE_TOL 2% 同口径)
+    "utad_pierce": 1.02,       # UTAD: 冲破前高幅度
+    "sow_vol_mult": 1.25,      # SOW: 破位放量门 (× vol_ma20)
+    "sow_floor_pierce": 0.97,  # SOW: 跌破支撑幅度
+}
+
+SOS_THRESHOLDS = {
+    "pivot_vr_min": 1.3,        # 枢轴型 SOS: 段内均量/量MA20 下限
+    "pivot_gap_bars": 30,       # 相邻高点最大间隔 (超限视为不同波段)
+    "accum_window": 60,         # 吸筹背景回看窗口 (SC/Spring/ST)
+    "bar_vol_mult": 1.25,       # bar 型 SOS 放量门 (× vol_ma20)
+    "joc_vol_mult": 1.8,        # bar 型 JOC 放量门 (× vol_ma20)
+    "joc_breakout_mult": 1.01,  # JOC: 收盘 > 前 60 日高 × 此系数
+    "joc_range_confirm": 0.98,  # JOC: 前 60 日内触及前高 的确认系数
+}
+
 # ── 阶段区间检测参数 (phases.py 统一入口) ──
 RANGE_BAND = 0.45       # 区间高/低比上限 (带宽约束, 无波动率信息时的默认)
 RANGE_BAND_MIN = 0.30   # 波动率自适应带宽下限 (低波动股收窄, 防把趋势当区间)
@@ -559,10 +587,6 @@ DEFAULT_SETTINGS = {
     # 默认开启账户私有数据自动同步 (登录后按固定间隔双向同步云端);
     # 未登录/未配置时自动跳过, 不产生网络请求。
     "profile_sync": True,
-    # ── 硬件感知设置 (仅作参考, 可在设置面板中人工覆盖) ──
-    "hw_cpu_count": "auto",
-    "hw_parallel_max": "auto",
-    "hw_phase_cache_days": "auto",
 }
 
 # ── 通用阈值 ──

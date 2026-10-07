@@ -4,7 +4,13 @@ import pandas as pd
 
 from .calib_registry import bucket_value
 from .calib_registry import get as _calib
-from .config import EVENT_COLORS, confirm_dir, event_dir
+from .config import (
+    EVENT_COLORS,
+    REVERSAL_EVENT_THRESHOLDS,
+    SOS_THRESHOLDS,
+    confirm_dir,
+    event_dir,
+)
 
 USE_EMPIRICAL_CONF = True
 # 经验校准混合权重: 历史类型胜率对原 conf 的覆盖比例。
@@ -297,15 +303,16 @@ def detect_climaxes(ctx: _EventContext):
     rng = np.where(ctx.range > 1e-9, ctx.range, 1e-9)
     span = np.where(ctx.hi40 - ctx.lo40 > 1e-9, ctx.hi40 - ctx.lo40, 1e-9)
 
-    lo_zone = (cvals - ctx.lo40) / span < 0.15
-    vol_ok = ctx.vol_ratio_20 >= 1.6
-    vol_hi = ctx.vol_ratio_20 >= 2.0
+    lo_zone = (cvals - ctx.lo40) / span < REVERSAL_EVENT_THRESHOLDS["climax_lo_zone"]
+    vol_ok = ctx.vol_ratio_20 >= REVERSAL_EVENT_THRESHOLDS["climax_vol_ok"]
+    vol_hi = ctx.vol_ratio_20 >= REVERSAL_EVENT_THRESHOLDS["climax_vol_hi"]
 
-    sc_cond = vol_ok & lo_zone & (ctx.lower_wick / rng > 0.30)
-    hi_zone_narrow = (ctx.hi40 - cvals) / span < 0.10
-    bc_cond = vol_hi & hi_zone_narrow & (ctx.upper_wick / rng > 0.30)
+    sc_cond = vol_ok & lo_zone & (ctx.lower_wick / rng > REVERSAL_EVENT_THRESHOLDS["climax_wick_min"])
+    hi_zone_narrow = (ctx.hi40 - cvals) / span < REVERSAL_EVENT_THRESHOLDS["climax_hi_zone"]
+    bc_cond = vol_hi & hi_zone_narrow & (ctx.upper_wick / rng > REVERSAL_EVENT_THRESHOLDS["climax_wick_min"])
 
-    idx = np.where((sc_cond | bc_cond) & (np.arange(ctx.n) >= 20))[0]
+    idx = np.where((sc_cond | bc_cond)
+                   & (np.arange(ctx.n) >= REVERSAL_EVENT_THRESHOLDS["climax_min_bar"]))[0]
     events = []
     for i in idx:
         if sc_cond[i]:
@@ -340,7 +347,7 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
         low_price = np.array([p["price"] for p in lows])
         low_date = [p["date"] for p in lows]
         for k in range(1, len(lows)):
-            if low_price[k] < low_price[k - 1] * 0.98:
+            if low_price[k] < low_price[k - 1] * REVERSAL_EVENT_THRESHOLDS["spring_pierce"]:
                 a, b = low_idx[k], min(low_idx[k] + 20, n)
                 if b > a and np.any(closes[a:b] > low_price[k - 1]):
                     events.append(dict(type="Spring", idx=int(low_idx[k]),
@@ -354,7 +361,7 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
         high_price = np.array([p["price"] for p in highs])
         high_date = [p["date"] for p in highs]
         for k in range(1, len(highs)):
-            if high_price[k] > high_price[k - 1] * 1.02:
+            if high_price[k] > high_price[k - 1] * REVERSAL_EVENT_THRESHOLDS["utad_pierce"]:
                 a, b = high_idx[k], min(high_idx[k] + 20, n)
                 if b > a and np.any(closes[a:b] < high_price[k - 1]):
                     events.append(dict(type="UTAD", idx=int(high_idx[k]),
@@ -370,11 +377,12 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
         accum_idx = np.array([e["idx"] for e in climax_events + events
                               if e["type"] in ("SC", "Spring", "ST")])
         for k in range(1, len(highs)):
-            if not (high_price[k] > high_price[k - 1] and high_idx[k] - high_idx[k - 1] <= 30):
+            if not (high_price[k] > high_price[k - 1]
+                    and high_idx[k] - high_idx[k - 1] <= SOS_THRESHOLDS["pivot_gap_bars"]):
                 continue
             a, b = int(high_idx[k - 1]), int(high_idx[k]) + 1
             vr = volume[a:b].mean() / max(vol_ma20[int(high_idx[k])], 1e-9)
-            if vr <= 1.3:
+            if vr <= SOS_THRESHOLDS["pivot_vr_min"]:
                 continue
             i = int(high_idx[k])
             # 收盘必须站上突破位 (前枢轴高) —— 否则该高点只是冲刺试探 (UTAD 候选),
@@ -383,7 +391,8 @@ def detect_pivot_events(ctx: _EventContext, pivots, climax_events):
             # SOS=强度信号, 需收盘确认, 锚点应从波峰尖移到确认收盘。
             if closes[i] <= high_price[k - 1]:
                 continue
-            if len(accum_idx) and np.any((accum_idx < i) & (i - accum_idx <= 60)):
+            if len(accum_idx) and np.any((accum_idx < i)
+                                         & (i - accum_idx <= SOS_THRESHOLDS["accum_window"])):
                 events.append(dict(type="SOS", idx=i, date=high_date[k],
                                    price=float(high_price[k]), desc=f"量比{vr:.1f}",
                                    color=EVENT_COLORS["SOS"]))
@@ -447,9 +456,9 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
     vol_ma20 = ctx.vol_ma20
     days = ctx.days
 
-    vol_ok = vol >= vol_ma20 * 1.25
-    joc_vol = vol >= vol_ma20 * 1.8
-    raw_joc = joc_vol & (cvals > ctx.prev_high_60 * 1.01)
+    vol_ok = vol >= vol_ma20 * SOS_THRESHOLDS["bar_vol_mult"]
+    joc_vol = vol >= vol_ma20 * SOS_THRESHOLDS["joc_vol_mult"]
+    raw_joc = joc_vol & (cvals > ctx.prev_high_60 * SOS_THRESHOLDS["joc_breakout_mult"])
     raw_sos = vol_ok & ~raw_joc & (cvals > ctx.prev_close_30)
 
     idx = np.where((raw_joc | raw_sos) & (np.arange(ctx.n) >= 61)
@@ -464,7 +473,8 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
         if raw_joc[i]:
             if i < 75:
                 continue
-            if not np.any(hival[max(0, i - 60):i - 14] >= ctx.prev_high_60[i] * 0.98):
+            if not np.any(hival[max(0, i - 60):i - 14]
+                          >= ctx.prev_high_60[i] * SOS_THRESHOLDS["joc_range_confirm"]):
                 continue
             events.append(dict(type="JOC", idx=i, date=pd.Timestamp(days[i]),
                                price=float(hival[i]), desc="放量突破60日震荡区间上沿",
@@ -472,7 +482,8 @@ def detect_joc_lps_bu(ctx: _EventContext, pivots, base_events):
         else:
             accum_idx = np.array([e["idx"] for e in base_events
                                   if e["type"] in ("SC", "Spring", "ST")])
-            if len(accum_idx) and np.any((accum_idx < i) & (i - accum_idx <= 60)):
+            if len(accum_idx) and np.any((accum_idx < i)
+                                         & (i - accum_idx <= SOS_THRESHOLDS["accum_window"])):
                 events.append(dict(type="SOS", idx=i, date=pd.Timestamp(days[i]),
                                    price=float(hival[i]), desc="放量突破30日收盘高点",
                                    color=EVENT_COLORS["SOS"]))
@@ -578,7 +589,9 @@ def detect_sow(ctx: _EventContext, pivots, base_events, confirm_bars=10):
         cand = np.where(mask)[0]
         for lo_i in cand:
             i = int(low_idx[lo_i])
-            if low_price[lo_i] < floor * 0.97 and volume[i] >= vol_ma20[i] * 1.25 and close[i] < floor:
+            if low_price[lo_i] < floor * REVERSAL_EVENT_THRESHOLDS["sow_floor_pierce"] \
+                    and volume[i] >= vol_ma20[i] * REVERSAL_EVENT_THRESHOLDS["sow_vol_mult"] \
+                    and close[i] < floor:
                 a, b = i + 1, min(i + 1 + confirm_bars, n)
                 # 无未来确认窗口 (末根未确认破位): 不标任何 SOW/TSO/Shakeout,
                 # 否则 new_low/fast_rebound 恒 False 落入 else 误标"Shakeout"。

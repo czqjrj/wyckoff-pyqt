@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+*.pyo
+# 工具缓存 (自排除文件缺失时兜底)
+/.pytest_cache/
+/.ruff_cache/
 # 扫描/校准临时导出 (运行时生成, 随机后缀)
 .wyckoff_tmp_*
 dist/
@@ -66,11 +70,17 @@ debian/
 
 # ── 运行时用户数据/状态 (勿入库) ──
 /wx_*.json
+# 带日期后缀的手工备份 (曾被误提交, 新文件不再入库)
+/wx_*.bak.*
+/wyckoff_*.bak.*
 /wx_machine_id
 /wx_paper.lock
 /wyckoff_watchlist.json
 # 运行时日志 (board_snap.log 等)
 /logs/
+# 运行时逐日落盘产物 (paper_log_*.json / pnf_acc_*.json, 已有历史文件仍被跟踪)
+/paper_logs/
+/pnf_accuracy/
 # Qlib LightGBM 训练模型 (本地训练产物, 数据截至训练日, 勿入库)
 /qlib_lgbm.joblib
 

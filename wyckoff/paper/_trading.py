@@ -6,15 +6,16 @@ from datetime import datetime
 import wyckoff.paper as paper
 
 from .. import paper_log, paper_strategy_accuracy
+from ..datasource import fetch_kline
+from ..indicators import add_indicators
 from ..strategies.constants import STRATEGY_VALUE_ACC
+from ..strategies.sell_strategy import evaluate_sell_reason
 from ._params import MIN_LOT, SLIP_BUY, SLIP_SELL, TRAIL_ATR_MULT, TRAILING_STOP
 
 
 # ── 撮合: 买入/卖出 ─────────────────────────────────────
 def _next_open(code, datalen=420):
     """取最新一根日线 (模拟盘以收盘后运行, 下一根"开盘价"用最近收盘近似+滑点)。"""
-    from ..datasource import fetch_kline
-    from ..indicators import add_indicators
     df = add_indicators(fetch_kline(code, datalen=datalen, scale=240), symbol=code)
     return df
 
@@ -364,7 +365,6 @@ def close_position(st, pos, sell_price, reason, event_type=None, day=None):
     全面适配A股: 卖出费用按明细拆分 (佣金+过户费+印花税), 买入按佣金+过户费,
     替代扁平成本; 净收益口径与持仓成本台账一致。
     """
-    from wyckoff.strategies.sell_strategy import evaluate_sell_reason
     # 基于事件类型的卖出策略
     reason = evaluate_sell_reason(event_type, reason)
     price = round(sell_price, 3)

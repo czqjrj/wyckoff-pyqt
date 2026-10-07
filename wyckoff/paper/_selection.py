@@ -19,6 +19,7 @@ _SCAN_EVENTS_LOCK = threading.Lock()
 # ── 三重共振纪律硬门禁 (统一数据源见 discipline.py) ──
 # 门禁经 paper._market_trend_ok / paper._sector_strength_ok / paper._flow_net5
 # 运行时解析 (paper/discipline 单一源, 测试 monkeypatch 到 paper.*)。
+from ..chain import chain_conf_adjust
 from ..events import sort_candidates
 from ..strategies.constants import (
     STRATEGY_DISCIPLINE,
@@ -361,7 +362,6 @@ def pick_candidates(universe=None, max_codes=6000, min_conf=None,
                 base_conf = int(cand.get("conf", 0) or 0)
                 try:
                     if cand["sector"]:
-                        from ..chain import chain_conf_adjust
                         adj = chain_conf_adjust(cand["sector"], base_conf)
                         cand["base_conf"] = base_conf
                         cand["conf"] = max(min_conf, min(100, base_conf + adj))

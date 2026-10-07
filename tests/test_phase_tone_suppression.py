@@ -16,9 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
 import pandas as pd
 
-from wyckoff.conclusion import build_signal_summary
-from wyckoff.phases import (PHASE_TONE, PHASE_TONE_SUPPRESSED,
-                            phase_tone_of)
+from wyckoff.phases import PHASE_TONE, PHASE_TONE_SUPPRESSED, phase_tone_of
 
 
 def _mk_df(n=120):

@@ -29,7 +29,6 @@ def _mkdf_dist(n=120, close_lines=None, bounce_high=9.5, bounce_at=85, vols=None
       idx bounce_at+1..  回落偏弱
     """
     closes = np.linspace(8.0, 9.9, 61)
-    b, a = closes[-1], 8.6
     ar_seg = np.linspace(9.9, 8.6, 16)          # 60..75 (AR 低点 8.6)
     up_seg = np.linspace(8.6, bounce_high - 0.05, max(0, 1 + (bounce_at - 76)))
     tail = np.linspace(bounce_high - 0.05, 8.2,

@@ -5,6 +5,7 @@ import numpy as np
 import wyckoff.paper as paper
 
 from .. import paper_log
+from ..strategies.constants import STRATEGY_VALUE_ACC
 from ._params import MIN_LOT, SLIP_BUY, PositionRisk, PositionSizingMethod
 
 
@@ -139,7 +140,6 @@ def _risk_blocks_entry(st, cand, price) -> bool:
     按候选现价预估仓位; 数据不足以精确判定时 (同持有 sector 缺失) fail-soft 放行,
     仅在可判定且超限时拦截。
     """
-    from wyckoff.strategies.constants import STRATEGY_VALUE_ACC
     ok, msg = check_drawdown_limit(st)
     if not ok:
         st.setdefault("meta", {})["last_risk_skip"] = {"code": cand["code"], "reason": msg}
