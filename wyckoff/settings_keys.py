@@ -149,6 +149,10 @@ class Paper(_Base):
     ENABLE_LONG_LEFT = "paper_enable_long_left"
     # 事件+高价值VSA双因策略总开关: False = 模拟盘完全停用 (不再扫描/生成入场条件单)
     ENABLE_EVENT_VSA = "paper_enable_event_vsa"
+    # 基本面分层仓位权重总开关 (fund_history.TIER_WEIGHT): A=1.0/B=0.8/C=0.5/D=0.25
+    FUND_TIER_WEIGHT = "paper_fund_tier_weight"
+    # 基本面硬门禁: 信号日 as-of 财报分层 D 不开新仓 (无历史财报 fail-open)
+    FUND_GATE = "paper_fund_gate"
     # ST 事件确认门槛: True = 仅已 confirmed 且确认后首根已到的 ST 事件可入候选
     # (Spring/其他强多头事件仍事件即买; 回测验证 +212%→+307% 全组合收益)
     ST_CONFIRM = "paper_st_confirm"
@@ -310,6 +314,9 @@ DEFAULTS = {
     Paper.ENABLE_LONG_LEFT: False,
     # 事件+高价值VSA双因默认关闭 (独立兜底赛道): 需显式 paper_enable_event_vsa=true
     Paper.ENABLE_EVENT_VSA: False,
+    # 基本面分层: 分层仓位权重 / 硬门禁 (fund_history.py)
+    Paper.FUND_TIER_WEIGHT: True,
+    Paper.FUND_GATE: False,
     AI.FALSIFY_ENABLED: False,
     AI.INTERPRET_ENABLED: False,
     AI.API_KEY: "",
@@ -390,6 +397,8 @@ def _engine_paper_defaults():
         Paper.ENABLE_VA: _p.ENABLE_VA,
         Paper.ENABLE_LONG_LEFT: _p.ENABLE_LONG_LEFT,
         Paper.ENABLE_EVENT_VSA: _p.ENABLE_EVENT_VSA,
+        Paper.FUND_TIER_WEIGHT: _p.FUND_TIER_WEIGHT,
+        Paper.FUND_GATE: _p.FUND_GATE,
         Paper.WEAK_FILTER: _p.WEAK_FILTER,
         Paper.WEAK_MAX_POS: _p.WEAK_MAX_POS,
         Paper.WEAK_INDEX_CODE: _p.WEAK_INDEX_CODE,

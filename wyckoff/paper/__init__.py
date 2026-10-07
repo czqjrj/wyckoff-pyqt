@@ -72,6 +72,8 @@ from ._params import (
     ENABLE_EVENT_VSA,
     ENABLE_LONG_LEFT,
     ENABLE_VA,
+    FUND_GATE,
+    FUND_TIER_WEIGHT,
     HOLD_BARS,
     INIT_CASH,
     LIMIT_FILL,
@@ -258,6 +260,9 @@ def apply_paper_params(settings=None):
         "enable_long_left": bool(_get(S.Paper.ENABLE_LONG_LEFT, ENABLE_LONG_LEFT)),
         # 事件+VSA 双因策略总开关 (False=彻底停用)
         "enable_event_vsa": bool(_get(S.Paper.ENABLE_EVENT_VSA, ENABLE_EVENT_VSA)),
+        # 基本面分层: 分层仓位权重总开关 / 硬门禁 (fund_history.py)
+        "fund_tier_weight": bool(_get(S.Paper.FUND_TIER_WEIGHT, FUND_TIER_WEIGHT)),
+        "fund_gate": bool(_get(S.Paper.FUND_GATE, FUND_GATE)),
         # 周期级等权再平衡
         "rebalance": bool(_get(S.Paper.REBALANCE, _get("paper_rebalance", REBALANCE))),
         # 微信推送配置
@@ -331,6 +336,8 @@ _CUR = {
     "enable_va": ENABLE_VA,
     "enable_long_left": ENABLE_LONG_LEFT,
     "enable_event_vsa": ENABLE_EVENT_VSA,
+    "fund_tier_weight": FUND_TIER_WEIGHT,
+    "fund_gate": FUND_GATE,
     "rebalance": REBALANCE,
     "push_enabled": PUSH_ENABLED,
     "push_method": PUSH_METHOD,
@@ -628,6 +635,21 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
             if not _CUR.get("enable_event_vsa", True) \
                     and e.get("strategy") == STRATEGY_EVENT_VSA:
                 continue
+            # 基本面分层 (历史财报按公告日 as-of, 无前视): D 层硬门禁 + 单仓资金权重。
+            # 无历史财报 → tier="" fail-open: 门禁放行且权重 1.0 (缺数据不惩罚)。
+            _tier = ""
+            _fund_w = None
+            if _CUR.get("fund_tier_weight") or _CUR.get("fund_gate"):
+                try:
+                    from ..fund_history import TIER_WEIGHT, gate_ok, tier_at
+
+                    _tier = tier_at(code, e.get("day") or time.strftime("%Y-%m-%d"))
+                except Exception:
+                    TIER_WEIGHT, gate_ok = {}, (lambda t: True)
+                if _CUR.get("fund_gate") and not gate_ok(_tier):
+                    continue
+                if _CUR.get("fund_tier_weight"):
+                    _fund_w = float(TIER_WEIGHT.get(_tier, 1.0))
             px = float(e.get("entry_price") or 0) or float(e.get("last", 0) or 0)
             last = float(e.get("last", 0) or 0)
             if e.get("trigger") == "below":
@@ -671,9 +693,12 @@ def run_cycle(settings=None, min_conf=None, universe=None, candidates=None,
                                 e.get("conf", 50), px, 0, st["cash"],
                                 sector=e.get("sector", ""),
                                 strategy=e.get("strategy", ""), st=st,
-                                stop_pct=stop_pct, take_pct=take_pct)
+                                stop_pct=stop_pct, take_pct=take_pct,
+                                fund_weight=_fund_w)
             if order is None:
                 continue
+            if _tier:
+                order["fund_tier"] = _tier
             order["day"] = str(e.get("day") or "")
             order["reason"] = ("回踩买入" if e.get("trigger") == "below"
                                else "上破买入")

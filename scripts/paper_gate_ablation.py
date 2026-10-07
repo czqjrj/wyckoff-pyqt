@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""三道硬门禁·历史消融回测 (mkt / flow / sect 开→关 分项对照).
+"""四道硬门禁·历史消融回测 (mkt / flow / sect / fund 开→关 分项对照).
 
 复用 paper_replay_bt 的加载/回放骨架 (含 P4.2 板块强度历史快照 strength_at,
-以及大盘 MA20 历史前缀因果重建), 对同一股票池把 8 种门禁组合各跑一趟完整账户
+以及大盘 MA20 历史前缀因果重建), 对同一股票池把 16 种门禁组合各跑一趟完整账户
 回放, 输出累计收益/胜率/盈亏比/最大回撤对照 —— 回答 docs/strategy4 ③号盲区:
-"板块>60分位 + 资金净流入>0" 是否有正贡献, 三门齐开是否过度过滤。
+"板块>60分位 + 资金净流入>0" 是否有正贡献, 以及基本面分层 D 拦截的边际贡献,
+几门齐开是否过度过滤 (--quick 只跑基线/单项/三门生产/四门全开 7 项)。
 
 门禁口径与 paper_replay_bt 严格一致:
   - mkt : 当日上证收盘>MA20 才开新仓 (因果重建, 无前视; 指数数据缺失=不满足)
   - flow: 信号日近5根量价净流入占比, 按『当日候选池 ≥ 截面中位』过滤 (fail-close)
   - sect: 资金… 板块强度历史快照分位≥0.6 (无快照/无映射放行 fail-open)
-除门禁外全部参数各配置一致, 保证差异纯由门禁引起。
+  - fund: 信号日 as-of 财报分层 D (亏损/净利断崖≤-30%) 拦截 (财报按公告日
+    取数无前视; 无 wyckoff_fund_history.json 时 fail-open 放行并提示回填)
+除门禁外全部参数各配置一致, 保证差异纯由门禁引起 (分层仓位权重恒关, 由
+paper_replay_bt --fund-weight 单独对照)。
 
 用法:
   python scripts/paper_gate_ablation.py --max-codes 100 --stocks-cache /tmp/gates.pkl
-  python scripts/paper_gate_ablation.py --quick      # 只跑 none/mkt/flow/sect/all 五项
+  python scripts/paper_gate_ablation.py --quick      # 基线/单项/三门生产/四门全开
   python scripts/paper_gate_ablation.py --report docs/paper_gate_ablation.md
 """
 import argparse
+import itertools
 import os
 import sys
 
@@ -31,31 +36,42 @@ os.environ.setdefault(
 from scripts import paper_replay_bt as pbt  # noqa: E402
 from wyckoff import paper  # noqa: E402
 
-# ── 门禁组合 (8 组合全覆盖) ────────────────────────────────
+# ── 门禁组合 (4 道门禁 × 2^4 = 16 组合全覆盖; --quick 取基线/单项/三门/四门) ──
+GATE_KEYS = ("mkt", "flow", "sect", "fund")
 GATE_NONE = ()
-GATES_ALL = ("mkt", "flow", "sect")
-ALL_COMBS = [
-    (GATE_NONE, "none 三门全关(基线)"),
-    (("mkt",), "mkt 仅大盘MA20"),
-    (("flow",), "flow 仅资金流"),
-    (("sect",), "sect 仅板块强度"),
-    (("mkt", "flow"), "mkt+flow"),
-    (("mkt", "sect"), "mkt+sect"),
-    (("flow", "sect"), "flow+sect"),
-    (GATES_ALL, "all 三门齐开(现行生产)"),
-]
-QUICK_COMBS = [
-    (GATE_NONE, "none 三门全关(基线)"),
-    (("mkt",), "mkt 仅大盘MA20"),
-    (("flow",), "flow 仅资金流"),
-    (("sect",), "sect 仅板块强度"),
-    (GATES_ALL, "all 三门齐开(现行生产)"),
-]
-CN = {"mkt": "大盘", "flow": "资金", "sect": "板块"}
+GATES_ALL = GATE_KEYS
+CN = {"mkt": "大盘", "flow": "资金", "sect": "板块", "fund": "基本面"}
 
 
 def _comb_label(gates):
     return "+".join(CN[g] for g in gates)
+
+
+PROD3 = ("mkt", "flow", "sect")
+
+
+def _comb_name(g):
+    if not g:
+        return "none 四门全关(基线)"
+    if g == PROD3:
+        return "mkt+flow+sect(三门·现行生产)"
+    if g == GATE_KEYS:
+        return "all 四门齐开(三门+基本面)"
+    if len(g) == 1:
+        return f"{g[0]} 仅{CN[g[0]]}"
+    return _comb_label(g)
+
+
+ALL_COMBS = []
+for _bits in itertools.product((0, 1), repeat=len(GATE_KEYS)):
+    _g = tuple(k for k, b in zip(GATE_KEYS, _bits) if b)
+    ALL_COMBS.append((_g, _comb_name(_g)))
+QUICK_COMBS = [
+    (GATE_NONE, _comb_name(GATE_NONE)),
+    *[((k,), _comb_name((k,))) for k in GATE_KEYS],
+    (PROD3, _comb_name(PROD3)),
+    (GATE_KEYS, _comb_name(GATE_KEYS)),
+]
 
 
 def _perf(st):
@@ -82,6 +98,10 @@ def run_one(stocks, params, market_gate, gates):
     p["mkt_gate"] = "mkt" in gates
     p["flow_gate"] = "flow" in gates
     p["sect_gate"] = "sect" in gates
+    p["fund_gate"] = "fund" in gates
+    # 分层仓位权重在消融中恒关: 组合差异纯由门禁引起 (权重效应由
+    # paper_replay_bt --fund-weight / --no-fund-weight 单独对照)
+    p["fund_weight"] = False
     return pbt.replay(stocks, p, market_gate=market_gate if p["mkt_gate"] else None)
 
 
@@ -147,6 +167,8 @@ def build_params(args, defaults):
         "mkt_gate": False,
         "flow_gate": False,
         "sect_gate": False,
+        "fund_gate": False,
+        "fund_weight": False,
         "bear_exit": args.bear_exit,
         "qlib_veto": False,
         "qlib_veto_hi": 0.60,
@@ -222,7 +244,8 @@ def main():
     ap.add_argument("--no-bear-exit", action="store_false", dest="bear_exit",
                     help="关闭空头信号卖出 (默认开)")
     ap.add_argument("--track", action="store_true", help="开启策略信号追踪(默认关, 消融不需要)")
-    ap.add_argument("--quick", action="store_true", help="只跑 none/mkt/flow/sect/all 五项")
+    ap.add_argument("--quick", action="store_true",
+                    help="只跑 基线/四个单项/三门生产/四门全开 (7 项, 默认全 16 组合)")
     ap.add_argument("--stocks-cache", default="")
     ap.add_argument("--report", default="", help="写出对比报告 md 路径")
     args = ap.parse_args()
@@ -230,6 +253,21 @@ def main():
     defaults = paper.apply_paper_params(None)
     params = build_params(args, defaults)
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 基本面历史财报: 隔离目录 (WYCKOFF_DATA_DIR) 无缓存时回退主目录缓存,
+    # 与 paper_replay_bt 同口径; 仍缺失则 fund 门禁 fail-open 并打印提示。
+    try:
+        from wyckoff import fund_history as _fh
+
+        if not os.path.exists(_fh.FUND_HISTORY_FILE):
+            _root_hist = os.path.join(repo_root, "wyckoff_fund_history.json")
+            if os.path.exists(_root_hist):
+                _fh.FUND_HISTORY_FILE = _root_hist
+                _fh.reset_cache()
+            else:
+                print("提示: 缺历史财报缓存, fund 门禁将 fail-open 全放行 "
+                      "(回填: python scripts/backfill_fundamentals.py)", file=sys.stderr)
+    except Exception:
+        pass
     uni = load_universe(args, repo_root)
     print(
         f"消融股票池 {len(uni)} 只: conf≥{params['min_conf']} 持仓≤{params['max_pos']} "
@@ -270,12 +308,13 @@ def main():
             f"| {name} | {cond} | {p['n']} | {wr} | {p['total'] * 100:+.2f}% | "
             f"{plr} | {dd} | {avg} |"
         )
-    md = "# 三道硬门禁·历史消融回测 (mkt/flow/sect 分项开→关)\n\n"
+    md = "# 四道硬门禁·历史消融回测 (mkt/flow/sect/fund 分项开→关)\n\n"
     md += f"- 口径: {len(stocks)} 只 · datalen={args.datalen} · conf≥{params['min_conf']} · " \
           f"持仓≤{params['max_pos']} · 止损-{params['stop_loss'] * 100:.0f}% · " \
           f"止盈+{params['take_profit'] * 100:.0f}% · 事件集 Spring-only\n"
     md += "- 门禁: mkt=大盘收盘>MA20(因果重建) · flow=当日候选池截面中位(fail-close) · " \
-          "sect=板块历史快照分位≥0.6(fail-open)\n"
+          "sect=板块历史快照分位≥0.6(fail-open) · " \
+          "fund=信号日 as-of 财报分层D拦截(公告日前视安全, 无缓存fail-open)\n"
     md += "\n".join(head + rows) + "\n"
     md += "\n*历史回放 (240分钟K线), 不构成投资建议。*\n"
     print("=" * 60)

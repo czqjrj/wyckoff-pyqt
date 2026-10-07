@@ -49,6 +49,8 @@ AAA = {
     "paper_enable_va": P.ENABLE_VA,
     "paper_enable_long_left": P.ENABLE_LONG_LEFT,
     "paper_enable_event_vsa": P.ENABLE_EVENT_VSA,
+    "paper_fund_tier_weight": P.FUND_TIER_WEIGHT,
+    "paper_fund_gate": P.FUND_GATE,
     "paper_rebalance": P.REBALANCE,
     "paper_push_enabled": P.PUSH_ENABLED,
     "paper_push_method": P.PUSH_METHOD,

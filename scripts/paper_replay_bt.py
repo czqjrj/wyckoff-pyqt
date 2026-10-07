@@ -458,6 +458,36 @@ def _sector_gate_ok(rec, ts, gate=0.60):
     return (pct >= gate), f"板块强度{pct * 100:.0f}分位"
 
 
+def _fund_tier(code, day):
+    """信号日 as-of 基本面分层 (A/B/C/D, 财报按公告日取数无前视)。
+
+    无历史财报缓存 / 查询异常 → "" (fail-open): 门禁放行、仓位权重 1.0,
+    回放不因缺基本面数据而清空候选 (与板块快照 fail-open 同哲学)。
+    """
+    try:
+        from wyckoff.fund_history import tier_at
+
+        return tier_at(code, day)
+    except Exception:
+        return ""
+
+
+def fund_gate_filter(cands, day, gate=False, weight=False):
+    """候选基本面分层: 附 fund_tier (信号日公告日 as-of, 无前视)。
+
+    gate=True 时剔除 D 层 (报告期亏损/净利断崖); weight=True 时至少需要
+    fund_tier 字段供 _try_fill 折算仓位权重。无历史财报 → tier="" fail-open:
+    门禁放行、权重 1.0。flags 全关 → 原样返回 (零开销)。
+    """
+    if not (gate or weight):
+        return cands
+    for c in cands:
+        c["fund_tier"] = _fund_tier(c["code"], day)
+    if gate:
+        cands = [c for c in cands if c["fund_tier"] != "D"]
+    return cands
+
+
 def _window_df(rec, D, day_to_j):
     """返回 rec 的指标 df 窗口, 截到 <=D 的最后一根 (供 step 以 D 当日收盘/止损判定)。"""
     j = day_to_j.get(D)
@@ -686,6 +716,11 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             cands = [
                 c for c in cands if _sector_gate_ok({"sector": c["sector"]}, ts=pd.Timestamp(D))[0]
             ]
+        # 基本面分层 (财报按公告日 as-of, 无前视): fund_gate 硬挡 D 层 (亏损/断崖),
+        # fund_weight 把层级折成单仓资金权重 (A=1.0/B=0.8/C=0.5/D=0.25)。
+        # 无历史财报 → tier="" fail-open: 门禁放行且权重 1.0。
+        cands = fund_gate_filter(cands, D, gate=params.get("fund_gate"),
+                                 weight=params.get("fund_weight"))
         cands.sort(key=lambda x: -x["conf"])
 
         def _fill_blocked(code, side):
@@ -721,6 +756,15 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                     return
             if paper._risk_blocks_entry(st, cand, cand["open"]):
                 return
+            # 基本面分层仓位权重 (与实盘 run_cycle 同口径; 未启用/无层级 = 1.0)
+            _fw = None
+            if params.get("fund_weight"):
+                try:
+                    from wyckoff.fund_history import weight as _fw_of
+
+                    _fw = _fw_of(cand.get("fund_tier", ""))
+                except Exception:
+                    _fw = None
             order = paper._make_order(
                 cand["code"],
                 "",
@@ -732,6 +776,7 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                 sector=cand["sector"],
                 strategy=cand["strategy"],
                 st=st,
+                fund_weight=_fw,
             )
             if order is None:
                 return
@@ -827,9 +872,15 @@ def build_report(st, params):
         ("大盘20日线" if params.get("mkt_gate") else None),
         ("资金流(因果代理)" if params.get("flow_gate") else None),
         ("板块强度(历史快照)" if params.get("sect_gate") else None),
+        ("基本面分层D拦截" if params.get("fund_gate") else None),
     ]
     on = [g for g in gates_on if g]
     L.append(f"- 硬门禁: {('、'.join(on)) if on else '全部关闭'}")
+    L.append(
+        f"- 基本面分层: 硬门禁{'开' if params.get('fund_gate') else '关'} · "
+        f"仓位权重{'开(A=1.0/B=0.8/C=0.5/D=0.25)' if params.get('fund_weight') else '关'}"
+        " (财报按公告日 as-of 无前视; 无历史财报缓存时 fail-open=门禁放行/权重1.0)"
+    )
     L.append("")
     if params.get("flow_gate") or params.get("sect_gate"):
         L.append(
@@ -1072,6 +1123,19 @@ def main():
         help="板块强度门禁: 历史快照分位≥0.6 (无快照期放行, 有数据才过滤)",
     )
     ap.add_argument(
+        "--fund-gate",
+        action="store_true",
+        help="基本面硬门禁: 信号日 as-of 财报分层 D (报告期亏损/净利断崖≤-30%) 拦截; "
+             "财报按公告日取数无前视, 无历史财报 fail-open 放行",
+    )
+    ap.add_argument(
+        "--no-fund-weight",
+        action="store_false",
+        dest="fund_weight",
+        help="关闭基本面分层仓位权重 (默认开启: A=1.0/B=0.8/C=0.5/D=0.25, "
+             "无历史财报=1.0)",
+    )
+    ap.add_argument(
         "--no-bear-exit",
         action="store_false",
         dest="bear_exit",
@@ -1186,6 +1250,8 @@ def main():
         "mkt_gate": args.mkt_gate,
         "flow_gate": args.flow_gate,
         "sect_gate": args.sect_gate,
+        "fund_gate": args.fund_gate,
+        "fund_weight": args.fund_weight,
         "bear_exit": args.bear_exit,
         "qlib_veto": args.qlib_veto,
         "qlib_veto_hi": args.qlib_veto_hi,
@@ -1204,6 +1270,25 @@ def main():
     # 回放进程把 WYCKOFF_DATA_DIR 指到 data/paper_replay_data, 那里没有
     # wyckoff_all_stocks.json → local_universe 会返回 0, 导致"扫描 0 只"。
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 基本面历史财报同理: 隔离目录无缓存时回退主目录缓存; 仍缺失则 fail-open
+    # (门禁放行/权重1.0) 并提示回填 —— 不让缺数据静默变成"门禁其实没跑"。
+    if args.fund_gate or args.fund_weight:
+        try:
+            from wyckoff import fund_history as _fh
+
+            if not os.path.exists(_fh.FUND_HISTORY_FILE):
+                _root_hist = os.path.join(repo_root, "wyckoff_fund_history.json")
+                if os.path.exists(_root_hist):
+                    _fh.FUND_HISTORY_FILE = _root_hist
+                    _fh.reset_cache()
+                else:
+                    print(
+                        "提示: 未找到历史财报缓存 wyckoff_fund_history.json —— "
+                        "基本面门禁/权重 fail-open (D拦截不生效、权重全1.0)。"
+                        "回填: python scripts/backfill_fundamentals.py"
+                    )
+        except Exception:
+            pass
     uni = []
     if args.universe_file:
         try:
@@ -1262,7 +1347,8 @@ def main():
         f"止盈+{params['take_profit'] * 100:.0f}% 成本{params['cost'] * 100:.2f}% "
         f"事件集={','.join(sorted(event_set)) if event_set else '现网Spring-only'}"
         f" 门禁: 大盘{'开' if args.mkt_gate else '闭'}/资金{'开' if args.flow_gate else '闭'}"
-        f"/板块{'开' if args.sect_gate else '闭'}"
+        f"/板块{'开' if args.sect_gate else '闭'}/基本面{'开' if args.fund_gate else '闭'}"
+        f"/分层仓位{'开' if args.fund_weight else '闭'}"
         f"/策略追踪{'开' if args.strategy_track else '闭'}"
     )
     stocks = None

@@ -34,13 +34,16 @@ def has_position(st, code):
 
 
 def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
-                strategy="", st=None, stop_pct=None, take_pct=None):
+                strategy="", st=None, stop_pct=None, take_pct=None,
+                fund_weight=None):
     """构造买单订单公共字段 (qty 按全账户总权益等权预算分配, 整手)。
 
     sector 为持仓行业 (用于行业集中度风控 check_sector_concentration);
     strategy 记录信号来源策略 (策略管理器: paper_discipline_bull/价值吸筹/威科夫左侧买点)。
     stop_pct/take_pct: 左侧买点自带御设 (由买点离场价折算), 落入持仓保护条件单,
     否则按账户默认止盈止损。
+    fund_weight: 基本面分层单仓资金权重 (fund_history.TIER_WEIGHT, 调用方按信号日
+    as-of 层级折算: A=1.0/B=0.8/C=0.5/D=0.25); None=不分层 (手动买入/未启用)。
     等权口径: 传入 st 时按 账户总权益/max_pos 分配 (现金+已有持仓市值),
     避免"首批买入吞掉大部分现金、后续仓权重失衡" (曾出现三仓 33万/17万/14万)。
     未传 st 时回退 现金/max_pos (兼容旧调用方与测试)。
@@ -54,6 +57,9 @@ def _make_order(code, name, type_, conf, price, n_total, cash, sector=None,
     # 价值吸筹降权: 单仓资金×va_weight (弱策略敞口控制, 其余策略=1.0)
     if strategy == STRATEGY_VALUE_ACC:
         budget *= float(paper._CUR.get("va_weight", 1.0) or 1.0)
+    # 基本面分层降权 (A=1.0/B=0.8/C=0.5/D=0.25; 与价值吸筹权重可叠加)
+    if fund_weight is not None:
+        budget *= float(fund_weight)
     if budget < MIN_LOT:
         return None
     qty = int(budget // (price * (1 + SLIP_BUY)) // 100 * 100)

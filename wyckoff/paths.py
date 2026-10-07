@@ -50,6 +50,10 @@ PAPER_FILE = os.path.join(DATA_DIR, "wx_paper.json")
 # 见 paper_strategy_accuracy.py
 PAPER_STRATEGY_ACCURACY_FILE = os.path.join(DATA_DIR, "wx_paper_strategy_accuracy.json")
 
+# 历史财报 (东财业绩报表, 含公告日 → 基本面分层无前视取数), 见 fund_history.py。
+# 体量大 (全市场×多期) 且可用脚本重跑回填, 不入库 (gitignored)
+FUND_HISTORY_FILE = os.path.join(DATA_DIR, "wyckoff_fund_history.json")
+
 # SQLite 行情持久缓存 (K线 / 复权因子), 跨会话复用
 CACHE_DB = os.path.join(DATA_DIR, "wyckoff_cache.db")
 

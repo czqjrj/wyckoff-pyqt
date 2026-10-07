@@ -457,6 +457,49 @@ def signal_stats(records=None, force=False):
     return out
 
 
+def tier_stats(records=None):
+    """按基本面分层 (A/B/C/D, 信号日 as-of 财报·公告日前视安全) 汇总 20 根方向命中。
+
+    回答两件事: ① 基本面分层是否有判别力 (A 层是否显著优于 C/D 层);
+    ② 分层仓位权重的方向是否正确 (层级命中差 → 权重差有意义)。
+    无该股历史财报 → tier "-", fail-open 计入不判层。
+    """
+    recs = load_signals() if records is None else records
+    try:
+        from .fund_history import tier_at
+    except Exception:
+        tier_at = None
+    order = ("A", "B", "C", "D", "-")
+    rets = {t: [] for t in order}
+    for r in recs:
+        rr = (r.get("results") or {}).get("20") or {}
+        if rr.get("ret") is None:
+            continue
+        if tier_at is None:
+            t = "-"
+        else:
+            try:
+                t = tier_at(r.get("code") or r.get("symbol", ""),
+                            r.get("date", "")) or "-"
+            except Exception:
+                t = "-"
+        if t not in rets:
+            t = "-"
+        rets[t].append(rr["ret"])
+    out = {}
+    for t in order:
+        rs = rets[t]
+        if not rs:
+            out[t] = {"n": 0, "hit": None, "avg": None, "ci_lo": None, "ci_hi": None}
+            continue
+        hit = sum(1 for v in rs if v > 0)
+        ci_lo, ci_hi = _wilson_ci(len(rs), hit)
+        out[t] = {"n": len(rs), "hit": round(hit / len(rs), 4),
+                  "avg": round(statistics.mean(rs), 6),
+                  "ci_lo": ci_lo, "ci_hi": ci_hi}
+    return out
+
+
 def _reason_strategy(reason, st):
     """从条件单 reason / 标的关系中解析策略。优先 reason 前缀, 回退按代码关联持仓。"""
     if isinstance(reason, str):
@@ -583,6 +626,7 @@ def strategy_report(st=None):
         }
     report["_generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     report["_summary"] = sig.get("_summary", {})
+    report["_tiers"] = tier_stats()
     return report
 
 
@@ -644,6 +688,29 @@ def _render_report(rep):
         L.append("")
     L.append("> 命中=信号后 N 根方向化命中 (多头 ret>0); 触点=条件单触发时 correct 判断; "
              "盈利=已平仓净收益 (扣成本)。")
+    # ── 基本面分层表 (信号日 as-of 财报, 公告日前视安全) ──
+    tiers = rep.get("_tiers") or {}
+    if any((d.get("n") or 0) > 0 for d in tiers.values()):
+        L.append("")
+        L.append("## 按基本面分层 (20根方向命中 · 财报按公告日 as-of 无前视)")
+        L.append("")
+        L.append("| 层 | 说明 | 已评估 | 命中 | 均值 |")
+        L.append("|---|---|---|---|---|")
+        _desc = {
+            "A": "优 (净利同比≥+15% 且营收非负)",
+            "B": "中性",
+            "C": "弱 (净利负增长 / 营收萎缩)",
+            "D": "排雷 (亏损 / 断崖 / 双杀)",
+            "-": "无历史财报 (fail-open)",
+        }
+        for t, d in tiers.items():
+            if not d.get("n"):
+                continue
+            L.append(f"| {t} | {_desc.get(t, t)} | {d['n']} "
+                     f"| {_hit20(d)} | {_pct(d.get('avg'))} |")
+        L.append("")
+        L.append("> 分层取信号日 as-of 最近一份已公告财报 (无前视); "
+                 "层间命中差即基本面分层判别力, 也是分层仓位权重 (A=1.0/D=0.25) 的依据。")
     return "\n".join(L)
 
 

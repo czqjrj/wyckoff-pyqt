@@ -70,6 +70,13 @@ ENABLE_EVENT_VSA = False
 # 周期级等权再平衡: 满仓且现金富余时, 把权重过低的持仓补足到 总权益/max_pos,
 # 消除"先买的大、后买的小"的顺序衰减与资金闲置 (利用率仅 ~66% 的根因)。
 REBALANCE = True
+# ── 基本面分层 (wyckoff/fund_history.py 单一权威) ────────────────
+# 分层仓位权重总开关: A=1.0/B=0.8/C=0.5/D=0.25 (信号日公告日前视安全的财报
+# 分层折成单仓资金权重); 关闭时下单不乘权重, 与分层引入前行为一致
+FUND_TIER_WEIGHT = True
+# 基本面硬门禁: 信号日 as-of 财报分层 D (报告期亏损/净利断崖) 不开新仓;
+# 无历史财报 fail-open 放行 (缺数据不惩罚), 与回放 --fund-gate 同口径
+FUND_GATE = False
 # ── 微信推送 (交易发生时通知, 渠道见 wechat_push.push_to_wechat) ─────
 PUSH_ENABLED = False
 PUSH_METHOD = "server_chan"  # "server_chan" | "wechat_work" | "wxpusher"
@@ -266,6 +273,7 @@ __all__ = [
     "TRAIL_ACTIVATE_PCT", "QLIB_VETO_ENABLED", "QLIB_VETO_HI",
     "WEAK_FILTER", "WEAK_MAX_POS", "WEAK_INDEX_CODE",
     "VA_WEIGHT", "ENABLE_VA", "ENABLE_LONG_LEFT", "ENABLE_EVENT_VSA", "REBALANCE",
+    "FUND_TIER_WEIGHT", "FUND_GATE",
     "PUSH_ENABLED", "PUSH_METHOD", "PUSH_SERVER_CHAN_KEY",
     "PUSH_WECHAT_CORP_ID", "PUSH_WECHAT_CORP_SECRET", "PUSH_WECHAT_AGENT_ID",
     "PUSH_WECHAT_TO_USER", "PUSH_WXPUSHER_APP_TOKEN", "PUSH_WXPUSHER_TOPIC_IDS",

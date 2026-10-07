@@ -524,6 +524,9 @@ DEFAULT_SETTINGS = {
     "paper_enable_va": False,
     "paper_enable_long_left": False,
     "paper_enable_event_vsa": False,
+    # 基本面分层 (fund_history.py): 分层仓位权重 / 硬门禁
+    "paper_fund_tier_weight": True,
+    "paper_fund_gate": False,
     "paper_rebalance": True,
     "paper_push_enabled": False,
     "paper_push_method": "server_chan",
