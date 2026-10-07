@@ -138,7 +138,14 @@ def load_market_gate(datalen=850):
 
 
 def newest_buyable(rec, j, window=10, require_confirm=False, event_types=None):
-    """返回该股票在 bar j 处可买入的最新事件 (事件在 j 之前 ≤window 根内)。
+    """返回该股票在决策 bar j 处可买入的最新事件 (事件在 j 之前 ≤window 根内)。
+
+    因果口径 (决策/成交分离):
+      - 决策用 bar j 及之前的数据 (事件 bar idx <= j, 收盘才可知) —— 本函数只管
+        「哪些事件在 bar j 已知」, 允许 idx == j;
+      - 成交一律在 bar j+1 开盘 (entry_open), 因为 bar j 的信息在 bar j 开盘还
+        不存在。原实现用 bar j 开盘成交 = 前视, 回测 PnL 系统性偏乐观。
+      - 由此「事件后一根开盘买入」自然成立 (idx == j 时成交 open[idx+1])。
 
     event_types: 可选事件类型白名单 (None=全部已入库类型)。与 load_stock_events
     解耦: 同一份 superset 缓存可换不同 --events 子集对照 (Spring-only 不启用时,
@@ -149,7 +156,7 @@ def newest_buyable(rec, j, window=10, require_confirm=False, event_types=None):
       - True:  全类型要求确认 (旧逻辑, 不区分类型)
       - "st":  仅 ST 事件要求 confirmed + avail_idx+1 已到;
                Spring/LPS/Shakeout/SC 事件即买, 不等确认。
-    返回 (event, buy_bar) 或 None。buy_bar 用事件后下一根=事件idx+1 (开盘买入)。
+    返回 event dict (成交 bar = 调用方的 j+1) 或 None。
     """
     ST_CONFIRM_TYPES = {"ST"}
     best = None
@@ -176,6 +183,16 @@ def newest_buyable(rec, j, window=10, require_confirm=False, event_types=None):
     if best is None:
         return None
     return best
+
+
+def entry_open(rec, j):
+    """成交价 = 决策 bar j 的下一根开盘 (bar j 的信息在 bar j 开盘尚不存在,
+    用 open[j] 成交即前视)。无下一根 (行情末端) → None 表示当日不可成交。"""
+    opens = rec.get("open") or []
+    if j < 0 or j + 1 >= len(opens):
+        return None
+    px = opens[j + 1]
+    return None if px is None else float(px)
 
 
 BEAR_TYPES = {"UTAD", "LPSY"}
@@ -585,6 +602,9 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             j = day_to_j[k].get(D)
             if j is None:
                 continue
+            px = entry_open(rec, j)
+            if px is None:
+                continue
             ev = newest_buyable(rec, j, window=params["window"],
                                 require_confirm=params.get("disc_confirm"),
                                 event_types=event_set)
@@ -597,7 +617,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                 if va is None:
                     continue
                 ev, strategy = va, va["strategy"]
-            # 价值吸筹·确认式入场: 事件后首根收上 MA10 当日才算信号/可买
+            # 价值吸筹·确认式入场: 确认 bar=事件后首根收上 MA10 当日为决策日,
+            # 成交顺延到下一根开盘 (entry_open) —— 收盘站上 MA10 当日开盘不可知
             if strategy == "screener_value_accumulation" and params.get("va_confirm"):
                 ci = va_confirm_idx(rec, int(ev.get("idx") or 0))
                 if ci is None or j != ci:
@@ -617,7 +638,7 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
                     "code": code,
                     "conf": int(ev["conf"] or 0),
                     "type": ev["type"],
-                    "open": rec["open"][j],
+                    "open": px,
                     "sector": rec.get("sector", ""),
                     "chain": rec["chain"],
                     "strategy": strategy,
@@ -668,7 +689,8 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
         cands.sort(key=lambda x: -x["conf"])
 
         def _fill_blocked(code, side):
-            """涨跌停成交约束: D 日该股最新 K 封板 → 返回 True (顺延不成交)。"""
+            """涨跌停成交约束: 成交 bar (j+1) 该股封板 → 返回 True (不成交)。
+            决策在 bar j, 成交在 bar j+1 开盘, 故按 j+1 的板况判定。"""
             idx = code_to_idx.get(code)
             if idx is None:
                 return False
@@ -676,7 +698,10 @@ def _replay_impl(paper, hold, stocks, params, market_gate, S, prob_map=None):
             j = day_to_j[idx].get(D)
             if j is None:
                 return False
-            return paper._limit_blocked(code, side, r["df"].iloc[: j + 1])
+            jb = j + 1
+            if jb >= len(r["df"]):
+                return True
+            return paper._limit_blocked(code, side, r["df"].iloc[: jb + 1])
 
         def _try_fill(cand):
             if len(st["positions"]) >= cfg["max_pos"]:

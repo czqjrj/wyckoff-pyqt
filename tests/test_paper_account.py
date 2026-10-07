@@ -493,6 +493,36 @@ def test_newest_buyable_st_confirm_semantics():
     assert newest_buyable(rec, 95, require_confirm="all") is None
 
 
+def test_entry_open_fills_next_bar_not_same_day():
+    """成交价必须是决策 bar 的下一根开盘 (entry_open), 用 open[j] 成交 =
+    拿 bar j 收盘才可知的信息做 bar j 开盘的交易 (前视, 回测 PnL 偏乐观)。
+
+    newest_buyable 仍允许事件当日为决策 bar (idx == j), 「事件后一根开盘
+    买入」由成交价口径保证, 而不是把事件排除在外。
+    """
+    import os
+    import sys
+    _rp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "scripts")
+    if _rp not in sys.path:
+        sys.path.insert(0, _rp)
+    from paper_replay_bt import entry_open, newest_buyable
+
+    rec = {"events": [{"idx": 50, "type": "Spring", "conf": 90}],
+           "open": [10.0 + i for i in range(100)]}
+    # 决策: 事件当日即可决策 (收盘可知)
+    assert newest_buyable(rec, 50) is not None
+    assert newest_buyable(rec, 60) is not None          # window=10 末根
+    assert newest_buyable(rec, 61) is None              # 超出窗口
+    # 成交: 决策 bar 的下一根开盘, 不是决策 bar 自身开盘
+    assert entry_open(rec, 50) == 61.0                  # open[51]
+    assert entry_open(rec, 50) != float(rec["open"][50])
+    assert entry_open(rec, 50 + 10) is not None
+    # 行情末端无下一根 → 不可成交
+    assert entry_open(rec, 99) is None
+    assert entry_open(rec, -1) is None
+
+
 def test_signal_anchor_uses_event_day_close():
     """回放信号锚点必须=事件日+事件日收盘 (与实盘 event_date/event_px、
     主信号库 event date 同口径); 不能用扫描日/当日开盘, 否则 H5/H10/H20

@@ -132,7 +132,13 @@ def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last,
 
     返回 {conf,type,open,strategy,flow,stop_pct,take_pct,kind,src} 或 None。
     mkt_ok: 当日大盘状态 (仅纪律/价值受用; 左侧/事件+VSA 免门禁)。
+
+    因果口径: 决策用 bar j 及之前数据, 成交价 = bar j+1 开盘 (entry_open);
+    用 open[j] 成交等于用 bar j 收盘的信息做 bar j 开盘的交易 (前视)。
     """
+    px = pbt.entry_open(rec, j)
+    if px is None:
+        return None
     # 纪律
     ev = pbt.newest_buyable(rec, j, window=params["window"])
     if ev is not None:
@@ -144,7 +150,7 @@ def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last,
         return {
             "conf": conf,
             "type": ev["type"],
-            "open": float(rec["open"][j]),
+            "open": px,
             "strategy": STRAT_KEY[candidates.STRATEGY_DISCIPLINE],
             "flow": pbt._flow_score(rec, j),
             "kind": "",
@@ -176,7 +182,7 @@ def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last,
         return {
             "conf": econf,
             "type": etype,
-            "open": float(rec["open"][j]),
+            "open": px,
             "strategy": STRAT_KEY[candidates.STRATEGY_VALUE_ACC],
             "flow": pbt._flow_score(rec, j),
             "kind": "",
@@ -188,14 +194,14 @@ def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last,
     if left_on:
         b = left_candidate(rec, j, last_bar=left_last)
         if b is not None:
-            pp = left_pct(b, float(rec["open"][j]))
+            pp = left_pct(b, px)
             if pp is not None:
                 return {
                     "conf": int(b.get("conf") or 50),
                     "type": b.get("type_label")
                     if isinstance(b.get("type_label"), str)
                     else b.get("label", b["kind"]),
-                    "open": float(rec["open"][j]),
+                    "open": px,
                     "strategy": STRAT_KEY[candidates.STRATEGY_LONG_LEFT],
                     "flow": pbt._flow_score(rec, j),
                     "kind": b["kind"],
@@ -210,7 +216,7 @@ def per_day_candidate(rec, j, params, left_last, mkt_ok, left_on, va_last,
             return {
                 "conf": int(ec.get("conf") or 0),
                 "type": ec.get("type", "Spring"),
-                "open": float(rec["open"][j]),
+                "open": px,
                 "strategy": STRAT_KEY[candidates.STRATEGY_EVENT_VSA],
                 "flow": pbt._flow_score(rec, j),
                 "kind": "",

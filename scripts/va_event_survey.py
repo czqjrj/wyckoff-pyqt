@@ -29,10 +29,14 @@ HOLD = 20
 
 
 def rule_ret(closes, opens, buy_i):
-    """固定止盈/止损/持有规则的单笔收益 (收盘判定, 无盘中高/低, 略保守且与回放近似)."""
-    if buy_i + 1 >= len(closes):
+    """固定止盈/止损/持有规则的单笔收益 (收盘判定, 无盘中高/低, 略保守且与回放近似)。
+
+    成交价 = 决策 bar buy_i 的下一根开盘 (opens[buy_i+1]): 用 opens[buy_i] 等于
+    拿 bar buy_i 收盘才可知的信息在同日开盘成交 (前视), 与回放 entry_open 同口径。
+    """
+    if buy_i + 1 >= len(closes) or buy_i + 1 >= len(opens):
         return 0.0
-    entry = opens[buy_i]
+    entry = opens[buy_i + 1]
     if entry <= 0:
         return 0.0
     for k in range(1, HOLD + 1):
@@ -106,12 +110,16 @@ def main():
         rows = []
         for it in items:
             rec = by_code[it["code"]]
-            o = float(rec["open"][it["j"]])
+            j = it["j"]
+            # 成交 = 决策 bar j 的下一根开盘 (与回放 entry_open 同口径, 无前视)
+            o = float(rec["open"][j + 1]) if j + 1 < len(rec["open"]) else None
             cl = rec["close"]
             futs = {}
             for h in (5, 10, 20):
-                p = it["j"] + h
-                futs[h] = (cl[p] / o - 1) if p < len(cl) else None
+                p = j + 1 + h
+                futs[h] = (
+                    (cl[p] / o - 1) if o and p < len(cl) else None
+                )
             rows.append({
                 "code": it["code"],
                 "type": it["type"],
