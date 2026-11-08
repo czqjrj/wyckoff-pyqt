@@ -357,6 +357,8 @@ class MainWindow(QMainWindow):
         a.addAction("强制刷新分析", "Ctrl+F5", lambda: self.on_analyze(force_refresh=True))
         a.addSeparator()
         a.addAction("个股备注", self.open_notes)
+        a.addSeparator()
+        a.addAction("基本面分析", "Ctrl+Shift+F", self.open_fund_tab)
 
         # 自选: 自选股管理与盯盘监测
         w = m.addMenu("自选")
@@ -719,6 +721,8 @@ class MainWindow(QMainWindow):
         self._ac_container = None
         # 今日入场点: 懒创建 Tab (恒置于最后, on_scan_entries 触发创建)
         self.entry_tab = None
+        # 基本面分析: 懒创建 Tab (open_fund_tab 触发创建, 跟随当前标的)
+        self.fund_tab = None
         # 模拟盘: 常驻固定 Tab (_ensure_paper_tab 建立, 不可关闭)
         self.paper_tab = None
 
@@ -1856,8 +1860,27 @@ class MainWindow(QMainWindow):
             self.tabs.indexOf(self.paper_tab),
             self.tabs.tabBar().ButtonPosition.RightSide, None)
 
+    def open_fund_tab(self):
+        """懒创建 基本面分析 Tab (紧随 模拟盘, 可关闭), 跟随当前标的。"""
+        if self.fund_tab is not None and self.tabs.indexOf(self.fund_tab) >= 0:
+            self.tabs.setCurrentWidget(self.fund_tab)
+        else:
+            from .fund_tab import FundamentalsTab
+            self.fund_tab = FundamentalsTab(self)
+            eidx = self.tabs.indexOf(self.entry_tab) if self.entry_tab is not None else -1
+            if eidx >= 0:
+                idx = self.tabs.insertTab(eidx, self.fund_tab, "基本面分析")
+            else:
+                self.tabs.addTab(self.fund_tab, "基本面分析")
+                idx = self.tabs.count() - 1
+            self.tabs.setCurrentIndex(idx)
+        if self._current_code:
+            self.fund_tab.attach_stock(self._current_code)
+
     def _load_code(self, code):
         self._current_code = code
+        if self.fund_tab is not None:
+            self.fund_tab.attach_stock(code)
         self.on_analyze()
 
     def _remember_last_analyzed(self):
@@ -1903,6 +1926,8 @@ class MainWindow(QMainWindow):
 
         self._current_code = r["code"]
         self._current_name = r.get("name") or ""
+        if self.fund_tab is not None:
+            self.fund_tab.attach_stock(r["code"])
         self._remember_last_analyzed()
         self._last_summary = r["summary"]
         self._last_df = r.get("df")
@@ -3205,6 +3230,10 @@ class MainWindow(QMainWindow):
             self.tabs.removeTab(index)
             widget.deleteLater()
             self.entry_tab = None
+        elif self.fund_tab is not None and widget is self.fund_tab:
+            self.tabs.removeTab(index)
+            widget.deleteLater()
+            self.fund_tab = None
 
     # ── 批量扫描 ──
     def scan_watchlist(self):
@@ -3734,6 +3763,13 @@ font-family:'Noto Sans CJK SC',serif;font-size:13px;padding:14px;line-height:1.7
             pt = getattr(self, "paper_tab", None)
             if pt is not None:
                 pt.apply_theme()
+        except Exception:
+            pass
+        # 基本面分析 Tab 随主题重刷 (构造期烧入的内联配色)
+        try:
+            ft = getattr(self, "fund_tab", None)
+            if ft is not None:
+                ft.apply_theme()
         except Exception:
             pass
         # 批量更新: 4图表重渲染 + 主题刷新合并为一次重绘

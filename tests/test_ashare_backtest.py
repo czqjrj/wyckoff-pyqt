@@ -1,0 +1,83 @@
+"""状态分机械规则回测单元测试。"""
+
+import numpy as np
+import pandas as pd
+
+from wyckoff import ashare_backtest as ab
+
+
+def _frame(n=320, drift=0.0008, pattern=None):
+    close = 100 * np.exp(np.cumsum(np.full(n, drift)))
+    day = pd.date_range("2024-01-01", periods=n, freq="B")
+    if pattern == "alternate":
+        score = np.where(np.arange(n) % 2 == 0, 0.0, 80.0)
+    else:
+        score = np.full(n, 80.0)
+    return pd.DataFrame(
+        {
+            "day": day,
+            "close": close,
+            "ma200": pd.Series(close).rolling(200, min_periods=120).mean(),
+            "regime_score": score,
+        }
+    )
+
+
+def test_exposure_from_score():
+    assert ab.exposure_from_score(80) == 0.8
+    assert ab.exposure_from_score(60) == 0.6
+    assert ab.exposure_from_score(40) == 0.4
+    assert ab.exposure_from_score(25) == 0.2
+    assert ab.exposure_from_score(10) == 0.0
+    assert ab.exposure_from_score(None) == 0.0
+    assert ab.exposure_from_score(float("nan")) == 0.0
+
+
+def test_overlay_exposure():
+    assert ab.overlay_exposure(80, False) == 0.0
+    assert ab.overlay_exposure(80, True) == 1.0
+    assert ab.overlay_exposure(40, True) == 0.8
+    assert ab.overlay_exposure(25, True) == 0.5
+    assert ab.overlay_exposure(10, True) == 0.2
+    assert ab.overlay_exposure(None, True) == 0.2
+
+
+def test_backtest_metrics_and_baseline():
+    f = _frame()
+    out = ab.backtest_state(f, cost_bps=5)
+    assert out["ok"] is True
+    assert out["strategy"]["avg_exposure"] > 79
+    assert out["buy_hold"]["avg_exposure"] > 99
+    assert out["strategy"]["max_drawdown"] <= 0
+    assert out["buy_hold"]["total_return"] > out["strategy"]["total_return"]
+    assert out["ma200"]["total_return"] is not None
+    assert out["overlay"]["avg_exposure"] > 0
+    assert out["yearly"]
+    assert out["rolling"]["n"] >= 1
+    assert out["rolling"]["win_rate"] is not None
+    assert len(out["equity"]["dates"]) == len(f)
+    assert out["equity"]["strategy"][0] == 1.0
+    assert out["equity"]["overlay"][0] == 1.0
+
+
+def test_cost_reduces_return():
+    f = _frame(pattern="alternate")
+    cheap = ab.backtest_state(f, cost_bps=0)
+    expensive = ab.backtest_state(f, cost_bps=50)
+    assert cheap["strategy"]["total_return"] > expensive["strategy"]["total_return"]
+    assert expensive["strategy"]["trades"] > 0
+
+
+def test_backtest_insufficient_data():
+    f = _frame(n=30)
+    out = ab.backtest_state(f)
+    assert out["ok"] is False
+
+
+def test_render_backtest():
+    text = ab.render_backtest(ab.backtest_state(_frame()))
+    assert "状态分机械规则回测" in text
+    assert "MA200" in text
+    assert "MA200+状态分" in text
+    assert "滚动窗口对比" in text
+    assert "买入持有" in text

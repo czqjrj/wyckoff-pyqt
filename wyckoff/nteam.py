@@ -11,6 +11,7 @@
   y1/y5/y20: 近1/5/20日主力净流入 (亿元); proxy/断连时部分为 None。
   verdict: 疑似买入/净流入/正常/净流出/疑似减仓/疑似买入(量价)/疑似减仓(量价)/数据断连
 """
+
 from concurrent.futures import ThreadPoolExecutor
 
 from ._shared import http_session
@@ -33,12 +34,20 @@ NTEAM_ETFS = [
     ("sh510880", "上证红利ETF"),
 ]
 
-SPIKE_RATIO = 2.5     # 单日主力净流入相对近20日均值放大倍数 → 异动
-MIN_FLOW_YI = 1.0     # 异动判定所需最小绝对额 (亿元)
-VOL_RATIO = 2.0       # 量价代理: 量比阈值
+SPIKE_RATIO = 2.5  # 单日主力净流入相对近20日均值放大倍数 → 异动
+MIN_FLOW_YI = 1.0  # 异动判定所需最小绝对额 (亿元)
+VOL_RATIO = 2.0  # 量价代理: 量比阈值
 
-_ORDER = {"疑似买入": 0, "疑似买入(量价)": 0, "净流入": 1, "正常": 2,
-          "净流出": 3, "疑似减仓": 4, "疑似减仓(量价)": 4, "数据断连": 5}
+_ORDER = {
+    "疑似买入": 0,
+    "疑似买入(量价)": 0,
+    "净流入": 1,
+    "正常": 2,
+    "净流出": 3,
+    "疑似减仓": 4,
+    "疑似减仓(量价)": 4,
+    "数据断连": 5,
+}
 
 
 def em_flow_available(timeout=3):
@@ -46,13 +55,16 @@ def em_flow_available(timeout=3):
     try:
         r = http_session().get(
             "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
-            params={"secid": "1.510300", "fields1": "f1,f2,f3,f7",
-                    "fields2": ("f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,"
-                                "f61,f62,f63,f64,f65"),
-                    "klt": "101", "lmt": "3"},
-            headers={"User-Agent": "Mozilla/5.0",
-                     "Referer": "https://quote.eastmoney.com/"},
-            timeout=timeout)
+            params={
+                "secid": "1.510300",
+                "fields1": "f1,f2,f3,f7",
+                "fields2": ("f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65"),
+                "klt": "101",
+                "lmt": "3",
+            },
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"},
+            timeout=timeout,
+        )
         if r.status_code != 200:
             return False
         kl = ((r.json().get("data") or {}).get("klines")) or []
@@ -67,9 +79,10 @@ def track_nteam(force=False):
     rt = fetch_realtime(codes)
     flow_ok = em_flow_available()
     with ThreadPoolExecutor(max_workers=6) as ex:
-        futures = [ex.submit(_track_one, symbol, name, rt.get(symbol[2:], {}),
-                             flow_ok)
-                   for symbol, name in NTEAM_ETFS]
+        futures = [
+            ex.submit(_track_one, symbol, name, rt.get(symbol[2:], {}), flow_ok)
+            for symbol, name in NTEAM_ETFS
+        ]
         out = [f.result() for f in futures]
     out.sort(key=lambda r: (_ORDER.get(r["verdict"], 5), -abs(r.get("y1") or 0)))
     return out
@@ -77,10 +90,23 @@ def track_nteam(force=False):
 
 def _track_one(symbol, name, info, flow_ok=True):
     code = symbol[2:]
-    base = {"code": code, "name": name, "symbol": symbol,
-            "price": info.get("price"), "pct": info.get("pct"),
-            "y1": None, "y5": None, "y20": None, "ratio": None,
-            "verdict": "正常", "source": "none", "detail": ""}
+    base = {
+        "code": code,
+        "name": name,
+        "symbol": symbol,
+        "price": info.get("price"),
+        "pct": info.get("pct"),
+        "y1": None,
+        "y5": None,
+        "y20": None,
+        "ratio": None,
+        "proxy_y1": None,
+        "proxy_y5": None,
+        "proxy_y20": None,
+        "verdict": "正常",
+        "source": "none",
+        "detail": "",
+    }
     flow = None
     if flow_ok:
         try:
@@ -109,15 +135,19 @@ def _track_one(symbol, name, info, flow_ok=True):
         if df is not None and len(df) >= 21:
             body = (df["close"] - df["open"]) * df["volume"]
             f1 = float(body.iloc[-1])
+            f5 = float(body.tail(5).sum())
+            f20 = float(body.tail(20).sum())
             prev = float(df["volume"].iloc[-21:-1].mean())
             vol_ratio = float(df["volume"].iloc[-1]) / prev if prev > 0 else 0.0
             base["y1"] = f1 / 1e8
+            base["proxy_y1"] = f1 / 1e8
+            base["proxy_y5"] = f5 / 1e8
+            base["proxy_y20"] = f20 / 1e8
             base["ratio"] = round(vol_ratio, 2)
             base["source"] = "proxy"
             base["detail"] = f"量比{vol_ratio:.1f}"
             if vol_ratio >= VOL_RATIO:
-                base["verdict"] = ("疑似买入(量价)" if f1 > 0
-                                   else "疑似减仓(量价)")
+                base["verdict"] = "疑似买入(量价)" if f1 > 0 else "疑似减仓(量价)"
             else:
                 base["verdict"] = "正常"
             return base
@@ -135,5 +165,12 @@ def nteam_summary(results):
     outflow = sum(1 for r in results if r["verdict"] == "净流出")
     proxy = sum(1 for r in results if r.get("source") == "proxy")
     down = sum(1 for r in results if r["verdict"] == "数据断连")
-    return {"total": len(results), "buy": buy, "sell": sell,
-            "inflow": inflow, "outflow": outflow, "proxy": proxy, "down": down}
+    return {
+        "total": len(results),
+        "buy": buy,
+        "sell": sell,
+        "inflow": inflow,
+        "outflow": outflow,
+        "proxy": proxy,
+        "down": down,
+    }
