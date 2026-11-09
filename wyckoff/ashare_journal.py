@@ -114,6 +114,10 @@ def _extract_record(result: dict) -> dict:
         st = (an.get("horizons") or {}).get(str(h)) or {}
         analogs[str(h)] = {
             "up_prob": _f(st.get("up_prob")),
+            "up_prob_ind": _f(st.get("up_prob_ind")),
+            "up_ci_low": _f(st.get("up_ci_low")),
+            "up_ci_high": _f(st.get("up_ci_high")),
+            "n_eff": int(st.get("n_eff") or 0),
             "median": _f(st.get("median")),
             "p10": _f(st.get("p10")),
             "p90": _f(st.get("p90")),
@@ -144,12 +148,26 @@ def _extract_record(result: dict) -> dict:
             }
         )
 
+    tr = result.get("state_transitions") or {}
+    transitions = {}
+    for h in HORIZONS:
+        hz = (tr.get("horizons") or {}).get(str(h)) or {}
+        if not hz:
+            continue
+        transitions[str(h)] = {
+            "better": hz.get("better"),
+            "same": hz.get("same"),
+            "worse": hz.get("worse"),
+            "n": hz.get("n"),
+        }
+
     return {
         "id": f"{result.get('as_of')}:{primary}",
         "as_of": result.get("as_of"),
         "created_at": result.get("generated_at") or _now(),
         "updated_at": _now(),
         "primary": primary,
+        "label_version": result.get("label_version") or 0,
         "name": p.get("name"),
         "close": _round(p.get("close")),
         "day_pct": _round(p.get("day_pct")),
@@ -166,6 +184,7 @@ def _extract_record(result: dict) -> dict:
             "high": rb.get("high"),
         },
         "analogs": analogs,
+        "transitions": transitions,
         "levels": levels,
         "scenarios": scenarios,
         "market": {
@@ -347,6 +366,10 @@ def compare_with_previous(result: dict, path: str | None = None) -> dict | None:
     prev_state = prev.get("state") or "--"
     cur_phase = p.get("phase") or "--"
     prev_phase = prev.get("phase") or "--"
+    # 标签口径变化时不做状态切换对比, 避免升级当天误报
+    cur_lv = int(result.get("label_version") or 0)
+    prev_lv = int(prev.get("label_version") or 0)
+    same_label_version = cur_lv == prev_lv
 
     cur_rb = result.get("risk_budget") or {}
     prev_rb = prev.get("risk_budget") or {}
@@ -364,7 +387,9 @@ def compare_with_previous(result: dict, path: str | None = None) -> dict | None:
         "score_delta": round(cur_score - prev_score, 1),
         "state_from": prev_state,
         "state_to": cur_state,
-        "state_changed": prev_state != cur_state,
+        "state_changed": (prev_state != cur_state) and same_label_version,
+        "label_version_from": prev_lv,
+        "label_version_to": cur_lv,
         "phase_from": prev_phase,
         "phase_to": cur_phase,
         "phase_changed": prev_phase != cur_phase,

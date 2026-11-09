@@ -39,7 +39,68 @@ def _patch(monkeypatch, money=None, credit=None, shibor=None, bond=None):
 def test_month_key():
     assert al._month_key("2026年9月份") == "2026-09"
     assert al._month_key("2026-09") == "2026-09"
+    assert al._month_key(202609) == "2026-09"
+    assert al._month_key("202609") == "2026-09"
     assert al._month_key("bad") is None
+
+
+def test_fetch_credit_primary_source(monkeypatch):
+    import akshare as ak
+
+    months = pd.period_range("2023-01", periods=24, freq="M")
+    df = pd.DataFrame(
+        {
+            "月份": [p.strftime("%Y年%m月份") for p in months],
+            "当月": np.arange(24, dtype=float),
+            "当月-同比增长": np.zeros(24),
+            "当月-环比增长": np.zeros(24),
+            "累计": np.arange(24, dtype=float) * 2,
+            "累计-同比增长": np.linspace(-5, 10, 24),
+        }
+    )
+    monkeypatch.setattr(ak, "macro_china_new_financial_credit", lambda: df)
+    out = al._fetch_credit()
+    assert out is not None
+    assert len(out) == 24
+    assert out["source"].iloc[-1] == "官方累计同比"
+    assert out["month"].iloc[-1] == "2024-12"
+
+
+def test_fetch_credit_fallback_shrzgm(monkeypatch):
+    import akshare as ak
+
+    def _boom():
+        raise RuntimeError("primary down")
+
+    months = pd.period_range("2022-01", periods=48, freq="M")
+    inc = [1000 + (i % 12) * 100 + (i // 12) * 50 for i in range(48)]
+    monkeypatch.setattr(ak, "macro_china_new_financial_credit", _boom)
+    monkeypatch.setattr(
+        ak,
+        "macro_china_shrzgm",
+        lambda: pd.DataFrame(
+            {
+                "月份": [int(p.strftime("%Y%m")) for p in months],
+                "社会融资规模增量": inc,
+            }
+        ),
+    )
+    out = al._fetch_credit()
+    assert out is not None
+    assert len(out) >= 20
+    assert out["source"].iloc[-1].startswith("增量滚动同比")
+    assert out["credit_yoy"].notna().all()
+    assert out["month"].iloc[-1] == "2025-12"
+
+
+def test_liquidity_credit_backup_note(monkeypatch):
+    backup = _credit()
+    backup["source"] = "增量滚动同比（备源）"
+    _patch(monkeypatch, _money(), backup, _shibor(), _bond())
+    out = al.build_liquidity_context()
+    assert out["credit_source"].startswith("增量")
+    assert "备源口径" in out["note"]
+    assert out["credit_yoy"] is not None
 
 
 def test_date_key_handles_ms_and_string():

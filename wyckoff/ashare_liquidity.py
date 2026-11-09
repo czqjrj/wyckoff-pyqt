@@ -2,7 +2,7 @@
 
 A股中期方向很吃“钱松不松”。本模块只用公开宏观数据做一张“资金面温度计”:
 - M1/M2 同比与剪刀差 (M1-M2)
-- 社融累计同比 (信用脉冲代理)
+- 社融同比 (信用脉冲代理; 主源累计同比, 备源增量滚动同比)
 - SHIBOR 3M
 - 中国 10 年期国债收益率
 
@@ -54,8 +54,12 @@ def _cached(key, fn):
 
 
 def _month_key(value) -> str | None:
-    """'2026年9月份' / '2026-09' → '2026-09'。"""
-    s = str(value or "")
+    """'2026年9月份' / '2026-09' / '202609' → '2026-09'。"""
+    s = str(value or "").strip()
+    # macro_china_shrzgm 的月份是 6 位整数 (202609)
+    m = re.fullmatch(r"(\d{4})(\d{2})", s)
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f"{m.group(1)}-{m.group(2)}"
     m = re.search(r"(\d{4})\D+(\d{1,2})", s)
     if not m:
         return None
@@ -103,21 +107,65 @@ def _fetch_money_supply() -> pd.DataFrame | None:
 
 
 def _fetch_credit() -> pd.DataFrame | None:
-    """社融累计同比 (月频)。列: month, credit_yoy。"""
+    """社融同比 (月频)。列: month, credit_yoy, source。
+
+    主源: macro_china_new_financial_credit 的“累计同比”;
+    备源: macro_china_shrzgm 月度增量的 12 个月滚动同比 (口径不同, 单独标注)。
+    """
     import akshare as ak
 
-    df = ak.macro_china_new_financial_credit()
+    try:
+        df = ak.macro_china_new_financial_credit()
+        if df is not None and len(df) > 0:
+            rows = []
+            for _, r in df.iterrows():
+                month = _month_key(r.iloc[0])
+                yoy = _f(r.iloc[5])
+                if month and yoy is not None:
+                    rows.append({"month": month, "credit_yoy": yoy, "source": "官方累计同比"})
+            if len(rows) >= 20:
+                return pd.DataFrame(rows).sort_values("month").reset_index(drop=True)
+            if rows:
+                log_exc("社融主源样本不足, 尝试备源", RuntimeError(f"{len(rows)} 条"))
+    except Exception as e:  # noqa: BLE001
+        log_exc("社融主源失败", e)
+    return _fetch_credit_shrzgm()
+
+
+def _fetch_credit_shrzgm() -> pd.DataFrame | None:
+    """社融增量备源: 月度增量 → 12 个月滚动同比。
+
+    `macro_china_shrzgm` 给的是“社会融资规模增量”(亿元), 没有官方同比;
+    这里用 12 个月滚动增量 / 去年同期 - 1 构造信用脉冲代理。
+    与主源的“累计同比”口径不同, 只用于主源断连时兜底, 报告会标注。
+    """
+    import akshare as ak
+
+    try:
+        df = ak.macro_china_shrzgm()
+    except Exception as e:  # noqa: BLE001
+        log_exc("社融备源失败", e)
+        return None
     if df is None or len(df) == 0:
         return None
     rows = []
     for _, r in df.iterrows():
         month = _month_key(r.iloc[0])
-        yoy = _f(r.iloc[5])
-        if month and yoy is not None:
-            rows.append({"month": month, "credit_yoy": yoy})
-    if not rows:
+        inc = _f(r.iloc[1])
+        if month and inc is not None:
+            rows.append({"month": month, "inc": inc})
+    if len(rows) < 24:
         return None
-    return pd.DataFrame(rows).sort_values("month").reset_index(drop=True)
+    d = pd.DataFrame(rows).sort_values("month").reset_index(drop=True)
+    # 同月重复时保留最后一条
+    d = d.drop_duplicates(subset=["month"], keep="last").reset_index(drop=True)
+    d["roll12"] = d["inc"].rolling(12, min_periods=12).sum()
+    d["credit_yoy"] = (d["roll12"] / d["roll12"].shift(12) - 1) * 100
+    d = d.dropna(subset=["credit_yoy"]).reset_index(drop=True)
+    if len(d) < 20:
+        return None
+    d["source"] = "增量滚动同比（备源）"
+    return d[["month", "credit_yoy", "source"]]
 
 
 def _fetch_shibor() -> pd.DataFrame | None:
@@ -236,6 +284,7 @@ def build_liquidity_context() -> dict:
         "m1_pct": None,
         "credit_yoy": None,
         "credit_pct": None,
+        "credit_source": None,
         "shibor3m": None,
         "shibor_pct": None,
         "bond10": None,
@@ -269,13 +318,17 @@ def build_liquidity_context() -> dict:
     if credit is not None and len(credit) >= 20:
         cy = _f(credit["credit_yoy"].iloc[-1])
         cy_pct = _pct_rank(credit["credit_yoy"], cy) if cy is not None else None
+        src = str(credit["source"].iloc[-1]) if "source" in credit.columns else ""
         out.update(
             {
                 "credit_yoy": _round(cy),
                 "credit_pct": cy_pct,
                 "credit_as_of": str(credit["month"].iloc[-1]),
+                "credit_source": src or None,
             }
         )
+        if src.startswith("增量"):
+            out["note"] += " 社融为增量滚动同比备源口径, 与官方累计同比不完全可比。"
         if cy_pct is not None:
             parts.append((cy_pct, 0.20))
 

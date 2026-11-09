@@ -232,6 +232,11 @@ def test_window_builds_and_renders_offline():
         assert w.tabs.count() == 7
         w._on_outlook(_fake_result())
         assert "大白话结论" in w.report_view.toPlainText()
+        assert "谨慎" in w.concl_state.text()
+        assert w.concl_one.text()
+        assert "仓位参考" in w.concl_action.text()
+        assert "关键位" in w.concl_levels.text()
+        assert "预警" in w.concl_alert.text()
         assert "上证指数" in w.lbl_head.text()
         assert "3649.18" in w.lbl_head.text()
         assert "数据" in w.lbl_quality.text()
@@ -360,6 +365,122 @@ def test_window_builds_and_renders_offline():
             w._sector_manual = True
             w._auto_select_sector({"industry": "白酒", "candidates": ["白酒"], "source": "cninfo"})
             assert w.stock_sector.currentData() == "银行"
+    finally:
+        w.close()
+        app.processEvents()
+
+
+def test_outlook_worker_progressive(monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    import ui.ashare_outlook_window as win
+    import wyckoff.ashare_outlook as ao
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    calls = {"build": [], "extras": None}
+
+    def fake_build(primary, **opts):
+        calls["build"].append(dict(opts))
+        return {
+            "primary": primary,
+            "indices": {primary: {"score": 20, "atr_pct": 1.5}},
+            "market": {},
+            "data_quality": {},
+            "alerts": [],
+            "risk_budget": {},
+        }
+
+    def fake_extras(result, **opts):
+        calls["extras"] = dict(opts)
+        result["sectors"] = {"n": 1}
+        return result
+
+    monkeypatch.setattr(win, "build_outlook", fake_build)
+    monkeypatch.setattr(ao, "load_extras", fake_extras)
+
+    worker = win._OutlookWorker(
+        "sh000001",
+        {
+            "datalen": 100,
+            "include_sectors": True,
+            "include_etf": True,
+            "include_liquidity": False,
+            "include_valuation": False,
+            "progressive": True,
+        },
+    )
+    partials, dones, stages = [], [], []
+    worker.partial.connect(partials.append)
+    worker.done.connect(dones.append)
+    worker.stage.connect(stages.append)
+    worker.run()
+
+    # 第一阶段只拿指数核心
+    assert calls["build"][0]["include_sectors"] is False
+    assert calls["build"][0]["include_etf"] is False
+    assert calls["build"][0]["include_liquidity"] is False
+    # 第二阶段补 extras
+    assert calls["extras"] == {
+        "include_sectors": True,
+        "include_etf": True,
+        "include_liquidity": False,
+        "include_valuation": False,
+    }
+    assert partials and dones
+    assert dones[0]["sectors"] == {"n": 1}
+    assert stages and "核心已出" in stages[0]
+
+    # 未勾选 extras 时走单阶段，不调用 load_extras
+    calls["extras"] = None
+    worker2 = win._OutlookWorker(
+        "sh000001",
+        {
+            "datalen": 100,
+            "include_sectors": False,
+            "include_etf": False,
+            "include_liquidity": False,
+            "include_valuation": False,
+            "progressive": True,
+        },
+    )
+    worker2.run()
+    assert calls["extras"] is None
+
+
+def test_chart_kline_analogs_heatmap():
+    from PyQt6.QtWidgets import QApplication
+
+    from ui.ashare_outlook_window import AshareOutlookWindow
+
+    app = QApplication.instance() or QApplication([])
+    w = AshareOutlookWindow(auto_load=False)
+    try:
+        r = _fake_result()
+        n = 40
+        r["price_history"] = {
+            "dates": [f"2026-09-{i % 28 + 1:02d}" for i in range(n)],
+            "open": [100 + i * 0.1 for i in range(n)],
+            "high": [101 + i * 0.1 for i in range(n)],
+            "low": [99 + i * 0.1 for i in range(n)],
+            "close": [100.5 + i * 0.1 for i in range(n)],
+            "ma20": [100.2 + i * 0.1 for i in range(n)],
+            "ma50": [None] * n,
+            "ma200": [None] * n,
+        }
+        for h, vals in (
+            ("5", [1.2, -0.5, 0.3, 2.0, -1.1, 0.8]),
+            ("20", [0.5, -2.0, 1.3, 3.2, -0.7]),
+            ("60", [4.0, -1.5, 2.2]),
+        ):
+            r["analogs"]["horizons"][h]["samples"] = vals
+
+        w._on_outlook(r)
+
+        assert w.kline_plot.plotItem.listDataItems()
+        assert w.analog_plot.plotItem.listDataItems()
+        assert w.sector_heat.layout().count() == len(r["sectors"]["all"])
     finally:
         w.close()
         app.processEvents()

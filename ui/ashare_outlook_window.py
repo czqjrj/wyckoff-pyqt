@@ -5,6 +5,7 @@
 
 功能:
 - 选择主指数, 刷新状态报告
+- 渐进加载: 先出指数核心, 后台补板块/ETF/流动性
 - 报告 / 图表 / 板块 / 个股 / 自选批量 / 个股日志 / 预测日志 七个页签
 - 记录今日判断、回填到期结果、查看命中率/校准
 - 导出 Markdown 报告
@@ -15,14 +16,18 @@ from __future__ import annotations
 import os
 import time
 
+import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -30,6 +35,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -55,6 +61,7 @@ from wyckoff.ashare_journal import (
 )
 from wyckoff.ashare_outlook import (
     OUTLOOK_INDICES,
+    _plain_conclusion,
     _quality_issues,
     build_outlook,
     detect_stock_industry,
@@ -77,7 +84,15 @@ from . import theme
 
 
 class _OutlookWorker(QThread):
+    """构建 A 股状态报告。
+
+    渐进模式 (progressive=True 且勾选了板块/ETF/流动性):
+    先构建“指数核心”并 partial 发出，再补板块/ETF/流动性后 done 发出。
+    """
+
     done = pyqtSignal(object)
+    partial = pyqtSignal(object)
+    stage = pyqtSignal(str)
     failed = pyqtSignal(str)
 
     def __init__(self, primary, options, parent=None):
@@ -87,7 +102,33 @@ class _OutlookWorker(QThread):
 
     def run(self):
         try:
-            self.done.emit(build_outlook(primary=self.primary, **self.options))
+            opts = dict(self.options or {})
+            extras = {
+                "include_sectors": bool(opts.pop("include_sectors", False)),
+                "include_etf": bool(opts.pop("include_etf", False)),
+                "include_liquidity": bool(opts.pop("include_liquidity", False)),
+                "include_valuation": bool(opts.pop("include_valuation", False)),
+            }
+            progressive = bool(opts.pop("progressive", True)) and any(extras.values())
+            core = dict(
+                opts,
+                include_sectors=False,
+                include_etf=False,
+                include_liquidity=False,
+                include_valuation=False,
+            )
+            result = build_outlook(primary=self.primary, **core)
+            if not progressive:
+                self.done.emit(result)
+                return
+            self.partial.emit(result)
+            if result.get("error"):
+                self.done.emit(result)
+                return
+            self.stage.emit("核心已出，正在加载板块/ETF/流动性...")
+            from wyckoff.ashare_outlook import load_extras
+
+            self.done.emit(load_extras(result, **extras))
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{type(e).__name__}: {e}")
 
@@ -333,6 +374,70 @@ class _StockWorker(QThread):
 
 
 # ─────────────────────────────────────────────────────────────
+# 行业热力图
+# ─────────────────────────────────────────────────────────────
+
+
+def _fmt_pct(v) -> str:
+    try:
+        return f"{float(v):+.2f}%"
+    except (TypeError, ValueError):
+        return "--"
+
+
+def _heat_color(pct) -> QColor:
+    try:
+        v = max(-6.0, min(6.0, float(pct)))
+    except (TypeError, ValueError):
+        v = 0.0
+    c = QColor(theme.C_UP if v >= 0 else theme.C_DOWN)
+    c.setAlpha(int(35 + 175 * min(1.0, abs(v) / 6.0)))
+    return c
+
+
+class _SectorHeatmap(QWidget):
+    """行业热力图: 一格一个行业, 颜色深浅=当日涨跌强度。"""
+
+    COLUMNS = 10
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(3)
+        self.setMinimumHeight(110)
+        self.setMaximumHeight(210)
+
+    def update_rows(self, rows: list[dict]):
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        rows = [r for r in (rows or []) if r.get("name")]
+        if not rows:
+            lab = QLabel("暂无行业数据")
+            lab.setStyleSheet(f"color:{theme.C_MUTED};")
+            self._grid.addWidget(lab, 0, 0)
+            return
+        for i, r in enumerate(rows):
+            lab = QLabel(f"{r.get('name')}\n{_fmt_pct(r.get('pct'))}")
+            lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            c = _heat_color(r.get("pct"))
+            lab.setStyleSheet(
+                f"QLabel {{ background: rgba({c.red()},{c.green()},{c.blue()},{c.alpha()});"
+                f"color:{theme.C_TEXT}; border-radius:3px; padding:2px;"
+                f"font-size:{theme.font_pt('mini')}; }}"
+            )
+            lab.setToolTip(
+                f"{r.get('name')}\n"
+                f"当日 {_fmt_pct(r.get('pct'))}   20日资金 {r.get('flow20_yi')} 亿\n"
+                f"强度 {r.get('strength')}   风格 {r.get('tone') or '--'}"
+            )
+            self._grid.addWidget(lab, i // self.COLUMNS, i % self.COLUMNS)
+
+
+# ─────────────────────────────────────────────────────────────
 # 主窗口
 # ─────────────────────────────────────────────────────────────
 
@@ -407,12 +512,20 @@ class AshareOutlookWindow(QMainWindow):
         self.chk_sectors = QCheckBox("行业")
         self.chk_etf = QCheckBox("ETF")
         self.chk_liquidity = QCheckBox("流动性")
+        self.chk_valuation = QCheckBox("估值")
         self.chk_backtest = QCheckBox("回测")
         self.chk_changes = QCheckBox("对比上次")
+        self.chk_sectors.setToolTip("加载 90 个行业强弱（东财/同花顺，失败走新浪）")
+        self.chk_etf.setToolTip("宽基 ETF 资金流/份额，推断国家队托底或撤退（限流时用量价代理）")
+        self.chk_liquidity.setToolTip("M1/M2、社融、SHIBOR、10Y 国债，中期资金面")
+        self.chk_valuation.setToolTip("指数 PE/股息率/ERP；历史分位靠本地每日累积")
+        self.chk_backtest.setToolTip("状态分机械规则回测（含成本，仅参考）")
+        self.chk_changes.setToolTip("与上次记录对比（需先记录过）")
         for chk in (
             self.chk_sectors,
             self.chk_etf,
             self.chk_liquidity,
+            self.chk_valuation,
             self.chk_backtest,
             self.chk_changes,
         ):
@@ -437,33 +550,36 @@ class AshareOutlookWindow(QMainWindow):
 
         # 页签
         self.tabs = QTabWidget()
-        self.report_view = QTextBrowser()
-        self.report_view.setOpenExternalLinks(False)
-        self.report_view.setStyleSheet(
-            f"QTextBrowser {{ background:{theme.C_BG}; color:{theme.C_TEXT};"
-            f"border:1px solid {theme.C_BORDER}; border-radius:6px; padding:8px; }}"
-        )
-        self.report_view.setMarkdown("正在加载...")
-        self.tabs.addTab(self.report_view, "报告")
+        self.tabs.addTab(self._build_report_tab(), "报告")
 
         chart = QWidget()
         chart_lay = QVBoxLayout(chart)
         chart_lay.setContentsMargins(0, 0, 0, 0)
         chart_lay.setSpacing(6)
+        self.kline_plot = pg.PlotWidget()
         self.score_plot = pg.PlotWidget()
         self.equity_plot = pg.PlotWidget()
-        for plot in (self.score_plot, self.equity_plot):
+        self.analog_plot = pg.PlotWidget()
+        for plot in (self.kline_plot, self.score_plot, self.equity_plot, self.analog_plot):
             plot.setBackground(theme.C_PANEL)
             plot.showGrid(x=True, y=True, alpha=0.15)
             plot.getAxis("left").setPen(pg.mkPen(theme.C_MUTED))
             plot.getAxis("bottom").setPen(pg.mkPen(theme.C_MUTED))
             plot.getAxis("left").setTextPen(pg.mkPen(theme.C_MUTED))
             plot.getAxis("bottom").setTextPen(pg.mkPen(theme.C_MUTED))
+        self.kline_plot.setTitle("K线（刷新后显示）", color=theme.C_TEXT, size="10pt")
+        self.kline_plot.addLegend(offset=(10, 10))
         self.score_plot.setTitle("状态分历史", color=theme.C_TEXT, size="10pt")
         self.equity_plot.setTitle("机械规则净值（仅参考）", color=theme.C_TEXT, size="10pt")
         self.equity_plot.addLegend(offset=(10, 10))
-        chart_lay.addWidget(self.score_plot, 1)
-        chart_lay.addWidget(self.equity_plot, 1)
+        self.analog_plot.setTitle("历史类比收益分布（刷新后显示）", color=theme.C_TEXT, size="10pt")
+        self.analog_plot.addLegend(offset=(10, 10))
+        split = QSplitter(Qt.Orientation.Vertical)
+        for plot in (self.kline_plot, self.score_plot, self.equity_plot, self.analog_plot):
+            split.addWidget(plot)
+        split.setSizes([320, 200, 200, 180])
+        chart_lay.addWidget(split, 1)
+        self.chart_tab = chart
         self.tabs.addTab(chart, "图表")
         self.tabs.addTab(self._build_sector_tab(), "板块")
         self.tabs.addTab(self._build_stock_tab(), "个股")
@@ -487,6 +603,60 @@ class AshareOutlookWindow(QMainWindow):
         journal_lay.addWidget(self.journal_view, 1)
         self.tabs.addTab(journal, "预测日志")
         lay.addWidget(self.tabs, 1)
+        QShortcut(QKeySequence("F5"), self, activated=self.refresh)
+        QShortcut(QKeySequence("Ctrl+Shift+C"), self, activated=self.copy_conclusion)
+
+    def _build_report_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.concl_card = QFrame()
+        self.concl_card.setObjectName("conclCard")
+        self.concl_card.setStyleSheet(
+            f"QFrame#conclCard {{ background:{theme.C_PANEL};"
+            f"border:1px solid {theme.C_BORDER}; border-radius:6px; }}"
+        )
+        card_lay = QVBoxLayout(self.concl_card)
+        card_lay.setContentsMargins(12, 8, 12, 8)
+        card_lay.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self.concl_state = QLabel("--")
+        self.concl_state.setMinimumWidth(110)
+        self.concl_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.concl_state.setStyleSheet(
+            f"font-size:{theme.font_pt('h1')};font-weight:bold;color:{theme.C_MUTED};"
+        )
+        top.addWidget(self.concl_state)
+        self.concl_one = QLabel("刷新后显示一句话结论")
+        self.concl_one.setWordWrap(True)
+        self.concl_one.setStyleSheet(f"font-size:{theme.font_pt('body')};color:{theme.C_TEXT};")
+        top.addWidget(self.concl_one, 1)
+        self.btn_copy_concl = self._btn("复制结论", self.copy_conclusion)
+        top.addWidget(self.btn_copy_concl)
+        card_lay.addLayout(top)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(10)
+        self.concl_action = QLabel("仓位: --")
+        self.concl_levels = QLabel("关键位: --")
+        self.concl_alert = QLabel("预警: --")
+        for lab in (self.concl_action, self.concl_levels, self.concl_alert):
+            lab.setStyleSheet(f"font-size:{theme.font_pt('body-sm')};color:{theme.C_MUTED};")
+            bottom.addWidget(lab, 1)
+        card_lay.addLayout(bottom)
+        lay.addWidget(self.concl_card)
+
+        self.report_view = QTextBrowser()
+        self.report_view.setOpenExternalLinks(False)
+        self.report_view.setStyleSheet(
+            f"QTextBrowser {{ background:{theme.C_BG}; color:{theme.C_TEXT};"
+            f"border:1px solid {theme.C_BORDER}; border-radius:6px; padding:8px;"
+            f"font-size:{theme.font_pt('body')}; }}"
+        )
+        self.report_view.setMarkdown("正在加载...")
+        lay.addWidget(self.report_view, 1)
+        return w
 
     def _label(self, text):
         lab = QLabel(text)
@@ -521,6 +691,8 @@ class AshareOutlookWindow(QMainWindow):
         self.sector_filter.setPlaceholderText("搜索板块（如 银行 / 半导体）")
         self.sector_filter.textChanged.connect(self._filter_sectors)
         lay.addWidget(self.sector_filter)
+        self.sector_heat = _SectorHeatmap()
+        lay.addWidget(self.sector_heat)
         self.sector_table = QTableWidget(0, 6)
         self.sector_table.setHorizontalHeaderLabels(
             ["板块", "当日%", "20日资金(亿)", "强度", "风格", "成交额(亿)"]
@@ -889,20 +1061,31 @@ class AshareOutlookWindow(QMainWindow):
             "include_sectors": self.chk_sectors.isChecked(),
             "include_etf": self.chk_etf.isChecked(),
             "include_liquidity": self.chk_liquidity.isChecked(),
+            "include_valuation": self.chk_valuation.isChecked(),
             "include_backtest": self.chk_backtest.isChecked(),
             "include_changes": self.chk_changes.isChecked(),
+            "progressive": True,
         }
         worker = _OutlookWorker(primary, options, self)
-        self._start(worker, self._on_outlook, self._on_error, "正在拉取数据...")
+        worker.partial.connect(self._on_outlook)
+        worker.stage.connect(self._on_stage)
+        self._start(worker, self._on_outlook, self._on_error, "正在拉取指数核心...")
+
+    def _on_stage(self, msg: str):
+        self.lbl_status.setText(msg)
+        self.statusBar().showMessage(msg)
 
     def _on_outlook(self, result: dict):
         self.result = result
         if result.get("error"):
             self.report_view.setMarkdown(f"# 加载失败\n\n{result['error']}")
             self.lbl_head.setText("加载失败")
+            self.concl_state.setText("加载失败")
+            self.concl_one.setText(result["error"])
             return
         self.report_view.setMarkdown(render_report(result))
         self._update_header(result)
+        self._update_conclusion_card(result)
         issues = _quality_issues(result.get("data_quality") or {})
         if issues:
             text = "数据: " + "、".join(issues[:3])
@@ -921,6 +1104,8 @@ class AshareOutlookWindow(QMainWindow):
         self._update_alerts(result.get("alerts") or [])
         self._render_score_chart(result)
         self._render_equity_chart(result)
+        self._render_kline(result)
+        self._render_analogs(result)
         self._render_sectors(result)
         self._populate_sector_combo(result)
         self._filter_sectors(self.sector_filter.text())
@@ -930,7 +1115,7 @@ class AshareOutlookWindow(QMainWindow):
     def _update_source_label(self, result: dict):
         dq = result.get("data_quality") or {}
         n_ok = n_stale = n_missing = 0
-        for key in ("sectors", "etf", "liquidity"):
+        for key in ("sectors", "etf", "liquidity", "valuation"):
             q = dq.get(key)
             if not isinstance(q, dict):
                 continue
@@ -989,12 +1174,67 @@ class AshareOutlookWindow(QMainWindow):
             f"color:{color};font-size:{theme.font_pt('body')};font-weight:bold;"
         )
 
+    def _update_conclusion_card(self, result: dict):
+        p = (result.get("indices") or {}).get(result.get("primary")) or {}
+        rb = result.get("risk_budget") or {}
+        lv = result.get("primary_levels") or {}
+        alerts = result.get("alerts") or []
+        state = p.get("state") or "--"
+        score = p.get("score")
+        color = theme.C_MUTED
+        if state in ("进攻", "中性偏多"):
+            color = theme.C_UP
+        elif state in ("防御", "谨慎", "风险规避"):
+            color = theme.C_DOWN
+        self.concl_state.setText(f"{state}\n{score} 分" if score is not None else state)
+        self.concl_state.setStyleSheet(
+            f"font-size:{theme.font_pt('h1')};font-weight:bold;color:{color};"
+        )
+        rows = _plain_conclusion(result)
+        one = next((a for q, a in rows if q == "一句话结论"), "")
+        self.concl_one.setText(one or f"{p.get('name') or ''} {state}")
+        pos = (
+            f"{rb.get('low')}%-{rb.get('high')}%"
+            if rb.get("low") is not None and rb.get("high") is not None
+            else "--"
+        )
+        self.concl_action.setText(f"仓位参考: {pos}")
+        sup, res = lv.get("tr_bottom"), lv.get("tr_top")
+        self.concl_levels.setText(
+            f"关键位: 下沿 {sup if sup is not None else '--'} / "
+            f"上沿 {res if res is not None else '--'}"
+        )
+        if alerts:
+            self.concl_alert.setText(f"预警: {len(alerts)} 条 · {alerts[0].get('title')}")
+            self.concl_alert.setStyleSheet(
+                f"font-size:{theme.font_pt('body-sm')};color:{theme.C_AMBER};"
+            )
+        else:
+            self.concl_alert.setText("预警: 无")
+            self.concl_alert.setStyleSheet(
+                f"font-size:{theme.font_pt('body-sm')};color:{theme.C_MUTED};"
+            )
+        self.concl_card.setStyleSheet(
+            f"QFrame#conclCard {{ background:{theme.C_PANEL};"
+            f"border:1px solid {theme.C_BORDER}; border-left:4px solid {color};"
+            f"border-radius:6px; }}"
+        )
+
+    def copy_conclusion(self):
+        if not self.result:
+            QMessageBox.information(self, "提示", "先刷新报告，再复制结论。")
+            return
+        text = "\n".join(f"{q} {a}" for q, a in _plain_conclusion(self.result))
+        QApplication.clipboard().setText(text)
+        self.lbl_status.setText("结论已复制")
+
     # ── 板块 ────────────────────────────────────────────────
     def _render_sectors(self, result: dict):
         sec = result.get("sectors") or {}
         rows = sec.get("all") or []
         if not rows:
             rows = list(sec.get("top") or []) + list(sec.get("bottom") or [])
+        self.sector_heat.update_rows(sec.get("all") or rows)
         self.sector_table.blockSignals(True)
         self.sector_table.setSortingEnabled(False)
         self.sector_table.setRowCount(len(rows))
@@ -1447,6 +1687,130 @@ class AshareOutlookWindow(QMainWindow):
         self.equity_plot.getAxis("bottom").setTicks([self._x_ticks(dates)])
         self.equity_plot.setTitle("机械规则净值（仅参考）", color=theme.C_TEXT, size="10pt")
 
+    def _render_kline(self, result: dict):
+        self.kline_plot.clear()
+        legend = self.kline_plot.plotItem.legend
+        if legend is not None:
+            legend.clear()
+        ph = result.get("price_history") or {}
+        dates = ph.get("dates") or []
+        try:
+            o = np.asarray(ph.get("open"), dtype=float)
+            h = np.asarray(ph.get("high"), dtype=float)
+            lo = np.asarray(ph.get("low"), dtype=float)
+            c = np.asarray(ph.get("close"), dtype=float)
+        except (TypeError, ValueError):
+            o = h = lo = c = np.array([])
+        if not dates or len(c) == 0 or not (len(o) == len(h) == len(lo) == len(c)):
+            self.kline_plot.setTitle("K线（无数据）", color=theme.C_TEXT, size="10pt")
+            return
+        xs = np.arange(len(c), dtype=float)
+        valid = np.isfinite(o) & np.isfinite(h) & np.isfinite(lo) & np.isfinite(c)
+        up = c >= o
+        span = float(np.nanmax(h[valid]) - np.nanmin(lo[valid])) if valid.any() else 0.0
+        min_body = max(span * 0.0008, 1e-6)
+        for mask, color in ((valid & up, theme.C_UP), (valid & ~up, theme.C_DOWN)):
+            if not mask.any():
+                continue
+            wx = np.repeat(xs[mask], 2)
+            wy = np.empty(wx.size, dtype=float)
+            wy[0::2] = lo[mask]
+            wy[1::2] = h[mask]
+            self.kline_plot.plot(wx, wy, pen=pg.mkPen(color, width=1), connect="pairs")
+            body = np.maximum(np.abs(c[mask] - o[mask]), min_body)
+            self.kline_plot.addItem(
+                pg.BarGraphItem(
+                    x=xs[mask],
+                    height=body,
+                    y0=np.minimum(o[mask], c[mask]),
+                    width=0.62,
+                    brush=pg.mkBrush(color),
+                    pen=pg.mkPen(color, width=1),
+                )
+            )
+        for key, name, color in (
+            ("ma20", "MA20", theme.C_ACCENT),
+            ("ma50", "MA50", theme.C_AMBER),
+            ("ma200", "MA200", theme.C_UP),
+        ):
+            vals = np.asarray(ph.get(key) or [], dtype=float)
+            if len(vals) == len(xs) and np.isfinite(vals).any():
+                self.kline_plot.plot(xs, vals, pen=pg.mkPen(color, width=1.2), name=name)
+        lv = result.get("primary_levels") or {}
+        for val, name, color in (
+            (lv.get("tr_bottom"), "P&F下沿", theme.C_DOWN),
+            (lv.get("tr_top"), "P&F上沿", theme.C_UP),
+        ):
+            try:
+                y = float(val)
+            except (TypeError, ValueError):
+                continue
+            self.kline_plot.addItem(
+                pg.InfiniteLine(
+                    pos=y,
+                    angle=0,
+                    pen=pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine),
+                    label=name,
+                    labelOpts={"position": 0.04, "color": color},
+                )
+            )
+        snap = (result.get("indices") or {}).get(result.get("primary")) or {}
+        name = snap.get("name") or "指数"
+        self.kline_plot.getAxis("bottom").setTicks([self._x_ticks(dates)])
+        self.kline_plot.setTitle(f"{name} K线（近 {len(xs)} 日）", color=theme.C_TEXT, size="10pt")
+
+    def _render_analogs(self, result: dict):
+        self.analog_plot.clear()
+        legend = self.analog_plot.plotItem.legend
+        if legend is not None:
+            legend.clear()
+        hs = (result.get("analogs") or {}).get("horizons") or {}
+        series = []
+        for h, color in (("5", theme.C_ACCENT), ("20", theme.C_AMBER), ("60", theme.C_UP)):
+            st = hs.get(h) or {}
+            vals = np.asarray(st.get("samples") or [], dtype=float)
+            vals = vals[np.isfinite(vals)]
+            if vals.size >= 5:
+                series.append((h, vals, color))
+        if not series:
+            self.analog_plot.setTitle(
+                "历史类比收益分布（无样本数据）", color=theme.C_TEXT, size="10pt"
+            )
+            return
+        lo = min(v.min() for _, v, _ in series)
+        hi = max(v.max() for _, v, _ in series)
+        if hi - lo < 1e-9:
+            hi = lo + 1.0
+        edges = np.linspace(lo, hi, 21)
+        centers = (edges[:-1] + edges[1:]) / 2
+        width = (edges[1] - edges[0]) * 0.9
+        for h, vals, color in series:
+            counts, _ = np.histogram(vals, bins=edges)
+            c = QColor(color)
+            c.setAlpha(110)
+            self.analog_plot.addItem(
+                pg.BarGraphItem(
+                    x=centers,
+                    height=counts,
+                    width=width,
+                    brush=pg.mkBrush(c),
+                    pen=pg.mkPen(color),
+                    name=f"{h}日",
+                )
+            )
+        self.analog_plot.addItem(
+            pg.InfiniteLine(
+                pos=0.0,
+                angle=90,
+                pen=pg.mkPen(theme.C_MUTED, width=1, style=Qt.PenStyle.DashLine),
+            )
+        )
+        self.analog_plot.getAxis("bottom").setLabel("未来收益 %")
+        self.analog_plot.getAxis("left").setLabel("样本数")
+        self.analog_plot.setTitle(
+            "历史类比：未来收益分布（5/20/60日）", color=theme.C_TEXT, size="10pt"
+        )
+
     # ── 日志 ────────────────────────────────────────────────
     def _load_journal_summary(self):
         data = load_journal()
@@ -1579,14 +1943,35 @@ class AshareOutlookWindow(QMainWindow):
             QMessageBox.information(self, "提示", "先刷新报告，再导出。")
             return
         default = f"ashare_outlook_{self.result.get('as_of') or time.strftime('%Y%m%d')}.md"
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出报告", default, "Markdown (*.md);;所有文件 (*)"
+        path, selected = QFileDialog.getSaveFileName(
+            self,
+            "导出报告 / 图表",
+            default,
+            "Markdown (*.md);;PDF (*.pdf);;图表 PNG (*.png);;所有文件 (*)",
         )
         if not path:
             return
+        suffix = os.path.splitext(path)[1].lower()
+        if "PDF" in selected and suffix != ".pdf":
+            path += ".pdf"
+            suffix = ".pdf"
+        elif "PNG" in selected and suffix != ".png":
+            path += ".png"
+            suffix = ".png"
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(render_report(self.result))
+            if suffix == ".pdf":
+                from wyckoff.ashare_export import write_pdf
+
+                write_pdf(render_report(self.result), path, title="A股市场状态报告")
+            elif suffix == ".png":
+                self.tabs.setCurrentWidget(self.chart_tab)
+                self.chart_tab.repaint()
+                pix = self.chart_tab.grab()
+                if not pix.save(path, "PNG"):
+                    raise RuntimeError("PNG 保存失败")
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(render_report(self.result))
             QMessageBox.information(self, "已导出", path)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "导出失败", str(e))

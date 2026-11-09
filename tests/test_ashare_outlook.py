@@ -1,6 +1,7 @@
 """A股状态系统单元测试 (不触网)。"""
 
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -64,6 +65,28 @@ def test_regime_score_uptrend_beats_downtrend():
     assert up > down + 20
 
 
+def test_regime_score_v2_recipe():
+    from wyckoff.ashare_backtest import score_components
+
+    f = _features(0.001)
+    comp = score_components(f)
+    assert comp is not None
+    expected = (0.6 * comp["trend"] + 0.4 * comp["drawdown"]).clip(0, 100)
+    assert np.allclose(f["regime_score"].to_numpy(), expected.to_numpy(), atol=1e-9)
+    assert ao.REGIME_SCORE_VERSION == 2
+
+
+def test_regime_score_neutral_without_columns():
+    f = pd.DataFrame(
+        {
+            "day": pd.date_range("2024-01-01", periods=10),
+            "close": np.linspace(100, 110, 10),
+        }
+    )
+    s = ao.regime_score_series(f)
+    assert (s == 50.0).all()
+
+
 def test_ttl_cache_stale():
     cache = ao._TTLCache(disk_path=None)
     value, q = cache.get("x", 100, lambda: {"ok": True, "v": 1})
@@ -124,6 +147,89 @@ def test_ttl_cache_stats(tmp_path):
     assert st2["last_success"] == st["last_success"]
 
 
+def test_ttl_cache_failure_cooldown():
+    cache = ao._TTLCache(disk_path=None)
+    calls = {"n": 0}
+
+    def boom():
+        calls["n"] += 1
+        raise RuntimeError("rate limited")
+
+    v, q = cache.get("sectors", 0, boom, fail_cooldown=120)
+    assert v is None
+    assert q["ok"] is False
+    assert calls["n"] == 1
+
+    # 退避期内不再打数据源
+    v2, q2 = cache.get("sectors", 0, boom, fail_cooldown=120)
+    assert v2 is None
+    assert calls["n"] == 1
+    assert "退避" in q2["error"]
+    assert cache.stats()["sectors"]["cooldown_s"] > 0
+
+    # 成功后清除退避
+    cache._fail_until["sectors"] = 0.0
+    _, q3 = cache.get("sectors", 0, lambda: {"ok": True, "n": 3}, fail_cooldown=120)
+    assert q3["ok"] is True
+    assert "sectors" not in cache._fail_until
+
+
+def test_ttl_cache_cooldown_returns_stale():
+    cache = ao._TTLCache(disk_path=None)
+    cache._data["etf"] = {
+        "ts": 0.0,
+        "value": {"label": "旧值"},
+        "quality": {"ok": True, "stale": False, "as_of": "2026-11-01", "error": ""},
+    }
+    cache._fail_until["etf"] = time.time() + 60
+    v, q = cache.get("etf", 10, lambda: None, fail_cooldown=60)
+    assert v["label"] == "旧值"
+    assert q["stale"] is True
+    assert "退避" in q["error"]
+
+
+def test_ttl_cache_empty_result_cooldown():
+    cache = ao._TTLCache(disk_path=None)
+    calls = {"n": 0}
+
+    def empty():
+        calls["n"] += 1
+        return None
+
+    cache.get("etf", 0, empty, fail_cooldown=60)
+    cache.get("etf", 0, empty, fail_cooldown=60)
+    assert calls["n"] == 1
+
+
+def test_load_extras(monkeypatch):
+    result = {
+        "primary": "sh000001",
+        "indices": {"sh000001": {"score": 28.5, "atr_pct": 1.6}},
+        "market": {"breadth": {"up_ratio": 0.14}, "fund": {"total_yi": -686}},
+        "data_quality": {},
+    }
+    canned = {
+        "sectors": ({"source": "live", "n": 3}, {"ok": True}),
+        "etf": ({"flow_ok": True, "label": "双向平衡"}, {"ok": True}),
+        "liquidity": ({"label": "中性", "score": 50}, {"ok": True}),
+        "valuation": ({"ok": True, "indices": {}}, {"ok": True}),
+    }
+
+    def fake_get(key, ttl, fn, fail_cooldown=0.0):
+        return canned[key]
+
+    monkeypatch.setattr(ao._DATA_CACHE, "get", fake_get)
+    out = ao.load_extras(result)
+    assert out is result
+    assert out["sectors"]["source"] == "live"
+    assert out["etf"]["vs_market"]
+    assert out["liquidity"]["label"] == "中性"
+    assert out["valuation"]["ok"] is True
+    assert out["risk_budget"]
+    assert "source_stats" in out
+    assert "alerts" in out
+
+
 def test_quality_issues():
     issues = ao._quality_issues(
         {
@@ -145,6 +251,41 @@ def test_state_labels():
     assert ao.state_label(40) == "防御"
     assert ao.state_label(25) == "谨慎"
     assert ao.state_label(10) == "风险规避"
+
+
+def test_state_label_pct():
+    assert ao.state_label_pct(5) == "风险规避"
+    assert ao.state_label_pct(10) == "风险规避"
+    assert ao.state_label_pct(11) == "谨慎"
+    assert ao.state_label_pct(25) == "谨慎"
+    assert ao.state_label_pct(40) == "防御"
+    assert ao.state_label_pct(60) == "中性偏多"
+    assert ao.state_label_pct(80) == "进攻"
+    assert ao.state_label_pct(None) == "防御"
+    assert ao.LABEL_VERSION == 3
+
+
+def test_score_percentile_series_causal():
+    s = np.linspace(0, 100, 400)
+    p = ao.score_percentile_series(s)
+    assert np.isnan(p[: ao.PCT_MIN_HISTORY - 1]).all()
+    assert np.isfinite(p[ao.PCT_MIN_HISTORY - 1 :]).all()
+    finite = np.isfinite(p)
+    assert (p[finite] >= 0).all() and (p[finite] <= 100).all()
+    # 修改未来值不应影响过去分位 (无前视)
+    s2 = s.copy()
+    s2[350:] = 0.0
+    p2 = ao.score_percentile_series(s2)
+    assert np.allclose(p[:350], p2[:350], equal_nan=True)
+
+
+def test_feature_snapshot_percentile_state():
+    f = _features(0.001)
+    snap = ao.feature_snapshot(f, "sh000001", "上证指数")
+    assert snap["label_version"] == ao.LABEL_VERSION
+    assert snap["state"] in ao.STATE_NAMES
+    assert snap["state_abs"] in ao.STATE_NAMES
+    assert snap["score_pct"] is not None
 
 
 def test_analog_candidates_do_not_use_future():
@@ -172,6 +313,42 @@ def _analog_frame(n=420):
     )
 
 
+def _transition_frame(n=600):
+    # 每 40 天切换一次状态: 10/40/60/80 循环
+    score = np.array([10.0, 40.0, 60.0, 80.0][i // 40 % 4] for i in range(n))
+    return pd.DataFrame(
+        {
+            "day": pd.date_range("2022-01-01", periods=n, freq="B"),
+            "close": np.linspace(100, 120, n),
+            "regime_score": score,
+        }
+    )
+
+
+def test_state_transitions():
+    f = _transition_frame()
+    out = ao.state_transitions(f, horizons=(5, 20))
+    assert out["ok"] is True
+    assert out["current"] in ao.STATE_NAMES
+    for h in ("5", "20"):
+        hz = out["horizons"][h]
+        assert len(hz["probs"]) == len(ao.STATE_NAMES)
+        assert abs(sum(hz["probs"]) - 1.0) < 1e-6
+        assert hz["n"] > 0
+        total = hz["better"] + hz["same"] + hz["worse"]
+        assert abs(total - 1.0) < 1e-6
+        assert 0 <= hz["better"] <= 1 and 0 <= hz["worse"] <= 1
+    assert out["durations"]
+    assert "经验转移概率" in out["note"]
+    assert sum(out["counts"].values()) > 0
+    assert isinstance(out["unreachable"], list)
+
+
+def test_state_transitions_insufficient():
+    f = _transition_frame(n=100)
+    assert ao.state_transitions(f)["ok"] is False
+
+
 def test_historical_analogs_returns_distribution():
     f = _analog_frame()
     out = ao.historical_analogs(f, horizons=(5, 20), k=25)
@@ -182,6 +359,19 @@ def test_historical_analogs_returns_distribution():
         assert st["n"] == 25
         assert 0 <= st["up_prob"] <= 1
         assert st["p10"] <= st["median"] <= st["p90"]
+        assert len(st["samples"]) == 25
+        assert st["n_eff"] >= 1
+        assert 0 <= st["up_prob_ind"] <= 1
+        assert 0 <= st["up_ci_low"] <= st["up_prob_ind"] <= st["up_ci_high"] <= 1
+
+
+def test_wilson_interval():
+    lo, hi = ao._wilson_interval(30, 60)
+    assert 0.3 < lo < 0.5 < hi < 0.7
+    assert ao._wilson_interval(0, 0) == (None, None)
+    lo2, hi2 = ao._wilson_interval(0, 4)
+    assert lo2 == 0.0
+    assert hi2 > 0.4
 
 
 def test_regime_backtest_buckets_and_baseline():
@@ -294,6 +484,14 @@ def test_risk_budget_bounds():
     weak = ao.risk_budget(10, 5.0, 0.1, -800)
     assert weak["high"] >= 10
     assert weak["low"] <= weak["high"]
+
+
+def test_risk_budget_percentile():
+    low = ao.risk_budget(80, 2.0, 0.5, 0.0, score_pct=5)
+    high = ao.risk_budget(20, 2.0, 0.5, 0.0, score_pct=90)
+    assert low["high"] < high["low"]
+    assert low["high"] <= 15
+    assert high["low"] >= 60
 
 
 def test_fetch_sector_constituents(monkeypatch):
@@ -599,6 +797,27 @@ def test_sector_rotation(monkeypatch):
     assert out["style_gap"] > 0
 
 
+def test_plain_conclusion_hides_zero_breadth():
+    rows = ao._plain_conclusion(
+        {
+            "primary": "sh000001",
+            "indices": {
+                "sh000001": {
+                    "name": "上证指数",
+                    "score": 28.5,
+                    "state": "谨慎",
+                    "trend_score": 0,
+                }
+            },
+            "market": {"breadth": {"up": 0, "down": 0}, "amount": {"total_yi": 0}},
+            "risk_budget": {},
+        }
+    )
+    text = dict(rows)["现在市场怎么样？"]
+    assert "涨 0 / 跌 0" not in text
+    assert "成交 0 亿" not in text
+
+
 def test_render_report_contains_sections():
     result = {
         "as_of": "2026-11-06",
@@ -765,12 +984,20 @@ def test_render_report_contains_sections():
         },
         "disclaimer": ao.DISCLAIMER,
     }
+    result["state_transitions"] = ao.state_transitions(_transition_frame())
     text = ao.render_report(result)
     assert "A股市场状态报告" in text
     assert "大白话结论" in text
+    assert "一句话结论" in text
     assert "现在市场怎么样" in text
     assert "比上次怎么样" in text
     assert "关键看什么" in text
+    assert "什么情况下算判断错了" in text
+    assert "看不懂术语" in text
+    assert "状态转移" in text
+    assert "接下来更可能是什么状态" in text
+    assert "历史分位" in text
+    assert "历史天数" in text
     assert "资金面松不松" in text
     assert "和上次相比" in text
     assert "状态分机械规则回测" in text

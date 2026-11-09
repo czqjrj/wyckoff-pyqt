@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import os
@@ -52,6 +53,7 @@ OUTLOOK_INDICES = [
 
 HORIZONS = (5, 20, 60)
 MIN_HISTORY = 260  # 至少 260 根日线才参与历史类比/回测
+PCT_MIN_HISTORY = 120  # 分位计算最少有效样本 (短样本也能给出分位)
 ANALOG_K = 60  # 取最近邻数量
 ANALOG_MIN = 20  # 少于此数量视为样本不足
 
@@ -169,6 +171,7 @@ class _TTLCache:
 
     def __init__(self, disk_path: str | None = DATA_CACHE_FILE):
         self._data: dict[str, dict] = {}
+        self._fail_until: dict[str, float] = {}  # 失败退避: key -> 可重试时间戳
         self._lock = threading.Lock()
         self._disk_path = disk_path
         self._disk = self._load_disk()
@@ -230,10 +233,20 @@ class _TTLCache:
         self._stats[key] = st
 
     def stats(self) -> dict:
+        now = time.time()
         with self._lock:
-            return {k: dict(v) for k, v in self._stats.items() if isinstance(v, dict)}
+            out = {}
+            for k, v in self._stats.items():
+                if not isinstance(v, dict):
+                    continue
+                row = dict(v)
+                remain = self._fail_until.get(k, 0.0) - now
+                if remain > 0:
+                    row["cooldown_s"] = int(round(remain))
+                out[k] = row
+            return out
 
-    def get(self, key: str, ttl: float, fn) -> tuple[object, dict]:
+    def get(self, key: str, ttl: float, fn, fail_cooldown: float = 0.0) -> tuple[object, dict]:
         now = time.time()
         with self._lock:
             entry = self._data.get(key)
@@ -244,6 +257,23 @@ class _TTLCache:
             if disk and now - _f(disk.get("ts"), 0.0) < ttl:
                 self._data[key] = disk
                 return disk["value"], dict(disk["quality"], stale=False)
+            # 失败退避: 冷却期内不再打同一个数据源, 直接回退旧值
+            until = self._fail_until.get(key, 0.0)
+            if until > now:
+                remain = int(round(until - now))
+                msg = f"退避中（上次失败，{remain}s 后重试）"
+                stale = entry or disk
+                if stale:
+                    q = dict(stale["quality"])
+                    q["stale"] = True
+                    q["error"] = msg
+                    return stale["value"], q
+                return None, {
+                    "ok": False,
+                    "stale": False,
+                    "as_of": None,
+                    "error": msg,
+                }
         started = time.perf_counter()
         try:
             value = fn()
@@ -258,7 +288,11 @@ class _TTLCache:
             with self._lock:
                 self._data[key] = entry
                 self._disk[key] = entry
+                self._fail_until.pop(key, None)
                 self._record_stat(key, True, elapsed_ms)
+                # 空结果也视为软失败: 短时间内不再重复打源
+                if fail_cooldown > 0 and not quality["ok"]:
+                    self._fail_until[key] = time.time() + fail_cooldown
                 self._save_disk()
             return value, dict(quality)
         except Exception as e:  # noqa: BLE001
@@ -267,6 +301,8 @@ class _TTLCache:
             log_exc(f"数据源失败: {key}", e)
             with self._lock:
                 self._record_stat(key, False, elapsed_ms, err)
+                if fail_cooldown > 0:
+                    self._fail_until[key] = time.time() + fail_cooldown
                 entry = self._data.get(key) or self._disk.get(key)
                 self._save_disk()
             if entry:
@@ -360,24 +396,26 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def regime_score_series(f: pd.DataFrame) -> pd.Series:
-    """价格状态分 (0-100)。
+REGIME_SCORE_VERSION = 2
 
-    趋势 45% + 动量 20% + 低波动 15% + 回撤 20%。
+
+def regime_score_series(f: pd.DataFrame) -> pd.Series:
+    """价格状态分 v2 (0-100)。
+
+    v2 = 0.6×趋势 + 0.4×回撤 (2026-11 消融后配方)。
+
+    消融依据 (2021-11~2026-11, 上证/沪深300/创业板/中证500, 未来20日收益):
+    - 趋势是唯一在全部指数 IC 为正的组件;
+    - 动量 (上证 t≈-4.7) 与低波动 (沪深300 t≈-5.5) 出现显著负 IC, 移除;
+    - v2 配方在 4 个指数的全样本与最近 252 日回测均不劣于旧配方, 换手更低。
     全部为价量特征, 可在历史任意一天用当日及以前数据计算。
     """
-    close = pd.to_numeric(f["close"], errors="coerce")
-    trend = (
-        (close > f["ma20"]).astype(float) * 20
-        + (f["ma20"] > f["ma50"]).astype(float) * 20
-        + (close > f["ma200"]).astype(float) * 20
-        + (f["ma20_slope"] > 0).astype(float) * 20
-        + (f["ma50_slope"] > 0).astype(float) * 20
-    )
-    momentum = 50 + 50 * np.tanh(pd.to_numeric(f["ret20"], errors="coerce").fillna(0.0) / 10.0)
-    vol_score = 100 - pd.to_numeric(f["vola_pct250"], errors="coerce").fillna(50.0)
-    drawdown = np.clip(100 + 2.0 * pd.to_numeric(f["dd250"], errors="coerce").fillna(-50.0), 0, 100)
-    score = 0.45 * trend + 0.20 * momentum + 0.15 * vol_score + 0.20 * drawdown
+    from .ashare_backtest import score_components
+
+    comp = score_components(f)
+    if comp is None:
+        return pd.Series(50.0, index=f.index)
+    score = 0.6 * comp["trend"] + 0.4 * comp["drawdown"]
     return pd.Series(score, index=f.index).clip(0, 100)
 
 
@@ -394,12 +432,137 @@ def state_label(score: float | None) -> str:
     return "风险规避"
 
 
+LABEL_VERSION = 3  # 1/2=绝对分档; 3=历史分位制
+STATE_NAMES = ("风险规避", "谨慎", "防御", "中性偏多", "进攻")
+
+
+def state_label_pct(pct: float | None) -> str:
+    """按“分数在自身历史中的分位”给状态 (0-100, 无前视)。
+
+    ≤10% 风险规避 / 10-25% 谨慎 / 25-50% 防御 / 50-75% 中性偏多 / >75% 进攻。
+    分位制让 5 档都能出现, 避免绝对分档下“风险规避”不可达的问题。
+    """
+    v = _f(pct, 50.0)
+    if v <= 10:
+        return "风险规避"
+    if v <= 25:
+        return "谨慎"
+    if v <= 50:
+        return "防御"
+    if v <= 75:
+        return "中性偏多"
+    return "进攻"
+
+
+def score_percentile_series(scores, valid_mask=None) -> np.ndarray:
+    """逐日分数在“截至当日”历史中的分位 (0-100), 不使用未来数据。
+
+    valid_mask 用于排除预热行 (如 ma200 为 NaN 时的 0 分假值), 避免污染分布。
+    """
+    arr = np.asarray(scores, dtype=float)
+    mask = None if valid_mask is None else np.asarray(valid_mask, dtype=bool)
+    out = np.full(len(arr), np.nan, dtype=float)
+    hist: list[float] = []
+    for i, v in enumerate(arr):
+        if not np.isfinite(v):
+            continue
+        if mask is not None and not mask[i]:
+            continue
+        bisect.insort(hist, float(v))
+        if len(hist) >= PCT_MIN_HISTORY:
+            out[i] = bisect.bisect_right(hist, float(v)) / len(hist) * 100
+    return out
+
+
+def state_transitions(f: pd.DataFrame, horizons=HORIZONS) -> dict:
+    """经验状态转移: 当前状态之后 h 日落在各状态的历史比例。
+
+    只统计已知历史, 不是预测; 相邻样本重叠, 独立样本少。
+    """
+    n = len(f)
+    if n <= MIN_HISTORY + max(horizons):
+        return {"ok": False, "reason": "历史样本不足"}
+    score = pd.to_numeric(f["regime_score"], errors="coerce").to_numpy(dtype=float)
+    ma200 = (
+        pd.to_numeric(f["ma200"], errors="coerce").to_numpy(dtype=float) if "ma200" in f else None
+    )
+    pct = score_percentile_series(score, np.isfinite(ma200) if ma200 is not None else None)
+    labels = np.full(n, "", dtype=object)
+    for i in range(MIN_HISTORY - 1, n):
+        if np.isfinite(pct[i]):
+            labels[i] = state_label_pct(pct[i])
+    valid_idx = np.array([i for i in range(n) if labels[i]], dtype=int)
+    if len(valid_idx) < 60:
+        return {"ok": False, "reason": "有效状态样本不足"}
+    last = n - 1
+    current = state_label_pct(pct[last]) if np.isfinite(pct[last]) else "未知"
+    cur_i = STATE_NAMES.index(current) if current in STATE_NAMES else None
+    out = {
+        "ok": True,
+        "current": current,
+        "current_score": _round(score[last], 1),
+        "current_pct": _round(pct[last], 1),
+        "label_version": LABEL_VERSION,
+        "label_basis": "历史分位",
+        "horizons": {},
+        "durations": {},
+    }
+    for h in horizons:
+        counts = np.zeros((len(STATE_NAMES), len(STATE_NAMES)), dtype=float)
+        for i in valid_idx:
+            j = i + h
+            if j > last or not labels[j]:
+                continue
+            counts[STATE_NAMES.index(labels[i]), STATE_NAMES.index(labels[j])] += 1
+        row = counts[cur_i] if cur_i is not None else np.zeros(len(STATE_NAMES))
+        total = float(row.sum())
+        probs = row / total if total > 0 else np.zeros(len(STATE_NAMES))
+        hz = {
+            "n": int(total),
+            "probs": [round(float(p), 3) for p in probs],
+        }
+        if cur_i is not None:
+            hz["better"] = round(float(probs[cur_i + 1 :].sum()), 3)
+            hz["same"] = round(float(probs[cur_i]), 3)
+            hz["worse"] = round(float(probs[:cur_i].sum()), 3)
+        out["horizons"][str(h)] = hz
+
+    # 状态持续期 (连续相同状态的交易日数)
+    runs: dict[str, list[int]] = {}
+    prev = None
+    length = 0
+    for i in valid_idx:
+        lab = labels[i]
+        if lab == prev:
+            length += 1
+        else:
+            if prev is not None:
+                runs.setdefault(prev, []).append(length)
+            prev = lab
+            length = 1
+    if prev is not None:
+        runs.setdefault(prev, []).append(length)
+    out["durations"] = {s: round(float(np.mean(v)), 1) for s, v in runs.items() if v}
+    out["durations_median"] = {s: round(float(np.median(v)), 1) for s, v in runs.items() if v}
+    out["counts"] = {s: int(np.sum(labels == s)) for s in STATE_NAMES}
+    out["unreachable"] = [s for s in STATE_NAMES if out["counts"][s] == 0]
+    out["note"] = "经验转移概率，不是预测；相邻样本重叠，独立样本少。"
+    return out
+
+
 def feature_snapshot(f: pd.DataFrame, code: str, name: str) -> dict:
     """取最新一根 bar 的状态快照。"""
     row = f.iloc[-1]
     close = _f(row.get("close"), 0.0)
     prev = _f(f["close"].iloc[-2], close) if len(f) >= 2 else close
     score = _f(row.get("regime_score"), 0.0)
+    mask = None
+    if "ma200" in f:
+        mask = np.isfinite(pd.to_numeric(f["ma200"], errors="coerce").to_numpy(dtype=float))
+    pct_series = score_percentile_series(
+        pd.to_numeric(f["regime_score"], errors="coerce").to_numpy(dtype=float), mask
+    )
+    score_pct = round(float(pct_series[-1]), 1) if np.isfinite(pct_series[-1]) else None
 
     trend_flags = {
         "价>MA20": bool(close > _f(row.get("ma20"), close + 1)),
@@ -419,7 +582,10 @@ def feature_snapshot(f: pd.DataFrame, code: str, name: str) -> dict:
         "close": _round(close),
         "day_pct": _round((close / prev - 1) * 100 if prev else 0.0),
         "score": _round(score, 1),
-        "state": state_label(score),
+        "score_pct": score_pct,
+        "state": state_label_pct(score_pct),
+        "state_abs": state_label(score),
+        "label_version": LABEL_VERSION,
         "trend_flags": trend_flags,
         "trend_score": _round(sum(20 for ok in trend_flags.values() if ok), 1),
         "momentum_score": _round(momentum_score, 1),
@@ -455,6 +621,29 @@ def _analog_candidates(n: int, max_h: int) -> np.ndarray:
     if n <= MIN_HISTORY + max_h:
         return np.empty(0, dtype=int)
     return np.arange(MIN_HISTORY, n - max_h, dtype=int)
+
+
+def _wilson_interval(hits: int, n: int, z: float = 1.96) -> tuple[float | None, float | None]:
+    """Wilson 95% 置信区间 (小样本比正态近似稳)。"""
+    if n <= 0:
+        return None, None
+    p = hits / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, center - half), min(1.0, center + half)
+
+
+def _independent_subset(sel, fwd, horizon: int) -> np.ndarray:
+    """按非重叠窗口挑样本: 相邻相似日高度相关, 不能当独立样本。"""
+    picked = []
+    last = None
+    for i, r in zip(sel, fwd):
+        i = int(i)
+        if last is None or i >= last + horizon:
+            picked.append(float(r))
+            last = i
+    return np.asarray(picked, dtype=float)
 
 
 def historical_analogs(f: pd.DataFrame, horizons=HORIZONS, k: int = ANALOG_K) -> dict:
@@ -508,6 +697,17 @@ def historical_analogs(f: pd.DataFrame, horizons=HORIZONS, k: int = ANALOG_K) ->
         fwd = (close[sel + h] / close[sel] - 1) * 100
         st = _stats(fwd)
         if st.get("n", 0) >= 10:
+            ind = _independent_subset(sel, fwd, h)
+            n_eff = int(len(ind))
+            if n_eff > 0:
+                hits_eff = int(np.sum(ind > 0))
+                lo, hi = _wilson_interval(hits_eff, n_eff)
+                st["up_prob_ind"] = round(hits_eff / n_eff, 3)
+                st["up_prob_adj"] = round((hits_eff + 0.5) / (n_eff + 1.0), 3)
+                st["up_ci_low"] = round(lo, 3)
+                st["up_ci_high"] = round(hi, 3)
+            st["n_eff"] = n_eff
+            st["samples"] = [round(float(x), 2) for x in fwd]
             out["horizons"][str(h)] = st
     return out
 
@@ -1181,7 +1381,12 @@ def fetch_sector_constituents_cached(
     name: str, label: str | None = None, limit: int = 100
 ) -> list[dict]:
     key = f"cons:{name}:{label or ''}:{limit}"
-    rows, _q = _DATA_CACHE.get(key, 300, lambda: fetch_sector_constituents(name, label, limit))
+    rows, _q = _DATA_CACHE.get(
+        key,
+        300,
+        lambda: fetch_sector_constituents(name, label, limit),
+        fail_cooldown=300,
+    )
     rows = rows or []
     if rows:
         _record_constituents_by_code(name, rows)
@@ -1481,20 +1686,40 @@ def _etf_vs_market(market_score: float | None, etf_label: str | None) -> str:
 
 
 def risk_budget(
-    score: float | None, atr_pct: float | None, up_ratio: float | None, fund_total: float | None
+    score: float | None,
+    atr_pct: float | None,
+    up_ratio: float | None,
+    fund_total: float | None,
+    score_pct: float | None = None,
 ) -> dict:
-    """参考仓位区间 (0-80%), 只做风险预算, 不构成投资建议。"""
-    v = _f(score, 50.0)
-    if v >= 70:
-        low, high = 60, 80
-    elif v >= 50:
-        low, high = 40, 60
-    elif v >= 30:
-        low, high = 20, 40
-    elif v >= 20:
-        low, high = 10, 25
+    """参考仓位区间 (0-80%), 只做风险预算, 不构成投资建议。
+
+    有历史分位时按分位分档（与 v3 状态标签一致）；否则退回绝对分数分档。
+    """
+    pct = _f(score_pct)
+    if pct is not None:
+        if pct > 75:
+            low, high = 60, 80
+        elif pct > 50:
+            low, high = 40, 60
+        elif pct > 25:
+            low, high = 20, 40
+        elif pct > 10:
+            low, high = 10, 25
+        else:
+            low, high = 0, 15
     else:
-        low, high = 0, 15
+        v = _f(score, 50.0)
+        if v >= 70:
+            low, high = 60, 80
+        elif v >= 50:
+            low, high = 40, 60
+        elif v >= 30:
+            low, high = 20, 40
+        elif v >= 20:
+            low, high = 10, 25
+        else:
+            low, high = 0, 15
 
     atr = _f(atr_pct)
     if atr is not None:
@@ -1529,7 +1754,7 @@ def risk_budget(
     return {
         "low": int(low),
         "high": int(high),
-        "note": "按状态分/波动/广度/资金做机械降档, 未考虑个人风险承受能力。",
+        "note": "按历史分位/波动/广度/资金做机械降档, 未考虑个人风险承受能力。",
     }
 
 
@@ -1685,6 +1910,7 @@ def build_outlook(
     include_sectors: bool = True,
     include_etf: bool = True,
     include_liquidity: bool = True,
+    include_valuation: bool = True,
     include_backtest: bool = True,
     include_changes: bool = True,
     journal_path: str | None = None,
@@ -1692,12 +1918,14 @@ def build_outlook(
     """构建完整 A 股状态报告数据。"""
     result: dict[str, Any] = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "label_version": LABEL_VERSION,
         "primary": primary,
         "indices": {},
         "market": {},
         "sectors": None,
         "etf": None,
         "liquidity": None,
+        "valuation": None,
         "analogs": {},
         "backtest": {},
         "backtest_strategy": {},
@@ -1747,6 +1975,18 @@ def build_outlook(
     f = frames[primary]
     snap = result["indices"][primary]
     result["as_of"] = snap.get("date")
+    # K线数据 (近 250 根), 给独立 GUI 图表页用; 不写入预测日志
+    tail = f.tail(250)
+    result["price_history"] = {
+        "dates": [str(d)[:10] for d in tail["day"]],
+        "open": [_round(v) for v in tail["open"]],
+        "high": [_round(v) for v in tail["high"]],
+        "low": [_round(v) for v in tail["low"]],
+        "close": [_round(v) for v in tail["close"]],
+        "ma20": [_round(v) for v in tail["ma20"]],
+        "ma50": [_round(v) for v in tail["ma50"]],
+        "ma200": [_round(v) for v in tail["ma200"]],
+    }
     result["data_quality"]["indices"] = {
         "ok": bool(frames),
         "stale": False,
@@ -1770,6 +2010,7 @@ def build_outlook(
 
     analogs = historical_analogs(f)
     result["analogs"] = analogs
+    result["state_transitions"] = state_transitions(f)
     result["backtest"] = regime_backtest(f)
 
     levels = levels_map.get(primary) or key_levels(f, primary)
@@ -1779,42 +2020,12 @@ def build_outlook(
     market = build_market_context()
     result["market"] = market
     result["data_quality"]["market"] = market.get("quality") or {}
-    if include_sectors:
-        sectors, q = _DATA_CACHE.get("sectors", 300, build_sector_rotation)
-        q = dict(q)
-        if sectors:
-            q["source"] = sectors.get("source")
-        result["sectors"] = sectors
-        result["data_quality"]["sectors"] = q
-    if include_liquidity:
-        try:
-            from .ashare_liquidity import build_liquidity_context
-
-            liquidity, q = _DATA_CACHE.get("liquidity", 6 * 3600, build_liquidity_context)
-            result["liquidity"] = liquidity
-            result["data_quality"]["liquidity"] = q
-        except Exception as e:  # noqa: BLE001
-            log_exc("流动性确认失败", e)
-    if include_etf:
-        etf, q = _DATA_CACHE.get("etf", 900, build_etf_confirmation)
-        q = dict(q)
-        if etf and not etf.get("flow_ok", True):
-            if etf.get("proxy_ok"):
-                q["ok"] = True
-                q["error"] = "量价代理（非真实申赎）"
-            else:
-                q["ok"] = False
-                q["error"] = "20日资金缺失"
-        if etf:
-            etf["vs_market"] = _etf_vs_market(snap.get("score"), etf.get("label"))
-        result["etf"] = etf
-        result["data_quality"]["etf"] = q
-
-    result["risk_budget"] = risk_budget(
-        snap.get("score"),
-        snap.get("atr_pct"),
-        (market.get("breadth") or {}).get("up_ratio"),
-        (market.get("fund") or {}).get("total_yi"),
+    load_extras(
+        result,
+        include_sectors=include_sectors,
+        include_etf=include_etf,
+        include_liquidity=include_liquidity,
+        include_valuation=include_valuation,
     )
     if include_changes:
         try:
@@ -1823,6 +2034,86 @@ def build_outlook(
             result["changes"] = compare_with_previous(result, path=journal_path)
         except Exception as e:  # noqa: BLE001
             log_exc("对比上次记录失败", e)
+    return result
+
+
+def load_extras(
+    result: dict,
+    *,
+    include_sectors: bool = True,
+    include_etf: bool = True,
+    include_liquidity: bool = True,
+    include_valuation: bool = True,
+) -> dict:
+    """把板块/ETF/流动性补进已构建的 result（渐进加载第二阶段）。
+
+    可对 build_outlook 的核心结果重复调用；幂等、fail-soft。
+    完成后重算风险预算、预警与数据源状态，返回同一个 result。
+    """
+    snap = (result.get("indices") or {}).get(result.get("primary") or "") or {}
+    market = result.get("market") or {}
+    dq = result.setdefault("data_quality", {})
+    if include_sectors:
+        try:
+            sectors, q = _DATA_CACHE.get("sectors", 300, build_sector_rotation, fail_cooldown=180)
+            q = dict(q)
+            if sectors:
+                q["source"] = sectors.get("source")
+            result["sectors"] = sectors
+            dq["sectors"] = q
+        except Exception as e:  # noqa: BLE001
+            log_exc("行业轮动加载失败", e)
+    if include_liquidity:
+        try:
+            from .ashare_liquidity import build_liquidity_context
+
+            liquidity, q = _DATA_CACHE.get(
+                "liquidity", 6 * 3600, build_liquidity_context, fail_cooldown=600
+            )
+            result["liquidity"] = liquidity
+            dq["liquidity"] = q
+        except Exception as e:  # noqa: BLE001
+            log_exc("流动性确认失败", e)
+    if include_valuation:
+        try:
+            from .ashare_valuation import build_valuation_context
+
+            bond10 = (result.get("liquidity") or {}).get("bond10")
+            valuation, q = _DATA_CACHE.get(
+                "valuation",
+                6 * 3600,
+                lambda: build_valuation_context(bond10),
+                fail_cooldown=600,
+            )
+            result["valuation"] = valuation
+            dq["valuation"] = q
+        except Exception as e:  # noqa: BLE001
+            log_exc("估值确认失败", e)
+    if include_etf:
+        try:
+            etf, q = _DATA_CACHE.get("etf", 900, build_etf_confirmation, fail_cooldown=180)
+            q = dict(q)
+            if etf and not etf.get("flow_ok", True):
+                if etf.get("proxy_ok"):
+                    q["ok"] = True
+                    q["error"] = "量价代理（非真实申赎）"
+                else:
+                    q["ok"] = False
+                    q["error"] = "20日资金缺失"
+            if etf:
+                etf["vs_market"] = _etf_vs_market(snap.get("score"), etf.get("label"))
+            result["etf"] = etf
+            dq["etf"] = q
+        except Exception as e:  # noqa: BLE001
+            log_exc("ETF确认加载失败", e)
+
+    result["risk_budget"] = risk_budget(
+        snap.get("score"),
+        snap.get("atr_pct"),
+        (market.get("breadth") or {}).get("up_ratio"),
+        (market.get("fund") or {}).get("total_yi"),
+        snap.get("score_pct"),
+    )
     result["alerts"] = build_alerts(result)
     result["source_stats"] = _DATA_CACHE.stats()
     return result
@@ -1843,11 +2134,41 @@ def _pct(x) -> str:
     return "--" if v is None else f"{v * 100:.0f}%"
 
 
+def _credit_label(lq: dict) -> str:
+    src = str((lq or {}).get("credit_source") or "")
+    return "增量滚动同比(备源)" if src.startswith("增量") else "累计同比"
+
+
+_VALUATION_ORDER = ("sh000300", "sh000905", "sh000001", "sh000688")
+
+
+def _valuation_sentence(val: dict) -> str:
+    """大白话：先说最常用的沪深300/中证500, 再补 ERP。"""
+    items = (val or {}).get("indices") or {}
+    parts = []
+    for code in _VALUATION_ORDER:
+        it = items.get(code)
+        if not it or it.get("pe") is None:
+            continue
+        pct = it.get("pe_pct")
+        tail = f"历史分位 {_fmt(pct, 0)}%" if pct is not None else "历史分位样本累积中"
+        parts.append(f"{it.get('name')} {_fmt(it.get('pe'), 1)} 倍（{tail}）")
+        if len(parts) >= 2:
+            break
+    erp = next((it.get("erp") for it in items.values() if it.get("erp") is not None), None)
+    if erp is not None:
+        parts.append(f"ERP {_fmt(erp)}%（股票相对国债的性价比，越高越便宜）")
+    if not parts:
+        return "估值数据不足。"
+    return "；".join(parts) + "。估值只影响中期，不决定明天涨跌。"
+
+
 _QUALITY_LABELS = {
     "indices": "指数",
     "sectors": "行业",
     "etf": "ETF",
     "liquidity": "流动性",
+    "valuation": "估值",
 }
 _MARKET_QUALITY_LABELS = {
     "env": "大盘环境",
@@ -1888,23 +2209,52 @@ def _plain_conclusion(result: dict) -> list[tuple[str, str]]:
     lv = result.get("primary_levels") or {}
     an = result.get("analogs") or {}
     rb = result.get("risk_budget") or {}
+    sup = _f(lv.get("tr_bottom"))
+    res = _f(lv.get("tr_top"))
+    score_v = _f(p.get("score"), 50.0)
+    s_pct = _f(p.get("score_pct"))
+    pct_hint = f"，历史分位 {s_pct:.0f}%" if s_pct is not None else ""
 
     rows: list[tuple[str, str]] = []
+    low, high = rb.get("low"), rb.get("high")
+    pos = f"{low}%-{high}%" if low is not None and high is not None else "--"
+
+    # 0. 一句话结论 (给只想看一句的人)
+    state = p.get("state") or "--"
+    env = m.get("env") or "环境未知"
+    ref = s_pct if s_pct is not None else score_v
+    if ref <= 10:
+        stance = "先防守，别急着抄底"
+    elif ref <= 25:
+        stance = "以防守为主，等信号"
+    elif ref <= 75:
+        stance = "可以适度参与，别追高"
+    else:
+        stance = "可以积极一些，但别梭哈"
+    one = f"{stance}：{state}（{score_v:.0f} 分{pct_hint}）、{env}，仓位参考 {pos}"
+    if sup and res:
+        one += f"；守住 {sup:.0f}、站上 {res:.0f} 再转积极"
+    rows.append(("一句话结论", one + "。"))
 
     # 1. 现在市场怎么样
-    state = p.get("state") or "--"
     score = _fmt(p.get("score"), 1)
-    env = m.get("env") or "环境未知"
     trend = "趋势还在往下" if _f(p.get("trend_score"), 0) < 60 else "趋势偏强"
     extra = []
-    if breadth:
-        extra.append(f"涨 {breadth.get('up')} / 跌 {breadth.get('down')}")
-    if _f(amount.get("total_yi")) is not None:
-        extra.append(f"成交 {_fmt(amount.get('total_yi'), 0)} 亿")
+    up_n, down_n = breadth.get("up"), breadth.get("down")
+    if up_n is not None and down_n is not None and (int(up_n) + int(down_n)) > 0:
+        extra.append(f"涨 {up_n} / 跌 {down_n}")
+    amt = _f(amount.get("total_yi"))
+    if amt is not None and amt > 0:
+        extra.append(f"成交 {_fmt(amt, 0)} 亿")
     if emotion.get("phase"):
         extra.append(f"情绪 {emotion.get('phase')}")
     tail = "；".join(extra)
-    rows.append(("现在市场怎么样？", f"{state}（{score} 分），{env}，{trend}。{tail}。"))
+    rows.append(
+        (
+            "现在市场怎么样？",
+            f"{state}（{score} 分{pct_hint}），{env}，{trend}。" + (f"{tail}。" if tail else ""),
+        )
+    )
 
     # 1.5 和上次相比
     ch = result.get("changes") or {}
@@ -1960,12 +2310,17 @@ def _plain_conclusion(result: dict) -> list[tuple[str, str]]:
     # 3.5 资金面松不松
     lq = result.get("liquidity") or {}
     if lq.get("ok"):
+        plain_lq = {
+            "宽松": "钱比较松（中期偏利好）",
+            "中性": "钱不松不紧",
+            "偏紧": "钱偏紧（中期偏不利）",
+        }.get(lq.get("label"), lq.get("label"))
         rows.append(
             (
                 "资金面松不松？",
-                f"{lq.get('label')}（{_fmt(lq.get('score'), 1)} 分）；"
-                f"M1-M2 {_fmt(lq.get('m1_m2'))}，"
-                f"社融累计同比 {_fmt(lq.get('credit_yoy'))}%，"
+                f"{plain_lq}（{_fmt(lq.get('score'), 1)} 分）；"
+                f"细分：M1-M2 {_fmt(lq.get('m1_m2'))}，"
+                f"社融{_credit_label(lq)} {_fmt(lq.get('credit_yoy'))}%，"
                 f"SHIBOR 3M {_fmt(lq.get('shibor3m'))}%，"
                 f"10Y {_fmt(lq.get('bond10'))}%"
                 f"（月频数据截止 {lq.get('as_of') or '--'}）。",
@@ -1973,6 +2328,11 @@ def _plain_conclusion(result: dict) -> list[tuple[str, str]]:
         )
     else:
         rows.append(("资金面松不松？", "数据不足。"))
+
+    # 3.6 贵不贵 (估值只作中期锚)
+    val = result.get("valuation") or {}
+    if val.get("ok"):
+        rows.append(("贵不贵？", _valuation_sentence(val)))
 
     # 3.6 数据质量
     dq = result.get("data_quality") or {}
@@ -1990,12 +2350,15 @@ def _plain_conclusion(result: dict) -> list[tuple[str, str]]:
 
     # 4. 关键看什么
     name = p.get("name") or "主指数"
-    sup = _f(lv.get("tr_bottom"))
-    res = _f(lv.get("tr_top"))
     if sup and res:
-        rows.append(("关键看什么？", f"{name} {sup:.0f} 不能破；站上 {res:.0f} 才算转强。"))
+        rows.append(
+            (
+                "关键看什么？",
+                f"{name} {sup:.0f} 是防线（跌破要小心）；{res:.0f} 是转强线（站上才算转多）。",
+            )
+        )
     elif sup:
-        rows.append(("关键看什么？", f"{name} {sup:.0f} 不能破。"))
+        rows.append(("关键看什么？", f"{name} {sup:.0f} 是防线（跌破要小心）。"))
     else:
         rows.append(("关键看什么？", "关键位数据不足。"))
 
@@ -2016,8 +2379,7 @@ def _plain_conclusion(result: dict) -> list[tuple[str, str]]:
     rows.append(("后面可能怎么走？", "；".join(parts) + "。" if parts else "情景数据不足。"))
 
     # 6. 该怎么做
-    low, high = rb.get("low"), rb.get("high")
-    if _f(p.get("score"), 50) < 30:
+    if ref <= 25:
         action = (
             f"轻仓、防守、别追高；等 {sup:.0f} 守住或 {res:.0f} 站上再说。"
             if sup and res
@@ -2025,22 +2387,76 @@ def _plain_conclusion(result: dict) -> list[tuple[str, str]]:
         )
     else:
         action = "别追高，等回踩确认；方向没确认前别重仓。"
-    pos = f"{low}%-{high}%" if low is not None and high is not None else "--"
-    rows.append(("现在该怎么做？", f"仓位参考 {pos}；{action}"))
+    rows.append(("现在该怎么做？", f"仓位参考 {pos}（不是必须满仓）；{action}"))
+
+    # 6.5 判断错了怎么办 (可证伪)
+    if sup and res:
+        rows.append(
+            (
+                "什么情况下算判断错了？",
+                f"如果收盘重新站上 {res:.0f} 并站稳，说明偏弱判断要修正，可以转积极；"
+                f"如果跌破 {sup:.0f} 收不回来，说明风险升级，别抄底。",
+            )
+        )
 
     # 7. 历史概率
     if an.get("ok"):
         hz = an.get("horizons") or {}
-        up5 = (hz.get("5") or {}).get("up_prob")
-        up20 = (hz.get("20") or {}).get("up_prob")
-        up60 = (hz.get("60") or {}).get("up_prob")
+
+        def _part(h: int, label: str) -> str:
+            st = hz.get(str(h)) or {}
+            v = st.get("up_prob_ind")
+            if v is None:
+                v = st.get("up_prob")
+            s = f"{label} {_pct(v)}"
+            lo, hi = st.get("up_ci_low"), st.get("up_ci_high")
+            if lo is not None and hi is not None:
+                s += f"（区间 {_pct(lo)}~{_pct(hi)}）"
+            if st.get("n_eff"):
+                s += f"，独立样本 {st.get('n_eff')}"
+            return s
+
         rows.append(
             (
                 "历史概率怎么说？",
-                f"类似状态：5 日 {_pct(up5)}、20 日 {_pct(up20)}、"
-                f"60 日 {_pct(up60)} 上涨；样本会重叠，只能参考。",
+                f"类似状态：{_part(5, '5日')}；{_part(20, '20日')}；{_part(60, '60日')}。"
+                "区间宽/独立样本少时接近抛硬币，只能参考。",
             )
         )
+
+    # 7.5 状态转移 (经验概率)
+    tr = result.get("state_transitions") or {}
+    if tr.get("ok"):
+
+        def _tp(h: int) -> str:
+            x = (tr.get("horizons") or {}).get(str(h)) or {}
+            if x.get("better") is None:
+                return f"{h}日 数据不足"
+            return (
+                f"{h}日 更积极 {_pct(x.get('better'))} / "
+                f"维持 {_pct(x.get('same'))} / 更弱 {_pct(x.get('worse'))}"
+            )
+
+        rows.append(
+            (
+                "接下来更可能是什么状态？",
+                f"{_tp(5)}；{_tp(20)}。经验概率，不是预测；"
+                "某档若在样本内不可达，对应方向会显示 0%，不代表不会发生。",
+            )
+        )
+
+    # 8. 术语 (大白话)
+    rows.append(
+        (
+            "看不懂术语？",
+            "MA200=200日均线（常当牛熊分界）；P&F=点数图的支撑/阻力；"
+            "状态档=分数在自身历史中的分位（≤10% 风险规避、10-25% 谨慎、"
+            "25-50% 防御、50-75% 中性偏多、>75% 进攻）；"
+            "ERP=股票相对国债的性价比（越高越便宜）；"
+            "量价代理=用成交量估的资金方向，不是真实申赎；"
+            "历史概率=相似状态后的经验分布，不是预测。",
+        )
+    )
 
     return rows
 
@@ -2070,10 +2486,10 @@ def render_report(result: dict) -> str:
     if p:
         lines += [
             "",
-            f"> 状态分构成：趋势 {_fmt(p.get('trend_score'), 0)} / "
+            f"> 状态分构成（v2 消融后）：趋势 {_fmt(p.get('trend_score'), 0)} ×60% + "
+            f"回撤 {_fmt(p.get('drawdown_score'), 0)} ×40%；"
             f"动量 {_fmt(p.get('momentum_score'), 0)} / "
-            f"低波动 {_fmt(p.get('vol_score'), 0)} / "
-            f"回撤 {_fmt(p.get('drawdown_score'), 0)}",
+            f"低波动 {_fmt(p.get('vol_score'), 0)} 已消融剔除，仅展示参考",
         ]
 
     alerts = result.get("alerts") or []
@@ -2085,18 +2501,25 @@ def render_report(result: dict) -> str:
         lines.append("")
 
     lines += ["", "## 指数状态", ""]
-    lines.append("| 指数 | 收盘 | 当日 | 状态分 | 状态 | 日线阶段 | 20日 | 距250日高 |")
-    lines.append("|---|---:|---:|---:|---|---|---:|---:|")
+    lines.append("| 指数 | 收盘 | 当日 | 状态分 | 历史分位 | 状态 | 日线阶段 | 20日 | 距250日高 |")
+    lines.append("|---|---:|---:|---:|---:|---|---|---:|---:|")
     for code, _name in OUTLOOK_INDICES:
         it = (result.get("indices") or {}).get(code)
         if not it:
             continue
+        pct = it.get("score_pct")
+        pct_txt = f"{_fmt(pct, 0)}%" if pct is not None else "--"
         lines.append(
             f"| {it.get('name')} | {_fmt(it.get('close'))} | "
             f"{_fmt(it.get('day_pct'))}% | {_fmt(it.get('score'), 1)} | "
-            f"{it.get('state')} | {it.get('phase') or '--'} | "
+            f"{pct_txt} | {it.get('state')} | {it.get('phase') or '--'} | "
             f"{_fmt(it.get('ret20'))}% | {_fmt(it.get('dd250'))}% |"
         )
+    lines.append("")
+    lines.append(
+        "> 状态按历史分位（v3）：≤10% 风险规避 / 10–25% 谨慎 / 25–50% 防御 / "
+        "50–75% 中性偏多 / >75% 进攻；历史分位=当前分数在自身历史中的位置（越低越弱）。"
+    )
 
     # 和上次相比
     ch = result.get("changes")
@@ -2130,27 +2553,39 @@ def render_report(result: dict) -> str:
             f"平均距离 {_fmt(an.get('avg_distance'))}（越小越像）。"
         )
         lines.append("")
-        lines.append("| 未来 | 样本 | 上涨概率 | 中位数 | 10%分位 | 90%分位 |")
-        lines.append("|---:|---:|---:|---:|---:|---:|")
+        lines.append("| 未来 | 样本 | 有效样本 | 原始概率 | 独立概率 | 95%区间 | 中位数 |")
+        lines.append("|---:|---:|---:|---:|---:|---|---:|")
         for h in HORIZONS:
             st = (an.get("horizons") or {}).get(str(h))
             if not st:
-                lines.append(f"| {h}日 | -- | -- | -- | -- | -- |")
+                lines.append(f"| {h}日 | -- | -- | -- | -- | -- | -- |")
                 continue
+            ci = "--"
+            if st.get("up_ci_low") is not None and st.get("up_ci_high") is not None:
+                ci = f"{_pct(st.get('up_ci_low'))}~{_pct(st.get('up_ci_high'))}"
             lines.append(
-                f"| {h}日 | {st.get('n')} | {_pct(st.get('up_prob'))} | "
-                f"{_fmt(st.get('median'))}% | {_fmt(st.get('p10'))}% | "
-                f"{_fmt(st.get('p90'))}% |"
+                f"| {h}日 | {st.get('n')} | {st.get('n_eff') or '--'} | "
+                f"{_pct(st.get('up_prob'))} | {_pct(st.get('up_prob_ind'))} | "
+                f"{ci} | {_fmt(st.get('median'))}% |"
             )
         lines.append("")
-        lines.append("> 这是历史相似状态的经验分布，不是对未来的确定预测。")
+        lines.append(
+            "> 有效样本 = 按非重叠窗口挑出的独立样本（相邻相似日高度相关，"
+            "60 个样本实际可能只有 3~8 个独立样本）；区间越宽越不确定，"
+            "单点概率不能当方向依据。"
+        )
 
         # 自动解读: 极端弱状态在历史上是“继续跌”还是“跌深反抽”
         score = _f(p.get("score"), 50.0)
         hz = an.get("horizons") or {}
+
+        def _p_ind(st: dict):
+            v = st.get("up_prob_ind")
+            return st.get("up_prob") if v is None else v
+
         st20 = hz.get("20") or {}
         st60 = hz.get("60") or {}
-        up20, up60, med60 = (st20.get("up_prob"), st60.get("up_prob"), st60.get("median"))
+        up20, up60, med60 = (_p_ind(st20), _p_ind(st60), st60.get("median"))
         if score < 30 and up60 is not None and up60 >= 0.55:
             weak = "极端弱状态" if score < 20 else "偏弱状态"
             lines.append(
@@ -2170,6 +2605,52 @@ def render_report(result: dict) -> str:
             )
     else:
         lines.append(f"样本不足或数据不可用：{an.get('reason', '--')}")
+
+    # 状态转移
+    tr = result.get("state_transitions") or {}
+    if tr.get("ok"):
+        cur = tr.get("current") or "未知"
+        dur = (tr.get("durations") or {}).get(cur)
+        lines += ["", "## 状态转移（经验概率，非预测）", ""]
+        lines.append(
+            f"- 当前状态: **{cur}**"
+            + (f"；历史上该状态平均持续 {_fmt(dur, 1)} 个交易日" if dur is not None else "")
+        )
+        lines.append("")
+        lines.append("| 未来 | " + " | ".join(STATE_NAMES) + " |")
+        lines.append("|---:|" + "---:|" * len(STATE_NAMES))
+        for h in HORIZONS:
+            hz = (tr.get("horizons") or {}).get(str(h)) or {}
+            probs = hz.get("probs") or []
+            if len(probs) != len(STATE_NAMES):
+                lines.append(f"| {h}日 | -- | -- | -- | -- | -- |")
+                continue
+            lines.append(f"| {h}日 | " + " | ".join(_pct(x) for x in probs) + " |")
+        lines.append("")
+        parts = []
+        for h in (5, 20):
+            hz = (tr.get("horizons") or {}).get(str(h)) or {}
+            if hz.get("better") is not None:
+                parts.append(
+                    f"{h}日：更积极 {_pct(hz.get('better'))} / "
+                    f"维持 {_pct(hz.get('same'))} / 更弱 {_pct(hz.get('worse'))}"
+                )
+        if parts:
+            lines.append("> " + "；".join(parts) + "。")
+        counts = tr.get("counts") or {}
+        if counts:
+            lines.append(
+                "> 历史天数: " + " / ".join(f"{s} {counts.get(s, 0)}" for s in STATE_NAMES)
+            )
+        unreachable = tr.get("unreachable") or []
+        if unreachable:
+            lines.append(
+                "> 注意: "
+                + "、".join(unreachable)
+                + " 档在该样本内不可达（分数未进入该区间），对应转移概率为 0 "
+                "是分档结构问题，不代表市场不会更弱。"
+            )
+        lines.append(f"> {tr.get('note', '')}")
 
     # 历史回测
     bt = result.get("backtest") or {}
@@ -2244,6 +2725,37 @@ def render_report(result: dict) -> str:
                 f"> 滚动 {rolling.get('window')} 日窗口（步长 {rolling.get('step')} 日）: "
                 f"Overlay 跑赢 {_fmt(rolling.get('win_rate'), 1)}% 的窗口，"
                 f"平均超额 {_fmt(rolling.get('avg_excess'))}%。"
+            )
+        oos = bts.get("oos") or {}
+        if oos.get("strategy"):
+            lines.append(
+                f"> 样本外（最近 {oos.get('days')} 日，{oos.get('start')} 起）: "
+                f"状态分 {_fmt(oos['strategy'].get('total_return'))}% / "
+                f"MA200 {_fmt(oos['ma200'].get('total_return'))}% / "
+                f"买入持有 {_fmt(oos['buy_hold'].get('total_return'))}%。"
+                "近期趋势型打分跑输属弱市常态，不代表配方失效。"
+            )
+        abla = bts.get("ablation") or {}
+        abla_rows = {r.get("name"): r for r in abla.get("rows") or []}
+        if abla_rows:
+            ic_parts = "，".join(
+                f"{name} IC {_fmt(abla_rows[name].get('ic'), 3)}"
+                for name in ("趋势", "动量", "低波动", "回撤")
+                if name in abla_rows
+            )
+            lines.append(f"> 成分消融: {ic_parts} → v2 = 趋势×60% + 回撤×40%。")
+        wf = bts.get("walkforward") or {}
+        wfic = wf.get("ic") or {}
+        wfy = wf.get("yearly") or {}
+        if wfic.get("n"):
+            lines.append(
+                f"> Walk-forward: 全样本 IC {_fmt(wfic.get('full_ic'), 3)}，"
+                f"滚动窗口 IC>0 的仅 {_fmt(wfic.get('positive_rate'), 1)}%"
+                f"（中位 {_fmt(wfic.get('median'), 3)}）；"
+                f"逐年跑赢 MA200 {_fmt(wfy.get('beat_ma200'), 1)}%"
+                f"（{wfy.get('n_years') or 0} 年），"
+                f"平均超额 {_fmt(wfy.get('avg_excess'))}%。"
+                "→ 状态分稳定性弱，只当仪表盘。"
             )
         lines.append(
             "> 机械仓位映射，非最优参数；含单边成本。跑不赢 MA200/买入持有，"
@@ -2326,9 +2838,14 @@ def render_report(result: dict) -> str:
                 f"（历史分位 {_fmt(lq.get('m1_m2_pct'), 0)}%）"
             )
             lines.append(
-                f"- 社融累计同比 {_fmt(lq.get('credit_yoy'))}% "
+                f"- 社融{_credit_label(lq)} {_fmt(lq.get('credit_yoy'))}% "
                 f"（历史分位 {_fmt(lq.get('credit_pct'), 0)}%）"
             )
+            if str(lq.get("credit_source") or "").startswith("增量"):
+                lines.append(
+                    "  - 注：主源断连，改用社融增量 12 个月滚动同比；"
+                    "与官方累计同比口径不完全可比，仅作方向参考。"
+                )
             lines.append(
                 f"- SHIBOR 3M {_fmt(lq.get('shibor3m'))}% "
                 f"（历史分位 {_fmt(lq.get('shibor_pct'), 0)}%）"
@@ -2342,6 +2859,34 @@ def render_report(result: dict) -> str:
             lines.append("> 月频数据有滞后；利率低不等于马上涨，只说明资金环境偏松。")
         else:
             lines.append(f"- 数据不足: {lq.get('note', '--')}")
+
+    # 估值 (中期锚, 非短期择时)
+    val = result.get("valuation") or {}
+    if val.get("ok"):
+        lines += [
+            "",
+            "## 估值（中期锚，非择时信号）",
+            "",
+            f"- 数据: 截至 {val.get('as_of') or '--'}；{val.get('source') or '--'}",
+            "",
+            "| 指数 | PE(滚动) | 历史分位 | 股息率 | ERP | 状态 |",
+            "|---|---:|---:|---:|---:|---|",
+        ]
+        v_items = val.get("indices") or {}
+        for code in _VALUATION_ORDER:
+            it = v_items.get(code)
+            if not it:
+                continue
+            lines.append(
+                f"| {it.get('name')} | {_fmt(it.get('pe'), 1)} | "
+                f"{_fmt(it.get('pe_pct'), 0)}% | {_fmt(it.get('div'))}% | "
+                f"{_fmt(it.get('erp'))}% | {it.get('label') or '--'} |"
+            )
+        if "sz399006" not in v_items:
+            lines.append("")
+            lines.append("> 创业板指不在中证官网估值文件内，暂缺。")
+        lines.append("")
+        lines.append(f"> {val.get('note', '')}")
 
     # 情景
     if result.get("scenarios"):
@@ -2436,6 +2981,9 @@ def render_report(result: dict) -> str:
                     status = "过期"
                 else:
                     status = "缺失"
+                cd = st.get("cooldown_s")
+                if isinstance(cd, (int, float)) and cd > 0:
+                    status = f"退避 {int(cd)}s"
                 ok_n = int(st.get("ok") or 0)
                 fail_n = int(st.get("fail") or 0)
                 attempts = ok_n + fail_n
@@ -2456,13 +3004,16 @@ def render_report(result: dict) -> str:
         "",
         "## 方法与限制",
         "",
-        "- 状态分只使用价量特征（趋势/动量/波动/回撤），不使用未来数据。",
+        "- 状态分 v2 = 0.6×趋势 + 0.4×回撤，只使用价量特征，不使用未来数据；"
+        "动量/低波动成分经消融（显著负 IC）剔除，详见“成分消融”表。",
+        "- 状态分回测含全样本 + 最近 252 日样本外两段；样本外偏弱时不应上调对其的置信度。",
         "- 历史类比是“相似状态的经验分布”，不是预测；样本少时可信度低。",
         "- 相似日/分档样本可能重叠（相邻交易日），有效样本数小于显示数量。",
         "- P&F 目标概率来自历史校准，主要是个股/合成样本，不是指数专用。",
         "- 国家队/ETF 是资金流代理，不是官方持仓；份额变化可能受拆分/分红影响。",
         "- 流动性/信用是月频数据，有滞后；利率低不等于马上涨，只说明资金环境偏松。",
-        "- 系统不包含估值、盈利预期等信息，不能单独作为交易依据。",
+        "- 估值只作中期锚：PE 来自中证指数官网（最近约 20 个交易日），历史分位靠本地每日累积，"
+        "不足 250 日前显示“样本累积中”；PB 数据源当前不可用。估值不预测短期涨跌。",
         "",
         f"> {result.get('disclaimer', DISCLAIMER)}",
     ]

@@ -44,6 +44,7 @@ def main() -> int:
     parser.add_argument("--no-sectors", action="store_true", help="跳过行业板块抓取 (更快/离线)")
     parser.add_argument("--no-etf", action="store_true", help="跳过国家队/宽基ETF确认 (更快)")
     parser.add_argument("--no-liquidity", action="store_true", help="跳过流动性/信用确认 (更快)")
+    parser.add_argument("--no-valuation", action="store_true", help="跳过估值确认 (更快)")
     parser.add_argument("--backtest", action="store_true", help="只跑状态分机械规则回测")
     parser.add_argument("--no-backtest", action="store_true", help="报告里跳过机械规则回测")
     parser.add_argument("--no-changes", action="store_true", help="报告里跳过与上次记录对比")
@@ -58,7 +59,9 @@ def main() -> int:
         "--horizon", type=int, default=20, choices=(5, 20, 60), help="统计/回填主周期 (默认 20 日)"
     )
     parser.add_argument("--journal", default="", help="预测日志路径 (默认用户数据目录)")
-    parser.add_argument("--out", default="", help="把 Markdown 报告写入文件")
+    parser.add_argument(
+        "--out", default="", help="把报告写入文件 (.md 文本 或 .pdf 导出 PDF)"
+    )
     args = parser.parse_args()
 
     journal = args.journal or None
@@ -146,6 +149,7 @@ def main() -> int:
         include_sectors=not args.no_sectors,
         include_etf=not args.no_etf,
         include_liquidity=not args.no_liquidity,
+        include_valuation=not args.no_valuation,
         include_backtest=not args.no_backtest,
         include_changes=not args.no_changes,
         journal_path=journal,
@@ -171,9 +175,18 @@ def main() -> int:
         out_dir = os.path.dirname(out_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(text)
-        print(f"报告已写入: {out_path}")
+        if out_path.lower().endswith(".pdf"):
+            if args.json:
+                print("--json 与 PDF 不能同时使用", file=sys.stderr)
+                return 2
+            from wyckoff.ashare_export import write_pdf
+
+            write_pdf(text, out_path, title="A股市场状态报告")
+            print(f"PDF 已写入: {out_path}")
+        else:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            print(f"报告已写入: {out_path}")
     else:
         print(text)
     return 0 if not result.get("error") else 1

@@ -74,6 +74,66 @@ def test_backtest_insufficient_data():
     assert out["ok"] is False
 
 
+def test_score_components_minimal_frame():
+    assert ab.score_components(_frame()) is None
+
+
+def _full_frame(n=400):
+    import numpy as np
+
+    from wyckoff import ashare_outlook as ao
+    from wyckoff.indicators import add_indicators
+
+    rng = np.random.default_rng(3)
+    ret = 0.0008 + rng.normal(0, 0.01, n)
+    close = 100 * np.exp(np.cumsum(ret))
+    day = pd.date_range("2023-01-01", periods=n, freq="B")
+    df = pd.DataFrame(
+        {
+            "day": day,
+            "open": close,
+            "high": close * 1.005,
+            "low": close * 0.995,
+            "close": close,
+            "volume": np.full(n, 1_500_000.0),
+        }
+    )
+    df = add_indicators(df, symbol="sh000001")
+    f = ao.compute_features(df)
+    f["regime_score"] = ao.regime_score_series(f)
+    return f
+
+
+def test_backtest_ablation_and_oos():
+    f = _full_frame()
+    out = ab.backtest_state(f)
+    assert out["ok"] is True
+    assert out["oos"] is not None
+    assert out["oos"]["days"] == ab.OOS_DAYS
+    assert out["oos"]["strategy"]["n"] == ab.OOS_DAYS
+    assert out["ablation"] is not None
+    names = [r["name"] for r in out["ablation"]["rows"]]
+    assert "趋势" in names and "v2 配方" in names
+    for r in out["ablation"]["rows"]:
+        assert r["ic"] is None or -1.0 <= r["ic"] <= 1.0
+        assert r["bt_total"] is not None
+        assert r["bt_oos"] is not None
+    wf = out["walkforward"]
+    assert wf["ic"]["n"] >= 1
+    assert 0 <= wf["ic"]["positive_rate"] <= 100
+    assert wf["yearly"]["n_years"] >= 1
+    assert 0 <= wf["yearly"]["beat_ma200"] <= 100
+
+
+def test_render_backtest_ablation_oos():
+    text = ab.render_backtest(ab.backtest_state(_full_frame()))
+    assert "样本外" in text
+    assert "成分消融" in text
+    assert "v2 配方" in text
+    assert "Walk-forward 稳定性" in text
+    assert "逐年跑赢 MA200" in text
+
+
 def test_render_backtest():
     text = ab.render_backtest(ab.backtest_state(_frame()))
     assert "状态分机械规则回测" in text
