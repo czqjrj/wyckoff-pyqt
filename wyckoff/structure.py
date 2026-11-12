@@ -245,3 +245,51 @@ def structure_progress(events: list, df, phase: str = None):
                 sx = ", ".join(f"{t}×{c + 1}" for t, c in sorted(mul.items()))
                 detail += f"\n多重后段确认: {sx} → 顶部多次遇阻回落, 派发深化"
     return letter, name, detail
+
+
+def utad_actionable(events, df=None, e=None):
+    """最近 UTAD 是否**可作为有效派发证据** (当前时点)。
+
+    结构进度 (`structure_progress`) 会用前置约束拦下孤立/越序的 UTAD, 但
+    结论区卖点提示、九大检验 T7 仍按"事件存在"直接使用 —— 系统自己判它
+    "缺少前置未推进", 又拿它当卖压证据。这里把有效性收敛成一个判定:
+
+      found       是否出现过 UTAD
+      actionable  前置 (BC/UT 铺垫) 成立, 且价格未收复其高点
+      reason      不可用原因 (供文案直接展示)
+
+    价格收复判定: 最新收盘 > UTAD 高点 ×1.005 视为上冲成功 (UTAD 失败,
+    可能转为再吸筹), 不再支持做空/减仓。
+    """
+    out = {"found": False, "actionable": False, "reason": "",
+           "idx": -1, "high": None}
+    if not events:
+        return out
+    if e is None:
+        utads = [x for x in events if x.get("type") == "UTAD"]
+        if not utads:
+            out["reason"] = "无 UTAD 事件"
+            return out
+        e = max(utads, key=lambda x: x.get("idx", -1))
+    out.update(found=True, idx=int(e.get("idx", -1)))
+    try:
+        out["high"] = float(e.get("price"))
+    except (TypeError, ValueError):
+        out["reason"] = "UTAD 缺少有效高点"
+        return out
+
+    prereq, window = _DIST_PREREQ["UTAD"]
+    if not _has_prereq(events, e, prereq, window):
+        need = "/".join(prereq) if prereq else "—"
+        out["reason"] = f"缺少前置铺垫 ({need}), 孤立/越序 UTAD 不成立"
+        return out
+
+    if df is not None and len(df) > 0:
+        last = float(df["close"].iloc[-1])
+        if out["high"] and last > out["high"] * 1.005:
+            out["reason"] = (f"现价 {last:.2f} 已收复 UTAD 高点 "
+                             f"{out['high']:.2f}, 上冲未被压回")
+            return out
+
+    out["actionable"] = True
+    return out

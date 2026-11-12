@@ -135,6 +135,57 @@ def vol_wave(df, window=40):
     return (up if up == up else 0.0), (dn if dn == dn else 0.0)
 
 
+SPRING_CONFIRM_BARS = 8
+
+
+def spring_state(events, df, types=("Spring", "Shakeout"),
+                 confirm_bars=SPRING_CONFIRM_BARS):
+    """最近一个 Spring/Shakeout 的**当前**有效性 (全项目统一口径)。
+
+    旧实现只看事件后第 1~8 根收盘, 8 根之后永久锁定为"已确认" —— 即使价格
+    后来跌破 Spring 低点, T7/反面证据/买点提示仍报有效。这里把校验延伸到
+    当前 bar:
+
+      confirmed  事件后 confirm_bars 根内收盘未跌破低点 (确认成立)
+      failed     事件后任一收盘 (含当前 bar) 跌破低点 (弹簧失效)
+      active     confirmed and not failed (当前仍有效)
+
+    返回 dict: found / idx / low / bars_since / confirmed / failed / active。
+    """
+    empty = {"found": False, "idx": -1, "low": None, "bars_since": 0,
+             "confirmed": False, "failed": False, "active": False}
+    if df is None or len(df) == 0 or not events:
+        return dict(empty)
+    wanted = tuple(types or ())
+    springs = [e for e in events if e.get("type") in wanted]
+    if not springs:
+        return dict(empty)
+    sp = max(springs, key=lambda e: e.get("idx", -1))
+    try:
+        idx = int(sp.get("idx", -1))
+        low = float(sp.get("price"))
+    except (TypeError, ValueError):
+        return dict(empty)
+    n = len(df)
+    if idx < 0 or idx >= n or not (low == low) or low <= 0:
+        return dict(empty)
+
+    after = df["close"].values[idx + 1:]
+    if after.size == 0:  # Spring 就在最后一根, 尚无后续确认
+        out = dict(empty)
+        out.update(found=True, idx=idx, low=low)
+        return out
+    failed = bool((after < low).any())
+    head = after[:int(confirm_bars)] if confirm_bars else after
+    confirmed = bool(head.size and not (head < low).any())
+    return {
+        "found": True, "idx": idx, "low": low,
+        "bars_since": int(n - 1 - idx),
+        "confirmed": confirmed, "failed": failed,
+        "active": bool(confirmed and not failed),
+    }
+
+
 def parallel_map(codes, fn, workers=8, stop_fn=None, progress=None, on_result=None):
     """线程池并行映射: 对 codes 逐项调用 fn(code), 收集结果。
 

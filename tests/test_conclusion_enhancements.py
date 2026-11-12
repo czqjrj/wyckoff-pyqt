@@ -93,3 +93,51 @@ def test_signal_summary_no_ce():
     events, phase, detail, structure = _base(df)
     summary = build_signal_summary(df, [], events, structure=structure)
     assert "反面" not in [s["label"] for s in summary]
+
+
+def test_broken_spring_not_buy_signal():
+    """Spring 已跌破低点 → 买点提示必须降级 (旧实现只看事件存在)。"""
+    df = _mk_df()
+    events = [_ev("SC", 20, 19.5), _ev("AR", 35, 21.0),
+              _ev("ST", 50, 19.8), _ev("Spring", 80, 21.9)]
+    sections = build_conclusion(df, [], events, "底部整固 (Accumulation)", "低点上移")
+    buy = "\n".join(dict(sections)["买点建议"])
+    assert "已失效" in buy
+    assert "Spring 有效" not in buy
+
+
+def test_invalid_utad_not_sell_signal():
+    """孤立 UTAD (无 BC/UT 前置) → 卖点不得据此减仓。"""
+    df = _mk_df()
+    events = [_ev("UTAD", 80, 21.5)]
+    sections = build_conclusion(df, [], events, "顶部构筑 (Distribution)", "上冲失败")
+    sell = "\n".join(dict(sections)["卖点建议"])
+    assert "证据不足" in sell
+    assert "逢高减仓/离场" not in sell
+
+
+def test_valid_spring_downgrades_sell_side():
+    """买/卖互斥: 有效 Spring 在非派发阶段 → 卖点降级为风控口径, 不再喊减仓。"""
+    df = _mk_df()
+    events = [_ev("SC", 20, 19.5), _ev("AR", 35, 21.0),
+              _ev("ST", 50, 19.8), _ev("Spring", 100, 20.5),
+              _ev("BC", 110, 22.5), _ev("UTAD", 115, 22.6)]
+    sections = build_conclusion(df, [], events, "底部整固 (Accumulation)", "低点上移")
+    sec = dict(sections)
+    buy, sell = "\n".join(sec["买点建议"]), "\n".join(sec["卖点建议"])
+    assert "Spring 有效" in buy
+    assert "卖点降级为风控口径" in sell
+    assert "UTAD" not in sell
+
+
+def test_bool_targets_not_rendered_as_price():
+    """P&F 布尔命中字段不能被格式化成 1.00, 横向目标过远需标注仅供参考。"""
+    df = _mk_df()
+    pnf_t = {"上方hit_近端": True, "上方hit日期_近端": "2024-06-01",
+             "近端上方目标": 23.0, "横向计数上方目标": 30.0}
+    sections = build_conclusion(df, [], [], "底部整固 (Accumulation)", "",
+                                pnf_t=pnf_t)
+    joined = "\n".join(ln for _, ls in sections for ln in ls)
+    assert "上方hit_近端" not in joined
+    assert "近端上方目标: 23.00" in joined
+    assert "仅供参考" in joined

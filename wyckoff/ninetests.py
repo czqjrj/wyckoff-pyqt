@@ -6,7 +6,9 @@
 """
 
 from ._shared import recent_events as _recent
+from ._shared import spring_state as _spring_state
 from ._shared import vol_wave as _vol_wave
+from .structure import utad_actionable as _utad_actionable
 
 
 def _support_level(df, pivots, tr):
@@ -60,39 +62,44 @@ def _resistance_level(df, pivots, tr):
 
 
 def _test_counts(df, pivots, level, is_support):
-    """统计近 60 日对 level 的测试次数与最近一次测试的量。"""
+    """统计近 60 日对 level 的测试次数、最近一次测试量及其**当期**量均。
+
+    返回 (count, last_vol, last_vol_ma20)。旧实现只返回 last_vol, 调用方再拿
+    它跟**最新一根**的 vol_ma20 比较 —— 若最近测试发生在几十根前, 等于跨期
+    比较两段不同的量能水平 (低波动期 vs 高波动期), T5 会随枢轴刷新而翻转。
+    这里返回测试当根的 vol_ma20, 由调用方做同口径比较。
+    """
     if not level:
-        return 0, 0.0
+        return 0, 0.0, 0.0
     n = len(df)
     start = n - 60
     count = 0
     last_vol = 0.0
+    last_ma = 0.0
+    has_ma = "vol_ma20" in df.columns
     for p in pivots:
         if p["idx"] < start:
             continue
-        if is_support and p["type"] == "low" and abs(p["price"] / level - 1) < 0.03:
+        hit = ((is_support and p["type"] == "low")
+               or ((not is_support) and p["type"] == "high"))
+        if not hit:
+            continue
+        if abs(p["price"] / level - 1) < 0.03:
             count += 1
             last_vol = float(df["volume"].iloc[p["idx"]])
-        elif not is_support and p["type"] == "high" and abs(p["price"] / level - 1) < 0.03:
-            count += 1
-            last_vol = float(df["volume"].iloc[p["idx"]])
-    return count, last_vol
+            last_ma = float(df["vol_ma20"].iloc[p["idx"]]) if has_ma else 0.0
+    return count, last_vol, last_ma
 
 
 def _spring_confirmed(events, df):
-    """最近 Spring/Shakeout 是否成功 (后 8 根收盘未跌破其低点)。
+    """最近 Spring/Shakeout 是否**当前仍有效** (未跌破其低点)。
 
     Shakeout 与 Spring 同为"刺破低点后收复"的震仓形态 (实证收复后 20 根
-    +12.7%), 视作等同的吸筹确认证据。
+    +12.7%), 视作等同的吸筹确认证据。校验口径见 _shared.spring_state:
+    不仅看确认窗口, 还检查确认之后到当前 bar 有没有跌破 —— 旧实现 8 根之后
+    永久为 True, 会把已经破位的 Spring 继续当成买点。
     """
-    springs = [e for e in events if e["type"] in ("Spring", "Shakeout")]
-    if not springs:
-        return False
-    sp = springs[-1]
-    after = df["close"].values[sp["idx"] + 1:sp["idx"] + 9]
-    if after.size == 0:
-        return False
-    return after.min() >= sp["price"]
+    return _spring_state(events, df)["active"]
 
 
 def _rs_txt(rs):
@@ -130,7 +137,9 @@ def nine_tests(df, events, pivots=None, phase=None, structure=None,
 
     # ── 买入侧 (吸筹成熟度) ──
     sup = _support_level(df, pivots, tr)
-    sup_tests, last_test_vol = _test_counts(df, pivots, sup, True)
+    sup_tests, last_test_vol, last_test_ma = _test_counts(df, pivots, sup, True)
+    if last_test_ma <= 0:
+        last_test_ma = lo_ma
     dn_obj = _decline_objective(df, events, pivots, tr)
     has_seq = all(t in types for t in ("SC", "AR", "ST"))
     spring_ok = _spring_confirmed(events, df)
@@ -149,31 +158,39 @@ def nine_tests(df, events, pivots=None, phase=None, structure=None,
         ("T4 支撑位确立 (≥2次测试)", sup_tests >= 2,
          f"支撑 {sup:.2f} 测试 {sup_tests} 次" if sup else "无明确支撑",
          "支撑位 (TR下沿/枢轴低点) 近60日测试 ≥ 2 次"),
-        ("T5 供应枯竭 (低量回踩)", lo_ma > 0 and 0 < last_test_vol < lo_ma,
-         f"最近测试量 {last_test_vol:.0f} vs 量均 {lo_ma:.0f}",
-         "最近一次回踩量 >0 且 < 量均20"),
+        ("T5 供应枯竭 (低量回踩)",
+         0 < last_test_vol and last_test_ma > 0 and last_test_vol < last_test_ma,
+         f"最近测试量 {last_test_vol:.0f} vs 当期量均 {last_test_ma:.0f}",
+         "最近一次回踩量 >0 且 < 该次测试时的量均20"),
         ("T6 个股强于大盘",
          bool(rs) and any(v > 1.0 for v in rs.values()),
          _rs_txt(rs),
          "任一窗口 RS > +1.0%"),
         ("T7 Spring/震仓已确认", spring_ok,
          "Spring 已确认" if spring_ok else "Spring 未现或已失败",
-         "Spring 后 8 根收盘未跌破其低点"),
+         "Spring 后 8 根收盘未跌破其低点, 且之后至今仍未跌破"),
         ("T8 趋势线突破或SOS出现", bool({"SOS", "JOC"} & set(types)),
          "有 SOS/JOC" if {"SOS", "JOC"} & set(types) else "无强势信号",
          "出现 SOS 或 JOC 强势信号"),
         ("T9 因果充分 (TR≥30日)",
-         (tr or {}).get("bottom_tests", 0) * 10 >= 30 or
-         (len(df) >= 80 and last_close > 0),
-         "结构已具备时间积累",
-         "TR 积累 ≥ 30 日 或 行情 ≥ 80 日"),
+         bool(tr) and (int(tr.get("bottom_tests", 0)) +
+                       int(tr.get("top_tests", 0))) >= 3,
+         "结构已具备时间积累" if tr else "无有效交易区间 (TR), 因果积累不足",
+         "存在 TR 且上下沿测试合计 ≥3 次"),
     ])
 
     # ── 卖出侧 (派发成熟度) ──
     res = _resistance_level(df, pivots, tr)
-    res_tests, last_rally_vol = _test_counts(df, pivots, res, False)
+    res_tests, last_rally_vol, last_rally_ma = _test_counts(df, pivots, res, False)
+    if last_rally_ma <= 0:
+        last_rally_ma = lo_ma
     rally_obj = _rally_objective(df, events, pivots, tr)
     has_dist_seq = all(t in types for t in ("BC", "AR", "UTAD"))
+    # UTAD 有效性: 前置 (BC/UT) 不成立或价格已收复高点时不算派发确认,
+    # 避免把系统自己判"未推进"的孤立/越序 UTAD 拿来打 ✓。
+    utad = _utad_actionable(events, df)
+    utad_ok = bool(utad["actionable"])
+    dist_ok = utad_ok or ("UT" in type_set)
     sell = _mk([
         ("T1 上涨目标已达到",
          rally_obj is None or last_close >= rally_obj * 0.95,
@@ -189,26 +206,31 @@ def nine_tests(df, events, pivots=None, phase=None, structure=None,
         ("T4 阻力位确立 (≥2次测试)", res_tests >= 2,
          f"阻力 {res:.2f} 测试 {res_tests} 次" if res else "无明确阻力",
          "阻力位 (TR上沿/枢轴高点) 近60日测试 ≥ 2 次"),
-        ("T5 需求枯竭 (低量反弹)", lo_ma > 0 and 0 < last_rally_vol < lo_ma,
-         f"最近反弹量 {last_rally_vol:.0f} vs 量均 {lo_ma:.0f}",
-         "最近一次反弹量 >0 且 < 量均20"),
+        ("T5 需求枯竭 (低量反弹)",
+         0 < last_rally_vol and last_rally_ma > 0 and last_rally_vol < last_rally_ma,
+         f"最近反弹量 {last_rally_vol:.0f} vs 当期量均 {last_rally_ma:.0f}",
+         "最近一次反弹量 >0 且 < 该次测试时的量均20"),
         ("T6 个股弱于大盘",
          bool(rs) and any(v < 1.0 for v in rs.values()),
          _rs_txt(rs),
          "任一窗口 RS < +1.0%"),
-        ("T7 UTAD/UT已确认", bool(type_set & {"UTAD", "UT"}),
-         "已现 UTAD/UT" if type_set & {"UTAD", "UT"} else "无 UTAD/UT",
-         "出现 UTAD 或 UT 事件"),
+        ("T7 UTAD/UT已确认", dist_ok,
+         ("UTAD 有效/已现 UT" if utad_ok
+          else ("已现 UT" if "UT" in type_set
+                else ("UTAD 证据不足: " + utad["reason"] if utad["found"]
+                      else "无 UTAD/UT"))),
+         "UTAD 前置成立且未收复高点, 或出现 UT 事件"),
         ("T8 趋势线跌破或弱势确认",
-         bool(SOW_ok or ("UTAD" in types and sup and last_close <= sup)),
+         bool(SOW_ok or (utad_ok and sup and last_close <= sup)),
          "已现弱势信号/SOW" if SOW_ok
-         else ("UTAD 后跌破支撑" if ("UTAD" in types and sup and last_close <= sup)
+         else ("UTAD 后跌破支撑" if (utad_ok and sup and last_close <= sup)
                else "未见破位/无 SOW"),
          "SOW 弱势信号确认 或 UTAD 后现价跌破支撑位"),
         ("T9 派发原因充分 (TR≥30日)",
-         bool(tr) or len(df) >= 80,
-         "结构已具备时间积累",
-         "存在 TR 区间 或 行情 ≥ 80 日"),
+         bool(tr) and (int(tr.get("bottom_tests", 0)) +
+                       int(tr.get("top_tests", 0))) >= 3,
+         "结构已具备时间积累" if tr else "无有效交易区间 (TR), 因果积累不足",
+         "存在 TR 且上下沿测试合计 ≥3 次"),
     ])
 
     # 相关侧: 由阶段/结构决定优先展示哪一侧

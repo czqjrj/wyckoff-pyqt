@@ -122,6 +122,10 @@ def backtest_events(df, events, horizon=20, min_n=3, cost=0.004):
         ends = ends[::max(1, len(ends) // 60)]
     per_type = defaultdict(list)
     per_type_ok = defaultdict(list)  # 仅已跟进确认的事件 (研究: 只在确认后进场更准)
+    # 同一事件会在多个采样窗口 t 内被重复检出 (detect_all 每次重算窗口内全部
+    # 历史事件), 若逐次追加会把 1 个事件放大成几十个样本 (UTAD 6 个 → n=264),
+    # 胜率/盈亏比随之失真。按 (类型, idx) 去重, 同一事件只计一次。
+    seen = {}  # (type, idx) -> [ret, confirmed]
     bh = []
     for t in ends:
         wdf = df.iloc[:t + 1]
@@ -131,17 +135,25 @@ def backtest_events(df, events, horizon=20, min_n=3, cost=0.004):
             i = e["idx"]
             if i + 1 >= n or locked[i] or locked[i + 1]:
                 continue
+            key = (e.get("type", ""), i)
+            if key in seen:
+                # 后续窗口可能补上确认信息 (事件后新 bar 才够跟进期)
+                if e.get("confirmed") is True:
+                    seen[key][1] = True
+                continue
             end = min(n - 1, i + horizon)
             d = event_dir(e.get("type", ""))
             if d < 0:
                 ret = (close[i + 1] / close[end] - 1) - cost   # 空头: 下跌才盈利
             else:
                 ret = (close[end] / close[i + 1] - 1) - cost   # 多头/中性: 买入持有
-            per_type[e["type"]].append(ret)
-            if e.get("confirmed") is True:
-                per_type_ok[e["type"]].append(ret)
+            seen[key] = [ret, e.get("confirmed") is True]
         if not locked[t + 1]:
             bh.append(close[min(n - 1, t + horizon)] / close[t + 1] - 1)
+    for (typ, _i), (ret, confirmed) in seen.items():
+        per_type[typ].append(ret)
+        if confirmed:
+            per_type_ok[typ].append(ret)
     bench = float(np.mean(bh)) * 100 if bh else 0.0
     stats = {}
     for typ, rets in per_type.items():
@@ -197,6 +209,7 @@ def backtest_vsa(df, horizon=20, min_n=3, cost=0.004, scale=240):
     if len(ends) > 60:
         ends = ends[::max(1, len(ends) // 60)]
     per = defaultdict(list)
+    seen = {}  # (label, idx) -> ret: 同一 VSA 标签在多个采样窗口重复检出, 只计一次
     bh = []
     for t in ends:
         wdf = df.iloc[:t + 1]
@@ -208,14 +221,19 @@ def backtest_vsa(df, horizon=20, min_n=3, cost=0.004, scale=240):
             i = s["idx"]
             if i + 1 >= n or locked[i] or locked[i + 1]:
                 continue
+            key = (lb, i)
+            if key in seen:
+                continue
             end = min(n - 1, i + horizon)
             if lb in BULL:
                 r = close[end] / close[i + 1] - 1
             else:
                 r = close[i + 1] / close[end] - 1
-            per[lb].append(r - cost)
+            seen[key] = r - cost
         if not locked[t + 1]:
             bh.append(close[min(n - 1, t + horizon)] / close[t + 1] - 1)
+    for (lb, _i), r in seen.items():
+        per[lb].append(r)
     bench = float(np.mean(bh)) * 100 if bh else 0.0
     stats = {}
     for lb, rets in per.items():

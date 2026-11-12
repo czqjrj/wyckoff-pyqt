@@ -73,3 +73,45 @@ def test_nt_lines_render():
     reqs = [ln for ln in lines if "检验要求" in ln]
     assert len(reqs) == 9
     assert any("检验要求" in ln and "现价" in ln for ln in reqs)
+
+
+def test_spring_expiry_after_confirm_window():
+    """Spring 确认后第 9 根起跌破低点 → T7 必须失败 (旧实现永久为真)。"""
+    n = 160
+    closes = np.full(n, 30.0)
+    closes[100:] = 27.0          # 第 100 根起收盘跌破 Spring 低点 28.2
+    df = _mk_df(closes)
+    events = [_ev("SC", 20, 28.0), _ev("AR", 35, 30.0),
+              _ev("ST", 50, 29.0), _ev("Spring", 90, 28.2)]
+    nt = nine_tests(df, events, pivots=[], phase="底部整固 (Accumulation)")
+    t7 = next(t for t in nt["buy"] if t["name"].startswith("T7"))
+    assert t7["passed"] is False, t7
+    assert "失败" in t7["detail"] or "未" in t7["detail"]
+
+
+def test_t9_requires_trading_range():
+    """T9 不再因"行情够长"恒真: 无 TR 时必须失败。"""
+    df = _mk_df(np.linspace(10, 11, 100))
+    nt = nine_tests(df, [], pivots=[], phase="底部整固 (Accumulation)", tr=None)
+    t9 = next(t for t in nt["buy"] if t["name"].startswith("T9"))
+    assert t9["passed"] is False, t9
+
+
+def test_t9_passes_with_enough_tests():
+    df = _mk_df(np.linspace(10, 11, 100))
+    tr = {"top": 11.0, "bottom": 10.0, "top_tests": 2, "bottom_tests": 1}
+    nt = nine_tests(df, [], pivots=[], phase="底部整固 (Accumulation)", tr=tr)
+    t9 = next(t for t in nt["buy"] if t["name"].startswith("T9"))
+    assert t9["passed"] is True, t9
+
+
+def test_invalid_utad_not_confirmed():
+    """孤立 UTAD (无 BC 前置) 不应打 ✓ T7。"""
+    n = 160
+    closes = np.linspace(28, 30, n)
+    df = _mk_df(closes)
+    events = [_ev("UTAD", 80, 31.0)]
+    nt = nine_tests(df, events, pivots=[], phase="顶部构筑 (Distribution)")
+    t7 = next(t for t in nt["sell"] if t["name"].startswith("T7"))
+    assert t7["passed"] is False, t7
+    assert "证据不足" in t7["detail"]

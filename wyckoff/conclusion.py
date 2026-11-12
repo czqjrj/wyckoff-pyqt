@@ -2,11 +2,13 @@
 import pandas as pd
 
 from .config import ER_BEAR, ER_BULL, EVENT_CN, VSA_CN, W_RECENT, vsa_dir
+from ._shared import spring_state
 from .counterevidence import ce_lines
 from .falsify import fal_lines
 from .filters import build_filter_sections, filter_summary_cards
 from .ninetests import nt_lines
 from .phases import flow_confirmed, judge_phase, phase_tone_of
+from .structure import utad_actionable
 from .vsa_explain import LONG_ONLY_NOTE, VSA_EXPLAIN, meaning_pure
 
 
@@ -249,11 +251,25 @@ def build_signal_summary(df, pivots, events, structure=None, pnf_t=None,
     # 突破/吸筹信号 (派发/下跌阶段: Spring/JOC/SOS 为假信号或失败突破, 不能看多)
     bear_phase = phase.startswith(("顶部构筑", "下跌趋势"))
     if "Spring" in types:
-        if bear_phase:
+        spr = spring_state(recent, df)
+        if not spr["found"]:
+            out.append({"label": "吸筹", "value": "Spring(数据不足, 无法判定)",
+                        "tone": "neutral"})
+        elif spr["failed"]:
+            out.append({"label": "吸筹",
+                        "value": f"Spring已失效(收盘跌破 {spr['low']:.2f})",
+                        "tone": "bearish"})
+        elif bear_phase:
             out.append({"label": "吸筹", "value": "Spring(派发中可能是假信号)",
                         "tone": "bearish"})
+        elif not spr["confirmed"]:
+            out.append({"label": "吸筹",
+                        "value": f"Spring待确认(后8根不破 {spr['low']:.2f})",
+                        "tone": "neutral"})
         else:
-            out.append({"label": "吸筹", "value": "Spring弹簧已现", "tone": "bullish"})
+            out.append({"label": "吸筹",
+                        "value": f"Spring有效({spr['bars_since']}根前)",
+                        "tone": "bullish"})
     if "JOC" in types:
         if bear_phase:
             out.append({"label": "突破", "value": "JOC(派发中, 谨防假突破)", "tone": "bearish"})
@@ -265,12 +281,18 @@ def build_signal_summary(df, pivots, events, structure=None, pnf_t=None,
         else:
             out.append({"label": "突破", "value": "SOS强势信号", "tone": "bullish"})
     if "UTAD" in types:
-        _tone, _val = "bearish", "UTAD上冲派发"
-        if conf_q == "high" and phase.startswith(("顶部构筑", "下跌趋势")):
-            _val = "UTAD上冲派发(资金确认)"
-        elif conf_q == "caution" and phase.startswith(("顶部构筑", "下跌趋势")):
-            _val = "UTAD上冲派发(资金矛盾)"
-        out.append({"label": "警示", "value": _val, "tone": _tone})
+        ut = utad_actionable(events, df)
+        if not ut["actionable"]:
+            out.append({"label": "警示",
+                        "value": "UTAD证据不足(缺前置或已收复), 不据此看空",
+                        "tone": "neutral"})
+        else:
+            _tone, _val = "bearish", "UTAD上冲派发"
+            if conf_q == "high" and phase.startswith(("顶部构筑", "下跌趋势")):
+                _val = "UTAD上冲派发(资金确认)"
+            elif conf_q == "caution" and phase.startswith(("顶部构筑", "下跌趋势")):
+                _val = "UTAD上冲派发(资金矛盾)"
+            out.append({"label": "警示", "value": _val, "tone": _tone})
     if "BC" in types:
         _tone, _val = "bearish", "BC买入高潮"
         if conf_q == "high" and phase.startswith(("顶部构筑", "下跌趋势")):
@@ -442,12 +464,20 @@ def build_conclusion(df, pivots, events, phase, detail, wave_lines=None, targets
     if targets:
         tgt_lines.append("目标价 (威科夫点数计算):")
         for k, v in targets.items():
+            # 布尔字段 (如 hit_*) 不能当价格渲染: True 会被 {:.2f} 格式化成 1.00
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
             arrow = "▲ 上方" if v > last_close else "▼ 下方"
-            tgt_lines.append(f"  {k}: {v:.2f}  {arrow}")
+            note = ""
+            if "横向计数" in k and last_close > 0:
+                space = abs(float(v) / last_close - 1) * 100
+                if space > 25:
+                    note = f"  (距现价 {space:.0f}%, 仅供参考)"
+            tgt_lines.append(f"  {k}: {v:.2f}  {arrow}{note}")
     if pnf_t:
         tgt_lines.append("P&F 点数图目标:")
         for k, v in pnf_t.items():
-            if not isinstance(v, (int, float)) or k in (
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or k in (
                     "tr_top", "tr_bottom", "tr_width", "tr_start_col", "tr_end_col"):
                 continue
             # 目标名含 上方/下方 时按其方向标注, 避免出现 "下方目标: xx ▲ 上方" 这类矛盾表述
@@ -457,7 +487,12 @@ def build_conclusion(df, pivots, events, phase, detail, wave_lines=None, targets
                 arrow = "▲ 上方"
             else:
                 arrow = "▲ 上方" if v > last_close else "▼ 下方"
-            tgt_lines.append(f"  {k}: {v:.2f}  {arrow}")
+            note = ""
+            if "横向计数" in k and last_close > 0:
+                space = abs(float(v) / last_close - 1) * 100
+                if space > 25:
+                    note = f"  (距现价 {space:.0f}%, 仅供参考)"
+            tgt_lines.append(f"  {k}: {v:.2f}  {arrow}{note}")
     if tgt_lines:
         sections.append(("目标价", tgt_lines))
 
@@ -664,15 +699,45 @@ def build_conclusion(df, pivots, events, phase, detail, wave_lines=None, targets
     # ── 买点提示 ──
     buy_lines = ["买点提示 (威科夫):"]
     recent_types = [e["type"] for e in recent]
-    spring_present = "Spring" in recent_types
     st_present = "ST" in recent_types
     joc_present = "JOC" in recent_types
     sos_present = "SOS" in recent_types
     sc_present = "SC" in recent_types
     utad_present = "UTAD" in recent_types
+    bear_phase = (phase.startswith(("顶部构筑", "下跌趋势"))
+                  or phase_tone_of(phase.split(" ")[0]) == "bearish")
+    # Spring 有效性统一走 _shared.spring_state (校验延伸到当前 bar):
+    # 旧逻辑只看事件后 8 根, 8 根之后永久为"已确认", 已破位的 Spring 仍报买点。
+    spr = spring_state(recent, df)
+    spring_fresh = False
+    spring_note = ""
+    if spr["found"]:
+        low = spr["low"] if spr["low"] is not None else 0.0
+        if spr["failed"]:
+            spring_note = (f"Spring 已失效 (后续收盘跌破其低点 {low:.2f}) "
+                           "→ 不构成买点, 等待新结构")
+        elif not spr["confirmed"]:
+            spring_note = (f"Spring 尚在确认期 (需后 8 根收盘不破 {low:.2f}) "
+                           "→ 观察, 暂不买入")
+        elif bear_phase:
+            spring_note = (f"Spring 出现在派发/下跌阶段 (Phase "
+                           f"{structure[0] if structure else '?'}) "
+                           "→ 大概率假信号/诱多, 不据此买入")
+        elif spr["bars_since"] > 20:
+            spring_note = (f"Spring 已过去 {spr['bars_since']} 根, 买点窗口已过 "
+                           f"→ 不追高, 回踩不破 {low:.2f} 再评估")
+        else:
+            spring_fresh = True
     # 实证: Spring(82.6%)>>ST(75.0%)>>SC(58.3%)>SOS(45.7%)>JOC(43.5%)
-    if spring_present:
-        buy_lines.append("  • Spring 弹簧已现(置信高) → 放量收回即买点, 止损设于 Spring 低点下方")
+    if spring_fresh:
+        buy_lines.append(f"  • Spring 有效 (当前未跌破 {spr['low']:.2f}) → 放量收回即买点, "
+                         "止损设于 Spring 低点下方")
+        if st_present:
+            buy_lines.append("  • 另有 ST 缩量二次测试 → 回踩不破可作加仓点")
+    elif spring_note:
+        buy_lines.append(f"  • {spring_note}")
+        if st_present:
+            buy_lines.append("  • SC 二次测试(缩量回踩)仍在 → 等待放量阳线确认后再评估")
     elif st_present:
         buy_lines.append("  • SC 二次测试(缩量回踩)完成 → 等待放量阳线确认后买入")
     elif sc_present and (joc_present or sos_present):
@@ -700,16 +765,25 @@ def build_conclusion(df, pivots, events, phase, detail, wave_lines=None, targets
         elif conf_q == "caution":
             sell_conf = "doubt"
     # 实证: UTAD(23.4%上涨,即76.6%下跌)>>BC(49%上涨,近乎随机)
-    utad_present = "UTAD" in recent_types
+    # 但只有前置 (BC/UT) 成立且价格未收复高点的 UTAD 才可作为卖压证据。
+    ut = utad_actionable(events, df)
     bc_present = "BC" in recent_types
     psy_present = "PSY" in recent_types
-    if utad_present:
+    if spring_fresh:
+        # 买/卖互斥: 有效 Spring 是当前多头证据, 卖点降级为风控口径
+        sell_lines.append(f"  • 当前 Spring 有效 (多头证据) → 卖点降级为风控口径: "
+                          f"跌破 {spr['low']:.2f} 前不减仓")
+    elif ut["actionable"]:
         if sell_conf == "confirm":
             sell_lines.append("  • UTAD + 资金确认派发 → 减仓信号可信度高, 逢高离场")
         elif sell_conf == "doubt":
             sell_lines.append("  • 已现 UTAD 但资金/基本面矛盾 → 派发存疑, 以跌破 UTAD 低点为准, 不主动清仓")
         else:
             sell_lines.append("  • 已现 UTAD → 上冲派发, 逢高减仓/离场 (跌破 UTAD 低点确认)")
+    elif ut["found"]:
+        sell_lines.append(f"  • UTAD 证据不足 ({ut['reason']}) → 不据此减仓")
+        if bc_present:
+            sell_lines.append("  • 另有 BC 买入高潮 → 高位留意风险, 跌破支撑再离场")
     elif bc_present:
         if sell_conf == "confirm":
             sell_lines.append("  • BC + 资金确认派发 → 高位兑现, 分批了结")

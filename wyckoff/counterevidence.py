@@ -8,6 +8,8 @@
     与 WyckoffPro 的差异: 本模块纯规则、无状态持久化、无外部依赖, 每次分析
     即时计算, 事件类型适配本项目检测器 (SC/BC/AR/ST/Spring/UTAD/SOS/JOC/LPS/BU/PSY)。
 """
+from ._shared import spring_state as _spring_state
+
 ALERT_NONE = "NONE"
 ALERT_YELLOW = "YELLOW"    # 31-50
 ALERT_ORANGE = "ORANGE"    # 51-70
@@ -73,18 +75,14 @@ def _hypothesis(phase, structure):
 
 
 def _spring_ok(events, df):
-    """最近一个 Spring 是否成功 (后 8 根收盘未跌破其低点)。返回 (成功, 失败)。"""
-    springs = [e for e in events if e["type"] == "Spring"]
-    if not springs:
-        return False, False
-    sp = springs[-1]
-    cl = df["close"].values
-    after = cl[sp["idx"] + 1:sp["idx"] + 9]
-    if after.size == 0:
-        return False, False
-    if after.min() < sp["price"]:
-        return False, True
-    return True, False
+    """最近一个 Spring 的**当前**有效性。返回 (有效, 已失败)。
+
+    统一口径见 _shared.spring_state: 不只看事件后 8 根, 还检查此后直至当前
+    bar 有没有跌破 Spring 低点。旧实现 8 根之后永久返回"成功", 会让已经
+    破位的 Spring 继续抵消反面证据。
+    """
+    st = _spring_state(events, df, types=("Spring",))
+    return bool(st["active"]), bool(st["failed"])
 
 
 def counter_evidence(df, events, phase=None, structure=None) -> dict:
@@ -97,7 +95,8 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
       events        [{"name", "delta", "desc"}, ...] 本次命中的事件明细
     """
     base = {"hypothesis": "", "score": 0.0, "alert_level": ALERT_NONE,
-            "reversal": False, "reversal_reason": "", "events": []}
+            "reversal": False, "reversal_reason": "", "events": [],
+            "deductions": []}
     hypothesis = _hypothesis(phase, structure)
     if not hypothesis:
         base["hypothesis"] = "未定"
@@ -111,6 +110,9 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
     spring_ok, spring_fail = _spring_ok(recent, df)
 
     fired = []  # (name, delta, desc)
+    # 正向消减项: 计入 deductions 而非直接吞掉, 否则"明细有 +25 但积分 0"
+    # 会让读者以为加分丢失 (实际是被正向证据抵消到底)。ce_lines 会一并展示。
+    deductions = []  # (name, delta, desc), delta 为负值
 
     if hypothesis == "吸筹":
         counter = ACC_COUNTER
@@ -129,13 +131,15 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
         score = sum(d for _, d, _ in fired)
         # 正向消减
         if "SOS" in types:
-            score -= ACC_POSITIVE["SOS"]
+            deductions.append(("SOS", -ACC_POSITIVE["SOS"], "强势信号 → 吸筹确认"))
         if "JOC" in types:
-            score -= ACC_POSITIVE["JOC"]
+            deductions.append(("JOC", -ACC_POSITIVE["JOC"], "放量突破 → 吸筹确认"))
         if "ST" in types:
-            score -= ACC_POSITIVE["ST"]
+            deductions.append(("ST", -ACC_POSITIVE["ST"], "二次测试守住 → 支撑确认"))
         if spring_ok:
-            score -= ACC_POSITIVE["SPRING_OK"]
+            deductions.append(("SPRING_OK", -ACC_POSITIVE["SPRING_OK"],
+                               "Spring 当前仍有效 (未跌破低点) → 吸筹确认"))
+        score += sum(d for _, d, _ in deductions)
         reversal_reason = _acc_reversal_reason(fired)
     else:  # 派发
         counter = DIS_COUNTER
@@ -148,16 +152,14 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
         if dn_vol > 0 and up_vol > dn_vol * 1.15:
             fired.append(("VOL_STRONG", counter["VOL_STRONG"][0], counter["VOL_STRONG"][1]))
         score = sum(d for _, d, _ in fired)
-        if "UTAD" in types:
-            score -= DIS_POSITIVE["UTAD"]
-        if "AR" in types:
-            score -= DIS_POSITIVE["AR"]
-        if "UT" in types:
-            score -= DIS_POSITIVE["UT"]
-        if "LPSY" in types:
-            score -= DIS_POSITIVE["LPSY"]
-        if "SOW" in types:
-            score -= DIS_POSITIVE["SOW"]
+        for t, desc in (("UTAD", "上冲派发成立 → 派发确认"),
+                        ("AR", "自动反弹 → 派发结构成立"),
+                        ("UT", "上冲失败 → 派发确认"),
+                        ("LPSY", "反弹无力 → 派发确认"),
+                        ("SOW", "破位下跌 → 派发确认")):
+            if t in types:
+                deductions.append((t, -DIS_POSITIVE[t], desc))
+        score += sum(d for _, d, _ in deductions)
         reversal_reason = _dis_reversal_reason(fired)
 
     score = float(min(100, max(0, score)))
@@ -165,6 +167,8 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
     # 排序去重: 按加分从高到低
     fired = sorted(fired, key=lambda x: -x[1])
     ev_list = [{"name": n, "delta": d, "desc": desc} for n, d, desc in fired]
+    deductions = sorted(deductions, key=lambda x: x[1])  # 消减力度大的在前
+    ded_list = [{"name": n, "delta": d, "desc": desc} for n, d, desc in deductions]
 
     base.update({
         "hypothesis": hypothesis,
@@ -173,6 +177,7 @@ def counter_evidence(df, events, phase=None, structure=None) -> dict:
         "reversal": score >= RED_TH,
         "reversal_reason": reversal_reason if score >= RED_TH else "",
         "events": ev_list,
+        "deductions": ded_list,
     })
     return base
 
@@ -217,12 +222,21 @@ def ce_lines(ce, phase=None):
     hyp = ce["hypothesis"]
     lines = [f"  假设: {hyp}结构   反面积分: {ce['score']:.0f}/100 "
              f"({lvl_cn.get(ce['alert_level'], '?')})"]
-    if not ce["events"]:
+    if not ce["events"] and not ce.get("deductions"):
         lines.append("  暂无反面事件, 假设未被质疑")
         return lines
-    lines.append("  反面事件明细:")
-    for ev in ce["events"]:
-        lines.append(f"    {ev['name']} {ev['delta']:+d}  {ev['desc']}")
+    if ce["events"]:
+        lines.append("  反面事件明细:")
+        for ev in ce["events"]:
+            lines.append(f"    {ev['name']} {ev['delta']:+d}  {ev['desc']}")
+    else:
+        lines.append("  暂无反面事件 (假设未被质疑)")
+    if ce.get("deductions"):
+        lines.append("  正向消减 (抵消反面积分):")
+        for ev in ce["deductions"]:
+            lines.append(f"    {ev['name']} {ev['delta']:+d}  {ev['desc']}")
+        if ce["score"] <= 0 < sum(e["delta"] for e in ce["events"]):
+            lines.append("    (消减 >= 加分, 积分归零)")
     if ce["reversal"]:
         lines.append(f"  🚨 紧急反转提示: {ce['reversal_reason']}")
     return lines

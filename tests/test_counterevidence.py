@@ -97,3 +97,34 @@ def test_ce_lines_render():
     lines = ce_lines(ce)
     assert any("红灯" in ln for ln in lines)
     assert any("紧急反转" in ln for ln in lines)
+
+
+def test_spring_fail_detected_after_confirm_window():
+    """Spring 确认窗口之后跌破低点, 仍应计 SPRING_FAIL 并撤销 SPRING_OK 消减。"""
+    n = 150
+    closes = np.full(n, 20.0)
+    closes[120:] = 19.0           # 确认后 (第 30 根) 才破位
+    df = _mk_df(closes)
+    events = [_ev("SC", 30, 18.5), _ev("AR", 45, 19.5),
+              _ev("Spring", 90, 19.5), _ev("ST", 100, 19.6)]
+    ce = counter_evidence(df, events, phase="底部整固 (Accumulation)")
+    names = {e["name"] for e in ce["events"]}
+    ded = {e["name"] for e in ce["deductions"]}
+    assert "SPRING_FAIL" in names
+    assert "SPRING_OK" not in ded
+
+
+def test_deductions_reported():
+    """正向消减应进入 deductions 并在文本中展示 (解释积分被抵消)。"""
+    n = 150
+    closes = np.full(n, 20.0)
+    closes[100:] = 20.5
+    df = _mk_df(closes)
+    events = [_ev("SC", 30, 18.5), _ev("AR", 45, 19.5),
+              _ev("Spring", 90, 19.5), _ev("SOS", 110, 20.6)]
+    ce = counter_evidence(df, events, phase="底部整固 (Accumulation)")
+    ded = {e["name"] for e in ce["deductions"]}
+    assert "SPRING_OK" in ded and "SOS" in ded
+    lines = ce_lines(ce)
+    assert any("正向消减" in ln for ln in lines)
+    assert any("SPRING_OK" in ln for ln in lines)
